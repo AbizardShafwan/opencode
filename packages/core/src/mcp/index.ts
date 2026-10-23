@@ -678,7 +678,13 @@ export const layer = (options?: Options) =>
               yield* bus.publish(McpEvent.StatusChanged, { server: name })
               continue
             }
-            fork(startServer(name, entry).pipe(locks.withLock(name)))
+            fork(
+              Effect.gen(function* () {
+                // connect() or disconnect() may have settled the server while this startup waited to run.
+                if (entry.status.status !== "pending") return yield* entry.startup.open
+                yield* startServer(name, entry)
+              }).pipe(locks.withLock(name)),
+            )
           }
           return
         }
