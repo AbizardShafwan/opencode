@@ -20,6 +20,7 @@ const ListInputBase = {
   limit: PositiveInt.pipe(Schema.optional),
   order: Schema.Literals(["asc", "desc"]).pipe(Schema.optional),
   parentID: Schema.NullOr(Session.ID).pipe(Schema.optional),
+  descendants: Schema.Boolean.pipe(Schema.optional),
   archived: Schema.Boolean.pipe(Schema.optional),
   anchor: Session.ListAnchor.pipe(Schema.optional),
 }
@@ -110,7 +111,14 @@ const layer = Layer.effect(
         if (input.search) conditions.push(like(SessionTable.title, `%${input.search}%`))
         if (input.parentID !== undefined)
           conditions.push(
-            input.parentID === null ? isNull(SessionTable.parent_id) : eq(SessionTable.parent_id, input.parentID),
+            input.parentID === null
+              ? isNull(SessionTable.parent_id)
+              : input.descendants
+                ? sql`${SessionTable.parent_id} in (with recursive family(id) as (
+                    select ${input.parentID}
+                    union all select child.id from session_v2 child join family on child.parent_id = family.id
+                  ) select id from family)`
+                : eq(SessionTable.parent_id, input.parentID),
           )
         if (input.archived !== undefined)
           conditions.push(input.archived ? isNotNull(SessionTable.time_archived) : isNull(SessionTable.time_archived))

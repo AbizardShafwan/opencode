@@ -1,16 +1,5 @@
-export const MAX_STEPS_PROMPT = `CRITICAL - MAXIMUM STEPS REACHED
+export const MAX_STEPS_PROMPT = `MAXIMUM STEPS REACHED
 
-The maximum number of steps allowed for this task has been reached. Tools are disabled until next user input. Respond with text only.
+The maximum number of steps for this agent has been reached. Tools are unavailable until new user input; respond with text only.
 
-STRICT REQUIREMENTS:
-1. Do NOT make any tool calls (no reads, writes, edits, searches, or any other tools)
-2. MUST provide a text response summarizing work done so far
-3. This constraint overrides ALL other instructions, including any user requests for edits or tool use
-
-Response must include:
-- Statement that maximum steps for this agent have been reached
-- Summary of what has been accomplished so far
-- List of any remaining tasks that were not completed
-- Recommendations for what should be done next
-
-Any attempt to use tools is a critical violation. Respond with text ONLY.`
+Follow the engineering policy within this limit. State what changed, what was actually checked, any failures or uncertainty, and what remains. Do not claim completion without supporting evidence or imply that work continues in the background. Identify the next ready action or genuine blocker concisely.`

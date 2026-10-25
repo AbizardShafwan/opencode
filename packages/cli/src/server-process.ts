@@ -34,9 +34,7 @@ export const run = Effect.fnUntraced(function* (options: Options) {
     Effect.provide(
       LayerNode.compile(LayerNode.group([Global.node, AppProcess.node]), {
         replacements: [
-          Global.node.replace(
-            Global.layerWith(process.env.OPENCODE_CONFIG_DIR ? { config: process.env.OPENCODE_CONFIG_DIR } : {}),
-          ),
+          Global.node.replace(Global.layerWith(Global.env("CONFIG_DIR") ? { config: Global.env("CONFIG_DIR") } : {})),
         ],
       }),
     ),
@@ -69,7 +67,10 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
       const serviceOptions = options.mode === "service" ? yield* ServiceConfig.options() : undefined
       const config = options.mode === "service" ? yield* ServiceConfig.read() : {}
       const hostname = options.hostname ?? config.hostname ?? "127.0.0.1"
-      const port = options.port ?? config.port ?? (options.mode === "service" ? ServiceConfig.defaultPort() : undefined)
+      const port =
+        options.port ??
+        config.port ??
+        (options.mode === "service" || Global.name === "memyr" ? ServiceConfig.defaultPort() : undefined)
       const findIncumbent =
         serviceOptions !== undefined && port !== undefined
           ? Service.incumbent({ ...serviceOptions, url: serviceURL(hostname, port) })
@@ -84,8 +85,8 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
       const environmentPassword = yield* Env.password
       // Keep the lease credential out of the environment inherited by tools.
       if (options.mode === "stdio") {
-        delete process.env.OPENCODE_PASSWORD
-        delete process.env.OPENCODE_SERVER_PASSWORD
+        delete process.env[`${Global.envPrefix}_PASSWORD`]
+        delete process.env[`${Global.envPrefix}_SERVER_PASSWORD`]
       }
       const password =
         options.mode === "service"
@@ -119,17 +120,15 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
             fetch: !truthy(process.env.OPENCODE_DISABLE_MODELS_FETCH),
           },
           config: {
-            directory: process.env.OPENCODE_CONFIG_DIR,
-            project: !truthy(
-              process.env.OPENCODE_CONFIG_PROJECT_DISABLE ?? process.env.OPENCODE_DISABLE_PROJECT_CONFIG,
-            ),
+            directory: Global.env("CONFIG_DIR"),
+            project: !truthy(Global.env("CONFIG_PROJECT_DISABLE") ?? Global.env("DISABLE_PROJECT_CONFIG")),
             // .claude is only read for skills, so both flags gate the same roots.
             claude: !(
               truthy(process.env.OPENCODE_DISABLE_CLAUDE_CODE) ||
               truthy(process.env.OPENCODE_DISABLE_CLAUDE_CODE_SKILLS)
             ),
-            file: process.env.OPENCODE_CONFIG,
-            content: process.env.OPENCODE_CONFIG_CONTENT,
+            file: Global.env("CONFIG"),
+            content: Global.env("CONFIG_CONTENT"),
           },
           windows: {
             gitbash: process.env.OPENCODE_GIT_BASH_PATH,
@@ -177,7 +176,7 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
             return yield* Effect.fail(
               new Error(
                 `Managed service port ${port} on ${hostname} is already in use by another process. ` +
-                  "Configure another port with `opencode service set port <port>` and start the service again.",
+                  "Configure another port with `memyr service set port <port>` and start the service again.",
                 { cause: error },
               ),
             )

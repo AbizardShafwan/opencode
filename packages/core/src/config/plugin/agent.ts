@@ -1,7 +1,7 @@
 export * as ConfigAgentPlugin from "./agent.js"
 
 import { define } from "@opencode/plugin/effect/plugin"
-import { Document, Info, type Entry } from "@opencode/schema/config"
+import { Directory, Document, Info, type Entry } from "@opencode/schema/config"
 import { ConfigAgent } from "@opencode/schema/config/agent"
 import path from "path"
 import { Effect, Option, PubSub, Schema, Stream } from "effect"
@@ -17,9 +17,10 @@ import type { FileAccess } from "../../file-access.js"
 import type { ReadTool } from "../../tool/plugin/read.js"
 import type { EditTool } from "../../tool/plugin/edit.js"
 import { AbsolutePath } from "../../schema.js"
+import { ConfigAgentFile } from "./agent-file.js"
 
 const legacySources = [
-  { pattern: "{agent,agents}/**/*.md", primary: false },
+  { pattern: "{agent,agents}/**/*.{md,toml}", primary: false },
   { pattern: "{mode,modes}/*.md", primary: true },
 ] as const
 // Keep in sync with the legacySources patterns and the name-strip regex in decode.
@@ -38,6 +39,11 @@ export const Plugin = define({
     const config = yield* Config.Service
     const fs = yield* FSUtil.Service
     const global = yield* Global.Service
+    const entries = Effect.fnUntraced(function* () {
+      const shared = config.compatibility ? (yield* config.compatibility()).agents : []
+      // Shared roles are fallbacks; native configuration always has final precedence.
+      return [...shared.map((path) => new Directory({ type: "directory", path })), ...(yield* config.entries())]
+    })
     const loadEntry = Effect.fnUntraced(function* (entry: Entry) {
       if (entry.type === "document") return [entry]
       if (entry.type !== "directory") return []
@@ -50,7 +56,7 @@ export const Plugin = define({
       ).pipe(Effect.map((documents) => documents.filter((document): document is Document => document !== undefined)))
     })
     const load = Effect.fn("ConfigAgentPlugin.load")(function* () {
-      return yield* Effect.forEach(yield* config.entries(), loadEntry).pipe(Effect.map((documents) => documents.flat()))
+      return yield* Effect.forEach(yield* entries(), loadEntry).pipe(Effect.map((documents) => documents.flat()))
     })
     const loaded = { documents: [] as Document[] }
     const reload = load().pipe(
@@ -65,7 +71,7 @@ export const Plugin = define({
     const changes = yield* PubSub.sliding<void>(1)
     const notify = () => PubSub.publish(changes, undefined)
     yield* config.changes().pipe(
-      Stream.filterEffect((update) => Effect.map(config.entries(), (entries) => isAgentSource(entries, update.path))),
+      Stream.filterEffect((update) => Effect.map(entries(), (entries) => isAgentSource(entries, update.path))),
       Stream.runForEach(notify),
       Effect.forkScoped({ startImmediately: true }),
     )
@@ -109,6 +115,7 @@ export const Plugin = define({
                 providerID: item.model.providerID,
                 ...(item.model.variant === undefined ? {} : { variant: item.model.variant }),
               }
+            if (item.variant !== undefined) agent.variant = item.variant
             if (item.request !== undefined) {
               Object.assign(agent.request.headers, item.request.headers ?? {})
               Object.assign(agent.request.body, item.request.body ?? {})
@@ -179,6 +186,7 @@ const decode = Effect.fnUntraced(function* (
   file: { directory: string; filepath: string; primary: boolean },
   content: string,
 ) {
+  if (file.filepath.endsWith(".toml")) return yield* ConfigAgentFile.decode(file.filepath, content)
   const markdown = ConfigMarkdown.parseOption(content)
   if (!markdown) return
   const name = path

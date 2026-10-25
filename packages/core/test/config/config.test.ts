@@ -215,37 +215,35 @@ describe("Config", () => {
 
   // Filesystem sandboxes deny reads outside the project. Simulate a denied discovery root with a
   // symlink into an unsearchable directory, which makes realpath fail with EACCES.
-  itWithPermissions(
-    "treats unreadable discovery roots as absent",
-    () =>
-      Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
-        Effect.flatMap((tmp) => {
-          const global = path.join(tmp.path, "global")
-          const home = path.join(global, "home")
-          const project = path.join(home, "project")
-          const locked = path.join(tmp.path, "locked")
-          return Effect.promise(async () => {
-            await fs.mkdir(path.join(locked, "agents"), { recursive: true })
-            await fs.mkdir(project, { recursive: true })
-            await fs.writeFile(path.join(project, "opencode.json"), JSON.stringify({ shell: "project" }))
-            await fs.symlink(path.join(locked, "agents"), path.join(home, ".agents"))
-            await fs.symlink(path.join(locked, "agents"), path.join(project, ".opencode"))
-            await fs.chmod(locked, 0o000)
-          }).pipe(
-            Effect.andThen(Effect.addFinalizer(() => Effect.promise(() => fs.chmod(locked, 0o755)))),
-            Effect.andThen(
-              Effect.gen(function* () {
-                const config = yield* Config.Service
-                const entries = yield* config.entries()
-                expect(entries.flatMap((entry) => (entry.type === "document" ? [entry.info.shell] : []))).toEqual([
-                  "project",
-                ])
-              }).pipe(Effect.provide(testLayer(project, global))),
-            ),
-            Effect.scoped,
-          )
-        }),
-      ),
+  itWithPermissions("treats unreadable discovery roots as absent", () =>
+    Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
+      Effect.flatMap((tmp) => {
+        const global = path.join(tmp.path, "global")
+        const home = path.join(global, "home")
+        const project = path.join(home, "project")
+        const locked = path.join(tmp.path, "locked")
+        return Effect.promise(async () => {
+          await fs.mkdir(path.join(locked, "agents"), { recursive: true })
+          await fs.mkdir(project, { recursive: true })
+          await fs.writeFile(path.join(project, "opencode.json"), JSON.stringify({ shell: "project" }))
+          await fs.symlink(path.join(locked, "agents"), path.join(home, ".agents"))
+          await fs.symlink(path.join(locked, "agents"), path.join(project, ".opencode"))
+          await fs.chmod(locked, 0o000)
+        }).pipe(
+          Effect.andThen(Effect.addFinalizer(() => Effect.promise(() => fs.chmod(locked, 0o755)))),
+          Effect.andThen(
+            Effect.gen(function* () {
+              const config = yield* Config.Service
+              const entries = yield* config.entries()
+              expect(entries.flatMap((entry) => (entry.type === "document" ? [entry.info.shell] : []))).toEqual([
+                "project",
+              ])
+            }).pipe(Effect.provide(testLayer(project, global))),
+          ),
+          Effect.scoped,
+        )
+      }),
+    ),
   )
 
   it.live("discovers the global config directory once when the project walk reaches it", () =>
@@ -1316,6 +1314,11 @@ describe("Config", () => {
                 type: "entries",
                 path: tmp.path,
                 names: [".agents", ".claude", ".opencode", "opencode.json", "opencode.jsonc"],
+              },
+              {
+                type: "entries",
+                path: AbsolutePath.make(path.join(tmp.path, ".agents")),
+                names: ["agent", "agents", "mode", "modes"],
               },
             ])
           }).pipe(Effect.provide(testLayer(tmp.path, undefined, undefined, undefined, Watcher.testLayer)))

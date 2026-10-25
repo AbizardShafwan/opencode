@@ -198,7 +198,7 @@ const LoadingSpecializedSkills = {
       description="Active and completed skills display their identifier or resolved name."
       document={storyDocument([
         storyTool("tool_skill_id", "skill", "running", { id: "frontend-design" }),
-        storyTool("tool_skill_name", "skill", "completed", { id: "opencode" }, { metadata: { name: "OpenCode" } }),
+        storyTool("tool_skill_name", "skill", "completed", { id: "opencode" }, { metadata: { name: "Memyr" } }),
       ])}
     />
   ),
@@ -361,7 +361,7 @@ const DelegatingAnAgent = {
     <CurrentSessionTimelineStory
       title="Delegating an agent"
       description="The assistant shows its compact delegation status while preparing a focused task."
-      document={storyDocument([storyTool("tool_notice_delegation", "subagent", "streaming", {}, { raw: "" })], true)}
+      document={storyDocument([storyTool("tool_notice_delegation", "spawn_agent", "streaming", {}, { raw: "" })], true)}
     />
   ),
 }
@@ -375,7 +375,7 @@ const StartingBackgroundWork = {
         [
           storyTool(
             "tool_notice_background",
-            "subagent",
+            "spawn_agent",
             "running",
             { description: "Inspect code", background: true },
             {

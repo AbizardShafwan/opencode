@@ -68,6 +68,7 @@ function stepStarted(): V2Event {
       assistantMessageID: "msg_assistant",
       agent: "build",
       model: { providerID: "test", id: "test-model" },
+      thinking: { effort: "high" },
     },
   }
 }
@@ -430,7 +431,10 @@ describe("runNonInteractivePrompt", () => {
     }
     expect(sdk.session.form.cancel).toHaveBeenCalledWith({ sessionID: "global", formID: "frm_live" }, globalOptions)
     expect(sdk.session.form.cancel).toHaveBeenCalledWith({ sessionID: "ses_1", formID: "frm_pending" })
-    expect(sdk.session.form.cancel).toHaveBeenCalledWith({ sessionID: "global", formID: "frm_pending_global" }, globalOptions)
+    expect(sdk.session.form.cancel).toHaveBeenCalledWith(
+      { sessionID: "global", formID: "frm_pending_global" },
+      globalOptions,
+    )
     expect(sdk.form.list).toHaveBeenCalledWith({
       location: { directory: "/work tree" },
     })
@@ -445,12 +449,32 @@ describe("runNonInteractivePrompt", () => {
     })
     expect(sdk.session.form.cancel).toHaveBeenCalledWith({ sessionID: "ses_1", formID: "frm_pending" })
     expect(sdk.form.list).not.toHaveBeenCalled()
-    expect(sdk.session.form.cancel).not.toHaveBeenCalledWith({ sessionID: "global", formID: "frm_live" }, expect.anything())
+    expect(sdk.session.form.cancel).not.toHaveBeenCalledWith(
+      { sessionID: "global", formID: "frm_live" },
+      expect.anything(),
+    )
     expect(sdk.session.form.cancel).not.toHaveBeenCalledWith(
       { sessionID: "global", formID: "frm_pending_global" },
       expect.anything(),
     )
     expect(process.exitCode).toBe(1)
+  })
+
+  test("JSON output includes the request's model and thinking settings", async () => {
+    const output = await capture({
+      format: "json",
+      turn: (messageID) => [prompted(messageID), stepStarted(), settled()],
+    })
+    const events = output.stdout
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+    expect(events.find((event) => event.type === "step_start")).toMatchObject({
+      part: {
+        model: { providerID: "test", id: "test-model" },
+        thinking: { effort: "high" },
+      },
+    })
   })
 
   test("V1 JSON output flushes step_start before an unrelated step failure", async () => {

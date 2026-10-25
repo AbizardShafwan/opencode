@@ -43,6 +43,7 @@ const tools = {
 } satisfies ResponsesHostedTools.Definitions
 
 export const protocol = Protocol.make({
+  supportsSystemUpdates: OpenResponses.protocol.supportsSystemUpdates,
   id: adapter.id,
   body: {
     schema: Body,

@@ -674,10 +674,12 @@ export function AssistantTextContent(props: {
   message: SessionMessageAssistant
   showCopy: boolean
   turnDurationMs?: number | null
+  turnTokensPerSecond?: number | null
 }) {
   const data = useData()
   const i18n = useI18n()
   const numfmt = createMemo(() => new Intl.NumberFormat(i18n.locale()))
+  const mobile = createMediaQuery("(max-width: 767px)")
 
   const interrupted = () => {
     const type = props.message.error?.type.toLowerCase()
@@ -710,15 +712,33 @@ export function AssistantTextContent(props: {
     })
   })
 
-  // Mobile omits the per-response agent and model; see CurrentUserMessageDisplay.
-  const mobile = createMediaQuery("(max-width: 767px)")
+  const thinking = createMemo(() => {
+    const value = props.message.thinking
+    if (!value) return i18n.t("ui.message.thinking.unrecorded")
+    const level =
+      value.effort ?? (value.mode ? i18n.t(`ui.message.thinking.${value.mode}`) : i18n.t("ui.message.thinking.default"))
+    if (value.budget === undefined || value.budget < 0) return i18n.t("ui.message.thinking.level", { level })
+    return i18n.t("ui.message.thinking.budget", { level, budget: numfmt().format(value.budget) })
+  })
+
+  const tokensPerSecond = createMemo(() => {
+    const value = props.turnTokensPerSecond
+    if (value === undefined || value === null || !(value > 0)) return ""
+    return i18n.t("ui.message.tokensPerSecond", {
+      value: new Intl.NumberFormat(i18n.locale(), {
+        minimumFractionDigits: 1,
+        maximumFractionDigits: 1,
+      }).format(value),
+    })
+  })
 
   const meta = createMemo(() => {
     const agent = props.message.agent
 
     return [
-      ...(mobile() ? [] : [agent ? agent[0]?.toUpperCase() + agent.slice(1) : "", model()]),
+      mobile() ? "" : agent ? agent[0]?.toUpperCase() + agent.slice(1) : "",
       duration(),
+      tokensPerSecond(),
       interrupted() ? i18n.t("ui.message.interrupted") : "",
     ]
       .filter(Boolean)
@@ -736,9 +756,17 @@ export function AssistantTextContent(props: {
   return (
     <Show when={props.text}>
       <div data-component="text-part" data-timeline-part-id={props.id}>
+        <div data-slot="reply-attribution" class="text-12-regular text-text-base">
+          {i18n.t("ui.message.attribution", { model: model(), thinking: thinking() })}
+        </div>
         <div data-slot="text-part-body">
           <PacedMarkdown text={props.text} cacheKey={props.id} streaming={props.message.time.completed === undefined} />
         </div>
+        <Show when={props.showCopy && meta()}>
+          <div data-slot="text-part-meta" class="text-12-regular text-text-weak cursor-default">
+            {meta()}
+          </div>
+        </Show>
         <Show when={props.showCopy}>
           <div data-slot="text-part-copy-wrapper" data-interrupted={interrupted() ? "" : undefined}>
             <MessageActionButton
@@ -748,11 +776,6 @@ export function AssistantTextContent(props: {
               onClick={copy}
               aria-label={copied() ? i18n.t("ui.message.copied") : i18n.t("ui.message.copyResponse")}
             />
-            <Show when={meta()}>
-              <span data-slot="text-part-meta" class="text-12-regular text-text-weak cursor-default">
-                {meta()}
-              </span>
-            </Show>
           </div>
         </Show>
       </div>

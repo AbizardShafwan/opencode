@@ -15,6 +15,7 @@ import {
   LLMEvent,
   mergeJsonRecords,
   Usage,
+  type LanguageModel,
   type CacheHint,
   type FinishReasonDetails,
   type FinishReason,
@@ -816,8 +817,8 @@ const requireThinkingSignature = (request: LLMRequest) => {
 }
 
 // Opus 4.8 and every Claude 5 model accept mid-conversation system messages; later versions inherit support.
-const supportsNativeSystemUpdates = (request: LLMRequest) => {
-  const version = claudeVersion(request.model.id)
+const supportsNativeSystemUpdates = (model: LanguageModel) => {
+  const version = claudeVersion(model.id)
   if (version === undefined) return false
   if (version.family === "opus" && version.major === 4) return version.minor >= 8
   return version.major >= 5
@@ -873,7 +874,7 @@ const lowerMessages = Effect.fnUntraced(function* (request: LLMRequest, breakpoi
   const providerMetadataKey = request.model.route.providerMetadataKey ?? request.model.provider
   // Text updates stay where they are unless a user turn follows them; then they move after the latest
   // user turn, the nearest spot where Anthropic accepts a native system message.
-  const holdUpdates = supportsNativeSystemUpdates(request)
+  const holdUpdates = supportsNativeSystemUpdates(request.model)
   const held: Array<LLMRequest["messages"][number]> = []
   const releaseHeld = Effect.fnUntraced(function* () {
     const native = acceptsNativeSystemAfter(messages.findLast((message) => message.role !== "system"))
@@ -1381,10 +1382,7 @@ const onContentBlockDelta = Effect.fnUntraced(function* (
   return [state, NO_EVENTS] satisfies StepResult
 })
 
-const onContentBlockStop = Effect.fnUntraced(function* (
-  state: ParserState,
-  event: AnthropicEvent,
-) {
+const onContentBlockStop = Effect.fnUntraced(function* (state: ParserState, event: AnthropicEvent) {
   if (event.index === undefined) return [state, NO_EVENTS] satisfies StepResult
   if (event.index in state.compactions) {
     const { [event.index]: content, ...compactions } = state.compactions
@@ -1591,6 +1589,7 @@ const step = (state: ParserState, event: AnthropicEvent) => {
  * Vertex-hosted Messages routes.
  */
 export const protocol = Protocol.make({
+  supportsSystemUpdates: supportsNativeSystemUpdates,
   id: ADAPTER,
   body: {
     schema: AnthropicMessagesBody,

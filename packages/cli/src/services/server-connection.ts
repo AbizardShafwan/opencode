@@ -1,3 +1,4 @@
+import { Global } from "@opencode/util/global"
 import { Service, type Endpoint, type EnsureOptions } from "@opencode/client/effect/service"
 import { ClientError, isUnauthorizedError, OpenCode } from "@opencode/client/promise"
 import { OPENCODE_VERSION } from "../version"
@@ -87,7 +88,7 @@ function connectError(endpoint: Endpoint, cause: unknown) {
   if (isUnauthorizedError(cause)) {
     return new Error(
       endpoint.auth === undefined
-        ? `Server at ${endpoint.url} requires a password; set OPENCODE_PASSWORD`
+        ? `Server at ${endpoint.url} requires a password; set ${Global.envPrefix}_PASSWORD`
         : `Server at ${endpoint.url} rejected the password`,
       { cause },
     )

@@ -40,6 +40,7 @@ import {
   type PartRef,
   type ReasoningMode,
 } from "./projection"
+import { turnTokensPerSecond } from "./tokens-per-second"
 
 const emptyAssistantMessages: SessionMessageAssistant[] = []
 
@@ -131,6 +132,9 @@ export function createSessionTimelineRowRenderer(input: {
 
     return completed - user.time.created
   }
+
+  const tokensPerSecond = (messageID: string) =>
+    turnTokensPerSecond(input.projection.assistantMessagesByParent().get(messageID) ?? emptyAssistantMessages)
 
   const copyContentID = (messageID: string) => {
     if (workingTurn(messageID)) return null
@@ -369,6 +373,7 @@ export function createSessionTimelineRowRenderer(input: {
                 contentID={ref()!.partID}
                 showAssistantCopyPartID={copyContentID(row().userMessageID)}
                 turnDurationMs={duration(row().userMessageID)}
+                turnTokensPerSecond={tokensPerSecond(row().userMessageID)}
                 defaultOpen={defaultOpen()}
                 toolOpen={input.disclosure.value(disclosureKey()) ?? defaultOpen()}
                 onToolOpenChange={(open) => input.disclosure.set(disclosureKey(), open)}

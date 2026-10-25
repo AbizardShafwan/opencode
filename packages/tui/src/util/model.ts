@@ -1,3 +1,11 @@
+import type { SessionMessageAssistant } from "@opencode/client"
+
+export function thinkingLabel(thinking: SessionMessageAssistant["thinking"], variant?: string) {
+  if (!thinking) return `Thinking: unrecorded${variant ? ` (variant ${variant})` : ""}`
+  const budget = thinking.budget !== undefined && thinking.budget >= 0 ? ` · budget ${thinking.budget}` : ""
+  return `Thinking: ${thinking.effort ?? thinking.mode ?? "provider default"}${budget}`
+}
+
 export function parse(value: string) {
   const [providerID, ...modelID] = value.split("/")
   return { providerID, modelID: modelID.join("/") }

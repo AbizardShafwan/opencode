@@ -63,6 +63,73 @@ test("keeps schema fields and name out of legacy agent options", () => {
 })
 
 describe("ConfigAgentPlugin.Plugin", () => {
+  it.live("loads shared TOML roles with native overrides and independent thinking", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      const fs = yield* FSUtil.Service
+      const shared = path.join(tmp.path, ".agents")
+      const native = path.join(tmp.path, ".memyr")
+      yield* fs.makeDirectory(path.join(shared, "agents"), { recursive: true })
+      yield* fs.makeDirectory(path.join(native, "agents"), { recursive: true })
+      yield* fs.writeFileString(
+        path.join(shared, "agents", "reviewer.toml"),
+        'name = "reviewer"\ndescription = "Review changes"\ndeveloper_instructions = "Report verified findings."\nmodel_reasoning_effort = "high"',
+      )
+      yield* fs.writeFileString(
+        path.join(native, "agents", "reviewer.md"),
+        "---\ndescription: Native reviewer\n---\nReview this project.",
+      )
+      yield* fs.writeFileString(
+        path.join(shared, "agents", "unsafe.toml"),
+        'name = "unsafe"\ndescription = "Invalid"\ndeveloper_instructions = "Test"\napproval_policy = "never"',
+      )
+      const agents = yield* Agent.Service
+      yield* ConfigAgentPlugin.Plugin.effect(host({ agent: agentHost(agents) })).pipe(
+        Effect.provide(Config.testLayer([directoryEntry(native)], { claude: [], agents: [AbsolutePath.make(shared)] })),
+      )
+      expect(yield* agents.get(Agent.ID.make("reviewer"))).toMatchObject({
+        mode: "subagent",
+        description: "Native reviewer",
+        system: "Review this project.",
+        variant: "high",
+      })
+      expect(yield* agents.get(Agent.ID.make("unsafe"))).toBeUndefined()
+    }),
+  )
+
+  it.live("loads qualified and provider-scoped TOML models, rejecting malformed roles", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      const fs = yield* FSUtil.Service
+      yield* fs.makeDirectory(path.join(tmp.path, "agents"))
+      for (const [name, config] of Object.entries({
+        qualified: 'model = "example/chat"',
+        scoped: 'model = "chat"\nmodel_provider = "example"',
+        inherited: 'model_reasoning_effort = "high"',
+        invalid: 'model = "unknown-provider"',
+        malformed: "model = [",
+      })) {
+        yield* fs.writeFileString(
+          path.join(tmp.path, "agents", `${name}.toml`),
+          `name = "${name}"\ndescription = "Review changes"\ndeveloper_instructions = "Review carefully."\n${config}`,
+        )
+      }
+      const agents = yield* Agent.Service
+      yield* ConfigAgentPlugin.Plugin.effect(host({ agent: agentHost(agents) })).pipe(
+        Effect.provide(Config.testLayer([directoryEntry(tmp.path)])),
+      )
+      for (const name of ["qualified", "scoped"]) {
+        expect(yield* agents.get(Agent.ID.make(name))).toMatchObject({
+          mode: "subagent",
+          model: { providerID: "example", id: "chat" },
+        })
+      }
+      expect((yield* agents.get(Agent.ID.make("inherited")))?.system).toContain("Review carefully.")
+      expect(yield* agents.get(Agent.ID.make("invalid"))).toBeUndefined()
+      expect(yield* agents.get(Agent.ID.make("malformed"))).toBeUndefined()
+    }),
+  )
+
   for (const item of [
     { name: "separate legacy variant", frontmatter: "model: example/chat\nvariant: high", model: "example/chat#high" },
     { name: "unqualified model", frontmatter: "model: example/chat", model: "example/chat" },

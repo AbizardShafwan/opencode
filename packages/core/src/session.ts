@@ -84,6 +84,9 @@ export type ListInput = SessionStore.ListInput
 const DefaultListLimit = 50
 
 type CreateBaseInput = {
+  taskName?: string
+  /** Captured by the location-scoped delegating tool before durable creation. */
+  authority?: ReadonlyArray<Permission.Ruleset>
   id?: SessionSchema.ID
   title?: string
   agent?: Agent.ID
@@ -99,6 +102,13 @@ type CompactInput = Parameters<Session.Handle["compact"]>[0] & { sessionID: Sess
 type ForkInput = {
   sessionID: SessionSchema.ID
   before?: SessionMessage.ID
+  delegation?: {
+    taskName: string
+    title: string
+    agent: Agent.ID
+    model?: Model.Ref
+    authority: ReadonlyArray<Permission.Ruleset>
+  }
 }
 
 export {
@@ -291,6 +301,8 @@ const layer = Layer.effect(
               version: app.version,
               projectID: project.id,
               parentID: input.parentID,
+              taskName: input.taskName,
+              authority: input.authority ?? parent?.authority,
               location,
               subpath: RelativePath.make(path.relative(project.directory, location.directory).replaceAll("\\", "/")),
               title: input.title,
@@ -361,6 +373,7 @@ const layer = Layer.effect(
           parentID: parent.id,
           boundary: { type: input.before ? "before" : "through", messageID: boundary.id },
           ...inherited,
+          delegation: input.delegation,
         })
         return yield* result.get(sessionID).pipe(Effect.orDie)
       }),

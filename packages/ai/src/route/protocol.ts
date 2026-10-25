@@ -1,5 +1,12 @@
 import { Schema, type Effect } from "effect"
-import type { AIError, LanguageModelSanitizerCompatibility, LLMEvent, LLMRequest, ProtocolID } from "../schema/index.js"
+import type {
+  AIError,
+  LanguageModel,
+  LanguageModelSanitizerCompatibility,
+  LLMEvent,
+  LLMRequest,
+  ProtocolID,
+} from "../schema/index.js"
 
 /**
  * The semantic API contract of one model server family.
@@ -41,6 +48,8 @@ export interface Protocol<Body, Frame, Event, State> {
   readonly body: ProtocolBody<Body>
   /** Response side: streaming state machine. */
   readonly stream: ProtocolStream<Frame, Event, State>
+  /** Whether text system updates retain their privileged role in history rather than becoming user wrappers. */
+  readonly supportsSystemUpdates?: (model: LanguageModel) => boolean
   /** Whether `body.from` lowers `Message.effort(...)` markers; wrappers around another `body.from` must forward it. */
   readonly supportsEffortUpdates?: (request: LLMRequest) => boolean
   /** Tool schema sanitizer for every model on this protocol unless the model's compatibility sets one; wrappers around another `body.from` must forward it. */

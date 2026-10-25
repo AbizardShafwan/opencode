@@ -1,3 +1,4 @@
+import { isSubagent } from "@opencode/util/tool-name"
 import { createEffect, createMemo, createSignal, on, onCleanup, Show, type Accessor, type JSX } from "solid-js"
 import { createStore } from "solid-js/store"
 import { Predicate } from "effect"
@@ -388,7 +389,7 @@ function MessageTimelineView(
         if (content?.type !== "tool") return false
 
         if (content.state.status === "streaming" || content.state.status === "running") return true
-        const taskID = content.state.metadata?.[content.name === "subagent" ? "sessionID" : "shellID"]
+        const taskID = content.state.metadata?.[isSubagent(content.name) ? "sessionID" : "shellID"]
 
         return background.has(content.id) || (Predicate.isString(taskID) && background.has(taskID))
       })

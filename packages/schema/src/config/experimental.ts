@@ -16,7 +16,7 @@ export class Info extends Schema.Class<Info>("ConfigExperimental.Info")({
       "Enable experimental background compaction: summarize the conversation in the background as it nears the compaction threshold, so automatic compaction does not wait for the summary. Background summaries that are never used still cost tokens. Defaults to false.",
   }),
   subagent_depth: NonNegativeInt.pipe(optional).annotate({
-    description: "Maximum subagent nesting depth. Defaults to 1.",
+    description: "Maximum subagent nesting depth. Defaults to 3; set 0 to disable spawning.",
   }),
   location_idle_timeout: Schema.Union([Schema.DurationFromString, Schema.Literal(false)])
     .pipe(optional)

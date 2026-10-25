@@ -7,6 +7,7 @@ import { AppNodeBuilder } from "@opencode/core/effect/app-node-builder"
 import { LayerNode } from "@opencode/util/effect/layer-node"
 import { Location } from "@opencode/core/location"
 import { Permission } from "@opencode/core/permission"
+import { SessionSystemPrompt } from "@opencode/core/session/system-prompt"
 import { AgentPlugin } from "@opencode/core/plugin/agent"
 import { AbsolutePath } from "@opencode/core/schema"
 import { Global } from "@opencode/util/global"
@@ -203,6 +204,10 @@ describe("Agent", () => {
       expect(Permission.evaluate("external_directory", path.join(global.config, "*"), permissions).effect).toBe("allow")
       expect(Permission.evaluate("external_directory", path.join(global.tmp, "*"), permissions).effect).toBe("allow")
       expect(Permission.evaluate("external_directory", "/outside/*", permissions).effect).toBe("allow")
+      for (const id of ["explore", "title", "summary"]) {
+        const role = yield* agent.get(Agent.ID.make(id))
+        expect(role?.system?.startsWith(SessionSystemPrompt.make())).toBe(true)
+      }
       const explore = yield* agent.get(Agent.ID.make("explore"))
       expect(Permission.evaluate("shell", "git log -5", explore?.permissions ?? []).effect).toBe("allow")
       expect(Permission.evaluate("edit", "src/index.ts", explore?.permissions ?? []).effect).toBe("deny")
@@ -217,7 +222,7 @@ describe("Agent", () => {
     }),
   )
 
-  it.effect("denies the subagent tool for built-in subagents", () =>
+  it.effect("allows general delegation while keeping explore restricted", () =>
     Effect.gen(function* () {
       const agent = yield* Agent.Service
       yield* AgentPlugin.Plugin.effect(
@@ -231,8 +236,9 @@ describe("Agent", () => {
           const info = yield* agent.get(Agent.ID.make(id))
           if (!info) throw new Error(`expected built-in agent: ${id}`)
           expect(info.mode).toBe("subagent")
-          expect(info.permissions).toContainEqual({ action: "subagent", resource: "*", effect: "deny" })
-          expect(Permission.evaluate("subagent", "*", info.permissions).effect).toBe("deny")
+          expect(Permission.evaluate("subagent", "*", info.permissions).effect).toBe(
+            id === "general" ? "allow" : "deny",
+          )
         }),
       )
     }),

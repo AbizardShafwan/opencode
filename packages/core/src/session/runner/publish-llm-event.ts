@@ -22,6 +22,7 @@ type Input = {
   readonly sessionID: SessionSchema.ID
   readonly agent: Agent.ID
   readonly model: Model.Ref
+  readonly thinking?: SessionMessage.Thinking
   readonly providerMetadataKey: string
   /** The start snapshot, awaited before `Step.Started` so its capture can overlap the provider request. */
   readonly pendingSnapshot?: Effect.Effect<Snapshot.ID | undefined>
@@ -129,6 +130,7 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
       sessionID: input.sessionID,
       agent: input.agent,
       model: input.model,
+      thinking: input.thinking,
       assistantMessageID,
       snapshot,
       started: input.started,

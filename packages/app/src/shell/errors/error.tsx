@@ -333,7 +333,7 @@ export const ErrorPage: Component<ErrorPageProps> = (props) => {
       data-tauri-drag-region
     >
       <div class="w-full max-w-3xl flex flex-col items-center justify-center gap-6 sm:gap-8 my-auto">
-        <Logo class="w-48 sm:w-58.5 opacity-12 shrink-0" />
+        <Logo class="w-48 sm:w-58.5 opacity-12 shrink-0 text-[#b8860b]" />
         <div class="flex flex-col items-center gap-2 text-center">
           <h1 class="text-lg font-medium text-text-strong">
             {language.t(status() ? "error.page.title.status" : "error.page.title")}

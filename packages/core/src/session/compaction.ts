@@ -28,6 +28,7 @@ import { State } from "../state.js"
 import { Token } from "../util/token.js"
 import type { SessionContext } from "./context.js"
 import { SessionEvent } from "./event.js"
+import COMPACTION from "./runner/prompt/compaction.txt"
 import { SessionHistory } from "./history.js"
 import type { SessionMessage } from "./message.js"
 import { SessionModelRequest } from "./model-request.js"
@@ -106,6 +107,7 @@ type Precomputed = {
   readonly firstID: SessionMessage.ID | undefined
   readonly keepID: SessionMessage.ID
   readonly model: SessionContext.Loaded["model"]["ref"]
+  readonly policy?: string
   readonly initial: string
   /** The longest tail since `keepID` that compaction still accepts beside this summary. */
   readonly tailLimit: number
@@ -162,10 +164,10 @@ const SUMMARY_TEMPLATE = `You MUST use this format for your response (you may om
 - [one or two brief sentences describing what the user is trying to accomplish]
 
 ## Requirements
-- [constraints, preferences, requirements, and scope boundaries stated by the user, or "(none)"]
+- [constraints, preferences, requirements, and scope boundaries stated by the user, or "(none)". When the user stated a requirement, preserve their exact wording in double quotes.]
 
 ## Decisions
-- [decisions already made and why, or "(none)"]
+- [decisions already made, who made them, and why, or "(none)". A decision is any choice that closes off an alternative.]
 
 ## Work State
 Break the objective into smaller goals and report which are completed, which are being worked on, and which are blocked.
@@ -179,26 +181,33 @@ Break the objective into smaller goals and report which are completed, which are
 - [anything blocking progress, and why; otherwise "(none)"]
 
 ## Next Move
-1. [ordered list of next actions, or "(none)"]
+1. [ordered list of next actions, or "(none)". Include the next concrete action and any verification it still needs.]
+
+## Open Questions
+- [unanswered user questions or decisions that still need the user, or "(none)"]
 
 ## Relevant Files
 List the files and directories, other than the current working directory, that another agent would need to open to continue this work. Include at most 15, most important first. Do not list every file that was read or changed. Include paths outside the current working directory when relevant. If none, write "(none)".
 - \`[file or directory path]\`: [brief reason it matters]
 
 ## Important Context
-- [facts the next agent cannot continue without and cannot easily find on its own; or "(none)"]
+- [facts the next agent cannot continue without and cannot easily find on its own, including whether changes are uncommitted, committed, pushed, under review, or merged, and exact commands or errors; or "(none)"]
 </template>`
 
 const SUMMARY_RULES = `Rules:
+- Newer messages take precedence over older summaries and earlier checkpoints. Preserve prior requirements, decisions, and unresolved work unless newer history contradicts or resolves them.
 - Keep each section concise. Use terse, single-line bullets, not prose paragraphs or nested lists.
 - Prefer short references over detailed restatement. It is fine to leave out information the next agent can recover from the code or the files listed above.
-- Preserve exact file paths, symbols, commands, error strings, URLs, and identifiers.
-- Carry forward only user questions or requests that remain unanswered or require further action. Do not repeat ones that newer history has answered or resolved. Preserve exact wording when carrying one forward.
+- Preserve exact file paths, symbols, commands, error strings, URLs, identifiers, versions, and user wording.
+- A requirement stated by the user must keep the user's wording in double quotes. Do not paraphrase it into a cleaner rule.
+- A decision is any choice that closes off an alternative: an approach picked over another, a convention adopted, an API or file settled on, an option rejected and why, or a limit or number agreed.
+- Carry forward only user questions or requests that remain unanswered or require further action. Do not repeat ones that newer history has answered or resolved.
 - Preserve consequential workflow state, including whether changes are uncommitted, committed, pushed, under review, or merged.
 - Do not mention the summary process or that context was compacted.`
 
 export const buildPrompt = (update: boolean, legacy = false) => {
   const shared = [
+    COMPACTION.trim(),
     "Summarize only what the user and the assistant said and did. Leave out instructions and setup the assistant was given rather than told by the user: repository conventions, instruction files such as AGENTS.md, and environment details like the session ID. The next agent receives current versions of all of these separately.",
     SUMMARY_TEMPLATE,
     SUMMARY_RULES,
@@ -207,7 +216,7 @@ export const buildPrompt = (update: boolean, legacy = false) => {
   ]
   if (!update) {
     return [
-      "You MUST summarize the conversation above into a structured summary that will be given to another agent to resume the work.",
+      "You MUST summarize the conversation above into a structured summary that will be given to another agent to resume the work. The newest messages remain verbatim beside this checkpoint; use them to make Work State, Next Move, and Open Questions current, but do not restate them.",
       ...shared,
     ].join("\n\n")
   }
@@ -223,7 +232,7 @@ export const buildPrompt = (update: boolean, legacy = false) => {
           "The existing checkpoint was written with an earlier format that recorded far more detail than this one asks for. Rewrite it at the level of detail described below rather than carrying its detail forward. Keep its requirements, decisions, and open questions; they came from earlier conversation with the user.",
         ]
       : []),
-    "Newer history always takes precedence over the existing checkpoint. Preserve previous information unless newer history clearly contradicts, supersedes, resolves, or makes it stale. If something is no longer relevant to continuing the work, you may remove it.",
+    "Newer history always takes precedence over the existing checkpoint. Preserve previous information unless newer history clearly contradicts, supersedes, resolves, or makes it stale. Do not drop a requirement or decision merely because it seems implied.",
     "Incorporate newer requirements, decisions, progress, and context. Reconcile Work State and Next Move: move completed work out of Active, remove resolved blockers and answered questions, and preserve unresolved or pending work.",
     "Return only the updated Markdown sections. Do not reproduce the `<conversation-checkpoint>`, `<summary>`, or `<recent-context>` wrapper tags from the previous checkpoint.",
     ...shared,
@@ -231,7 +240,7 @@ export const buildPrompt = (update: boolean, legacy = false) => {
 }
 
 const NUDGE =
-  "The previous response did not fill in the required summary template. Do not call tools. Return the summary as text using the exact section headings from the template."
+  "The previous response did not fill in the required summary template. Do not call tools. Return the summary as text using every applicable section heading from the template, in order."
 
 /** Summaries written with the previous template carry this catch-all heading. */
 const LEGACY_HEADING = "## Additional Context"
@@ -367,6 +376,7 @@ export const layer = Layer.effect(
         firstID: context.messages[0]?.id,
         keepID: anchor.id,
         model: context.model.ref,
+        policy: context.policy,
         initial: context.initial,
         tailLimit: tailLimit(settings.keep, model.cap),
         failures,
@@ -919,7 +929,8 @@ export const node = makeLocationNode({
  * conversation: a compaction or revert since replaced its start, or the model or instructions changed.
  */
 const heldIndex = (held: Precomputed, context: SessionContext.Loaded) => {
-  if (held.firstID !== context.messages[0]?.id || held.initial !== context.initial) return -1
+  if (held.firstID !== context.messages[0]?.id || held.initial !== context.initial || held.policy !== context.policy)
+    return -1
   if (held.model.providerID !== context.model.ref.providerID || held.model.id !== context.model.ref.id) return -1
   if (held.model.variant !== context.model.ref.variant) return -1
   return context.messages.findIndex((message) => message.id === held.keepID)
@@ -943,6 +954,7 @@ const transcript = (context: SessionContext.Loaded, messages: ReadonlyArray<Sess
     agent: context.agent.info,
     model: context.model,
     tools: context.tools,
+    policy: context.policy,
     initial: context.initial,
     messages,
   })

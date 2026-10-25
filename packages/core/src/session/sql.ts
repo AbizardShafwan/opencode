@@ -30,6 +30,8 @@ export const SessionTable = sqliteTable(
       .references(() => ProjectTable.id, { onDelete: "cascade" }),
     workspace_id: text().$type<Workspace.ID>(),
     parent_id: text().$type<SessionSchema.ID>(),
+    task_name: text(),
+    authority: text({ mode: "json" }).$type<ReadonlyArray<Permission.Ruleset>>(),
     fork_session_id: text().$type<SessionSchema.ID>(),
     fork_boundary: text({ mode: "json" }).$type<Session.ForkBoundary>(),
     slug: text().notNull(),

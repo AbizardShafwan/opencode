@@ -16,6 +16,7 @@ const asserted: Permission.AssertInput[] = []
 const permission = Layer.succeed(
   Permission.Service,
   Permission.Service.of({
+    authority: () => Effect.succeed([]),
     close: Effect.void,
     ask: (input) => Effect.succeed({ id: input.id ?? Permission.ID.create(), effect: "ask" }),
     assert: (input) => {

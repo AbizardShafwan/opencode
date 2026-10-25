@@ -98,6 +98,54 @@ function waitForRequest(input: Partial<Permission.AssertInput> = {}) {
 }
 
 describe("Permission", () => {
+  it.effect("enforces every inherited ceiling even against child rules and saved grants", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "*", resource: "*", effect: "allow" }])
+      const database = yield* Database.Service
+      yield* database.db
+        .update(SessionTable)
+        .set({
+          authority: [[{ action: "read", resource: "*", effect: "deny" }]],
+        })
+        .where(eq(SessionTable.id, Session.ID.make("ses_test")))
+        .run()
+        .pipe(Effect.orDie)
+      const saved = yield* PermissionSaved.Service
+      yield* saved.add({ projectID: Project.ID.global, action: "read", resources: ["*"] })
+      const permissions = yield* Permission.Service
+      expect((yield* permissions.ask(assertion())).effect).toBe("deny")
+      yield* database.db
+        .update(SessionTable)
+        .set({
+          authority: [[{ action: "*", resource: "*", effect: "allow" }]],
+        })
+        .where(eq(SessionTable.id, Session.ID.make("ses_test")))
+        .run()
+        .pipe(Effect.orDie)
+      yield* setRules([{ action: "read", resource: "*", effect: "deny" }])
+      expect((yield* permissions.ask(assertion())).effect).toBe("deny")
+    }),
+  )
+
+  it.effect("inherited asks remain user-approvable and preserve saved decisions", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "*", resource: "*", effect: "allow" }])
+      const database = yield* Database.Service
+      yield* database.db
+        .update(SessionTable)
+        .set({
+          authority: [[{ action: "read", resource: "*", effect: "ask" }]],
+        })
+        .where(eq(SessionTable.id, Session.ID.make("ses_test")))
+        .run()
+        .pipe(Effect.orDie)
+      const pending = yield* waitForRequest({ save: ["src/*"] })
+      yield* pending.service.reply({ requestID: pending.request.id, reply: "always" })
+      yield* Fiber.join(pending.fiber)
+      expect((yield* pending.service.ask(assertion())).effect).toBe("allow")
+    }),
+  )
+
   it.effect("returns the evaluated effect and only queues prompts", () =>
     Effect.gen(function* () {
       yield* setup([{ action: "read", resource: "*", effect: "allow" }])

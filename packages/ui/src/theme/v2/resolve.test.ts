@@ -4,6 +4,23 @@ import type { DesktopTheme, HexColor, ResolvedV2Theme } from "../types"
 import { resolveThemeV2, resolveThemeVariantV2, themeV2ToCss } from "./resolve"
 
 const theme: DesktopTheme = await Bun.file(new URL("../themes/oc-2.json", import.meta.url)).json()
+const kanso: DesktopTheme = await Bun.file(new URL("../themes/kanso.json", import.meta.url)).json()
+
+describe("Kanso", () => {
+  test.each(["light", "dark"] as const)("%s uses paper, ink, and flat elevation", (mode) => {
+    const tokens = resolveThemeV2(kanso)[mode]
+    const background = tokens["v2-background-bg-base"] as HexColor
+    const text = tokens["v2-text-text-base"] as HexColor
+    const muted = tokens["v2-text-text-muted"] as HexColor
+    const accent = tokens["v2-background-bg-accent"] as HexColor
+    const contrast = tokens["v2-text-text-contrast"] as HexColor
+
+    expect(tokens["v2-elevation-raised"]).toBe("none")
+    expect(contrastRatio(text, background)).toBeGreaterThanOrEqual(7)
+    expect(contrastRatio(muted, background)).toBeGreaterThanOrEqual(4.5)
+    expect(contrastRatio(contrast, accent)).toBeGreaterThanOrEqual(4.5)
+  })
+})
 
 describe("icon emphasis", () => {
   test.each(["light", "dark"] as const)("OC-2 %s icons increase in contrast from faint to base", (mode) => {

@@ -13,6 +13,8 @@ import { ProjectTable } from "@opencode/core/project/sql"
 import { AbsolutePath } from "@opencode/core/schema"
 import { InstructionState } from "@opencode/core/session/instruction-state"
 import { SessionProjector } from "@opencode/core/session/projector"
+import { SessionSystemPrompt } from "@opencode/core/session/system-prompt"
+import { SessionHistory } from "@opencode/core/session/history"
 import { SessionSchema } from "@opencode/core/session/schema"
 import {
   InstructionBlobTable,
@@ -274,7 +276,11 @@ describe("InstructionState", () => {
 
       const assembled = yield* preview(db, sessionID, instructions)
 
-      expect(assembled).toEqual({ initial: "Changed context", update: "" })
+      expect(assembled).toEqual({
+        initial: "Changed context",
+        values: { "test/context": "Changed context" },
+        update: "",
+      })
       expect(yield* instructionEvents(db, sessionID)).toEqual(beforeEvents)
       expect(yield* db.select().from(InstructionBlobTable).all().pipe(Effect.orDie)).toEqual(beforeBlobs)
       expect(
@@ -394,6 +400,7 @@ describe("InstructionState", () => {
 
       expect(yield* preview(db, sessionID, instructions)).toEqual({
         initial: "Initial context",
+        values: { "test/context": "Initial context" },
         update: "",
       })
       expect(yield* instructionEvents(db, sessionID)).toEqual([])
@@ -419,6 +426,7 @@ describe("InstructionState", () => {
 
       expect(yield* preview(db, sessionID, instructions)).toEqual({
         initial: "Committed context",
+        values: { "test/context": "Committed context" },
         update: "",
       })
       expect(yield* instructionEvents(db, sessionID)).toEqual(beforeEvents)
@@ -506,3 +514,103 @@ describe("InstructionState", () => {
     }),
   )
 })
+
+it.effect("keeps the durable policy prefix across reloads, agent changes and a return to defaults", () =>
+  Effect.gen(function* () {
+    const sessionID = SessionSchema.ID.make("ses_policy_prefix")
+    const { db, events } = yield* setup(sessionID)
+    const instructions = (policy?: string) =>
+      Instructions.combine([
+        SessionSystemPrompt.source(policy),
+        source("test/context", Effect.succeed("Project instructions")),
+      ])
+    yield* InstructionState.prepare(db, events, instructions(), sessionID)
+    const first = yield* SessionHistory.entriesForRunner(db, sessionID, instructions(), "local")
+    expect(first.policy).toBe(SessionSystemPrompt.make())
+    expect(first.initial).toBe("Project instructions")
+
+    yield* InstructionState.prepare(db, events, instructions("Read-only reviewer policy"), sessionID)
+    const changed = yield* SessionHistory.entriesForRunner(
+      db,
+      sessionID,
+      instructions("Read-only reviewer policy"),
+      "local",
+    )
+    expect(changed.policy).toBe(first.policy)
+    expect(changed.initial).toBe(first.initial)
+    expect(changed.entries).toHaveLength(1)
+    expect(changed.entries[0]?.message).toMatchObject({
+      type: "system",
+      text: expect.stringContaining("Read-only reviewer policy"),
+    })
+
+    // Reconstruct with fresh source objects, as on a resumed drain. No process-local cache owns this state.
+    yield* InstructionState.prepare(db, events, instructions("Read-only reviewer policy"), sessionID)
+    expect(
+      yield* SessionHistory.entriesForRunner(db, sessionID, instructions("Read-only reviewer policy"), "local"),
+    ).toEqual(changed)
+    expect(yield* instructionEvents(db, sessionID)).toHaveLength(2)
+
+    yield* InstructionState.prepare(db, events, instructions(), sessionID)
+    const restored = yield* SessionHistory.entriesForRunner(db, sessionID, instructions(), "local")
+    expect(restored.policy).toBe(first.policy)
+    expect(restored.entries.slice(0, changed.entries.length)).toEqual([...changed.entries])
+    expect(restored.entries.at(-1)?.message).toMatchObject({
+      type: "system",
+      text: expect.stringContaining(SessionSystemPrompt.make()),
+    })
+  }),
+)
+
+it.effect("rebases policy at compaction and seeds a fork from the current policy", () =>
+  Effect.gen(function* () {
+    const sessionID = SessionSchema.ID.make("ses_policy_epoch")
+    const { db, events } = yield* setup(sessionID)
+    yield* InstructionState.prepare(db, events, SessionSystemPrompt.source("First policy"), sessionID)
+    yield* InstructionState.prepare(db, events, SessionSystemPrompt.source("Current policy"), sessionID)
+    const current = yield* InstructionState.current(db, sessionID)
+    expect(current).toBeDefined()
+    const fork = SessionSchema.ID.make("ses_policy_fork")
+    yield* setup(fork)
+    yield* InstructionState.initialize(db, fork, 0, current!)
+    expect(
+      SessionSystemPrompt.baseline(
+        SessionSystemPrompt.source("Current policy"),
+        yield* InstructionState.baseline(db, fork),
+      ).policy,
+    ).toBe("Current policy")
+
+    yield* InstructionState.advanceEpoch(db, sessionID, 100)
+    expect(
+      SessionSystemPrompt.baseline(
+        SessionSystemPrompt.source("Current policy"),
+        yield* InstructionState.baseline(db, sessionID),
+      ).policy,
+    ).toBe("Current policy")
+  }),
+)
+
+it.effect("separates simultaneous policy and project updates without dropping either", () =>
+  Effect.gen(function* () {
+    const sessionID = SessionSchema.ID.make("ses_policy_split")
+    const { db, events } = yield* setup(sessionID)
+    const instructions = (policy: string, project: string) =>
+      Instructions.combine([SessionSystemPrompt.source(policy), source("test/project", Effect.succeed(project))])
+    yield* InstructionState.prepare(db, events, instructions("First policy", "First project"), sessionID)
+    yield* InstructionState.prepare(db, events, instructions("Next policy", "Next project"), sessionID)
+    const history = yield* SessionHistory.entriesForRunner(
+      db,
+      sessionID,
+      instructions("Next policy", "Next project"),
+      "local",
+    )
+    expect(history.policy).toBe("First policy")
+    expect(history.initial).toBe("First project")
+    expect(history.entries).toHaveLength(2)
+    expect(history.entries.map((entry) => SessionSystemPrompt.isUpdate(entry.message))).toEqual([true, false])
+    expect(history.entries[1]?.message).toMatchObject({ type: "system", text: "Next project" })
+    expect(yield* instructionEvents(db, sessionID)).toHaveLength(3)
+    yield* InstructionState.prepare(db, events, instructions("Next policy", "Next project"), sessionID)
+    expect(yield* instructionEvents(db, sessionID)).toHaveLength(3)
+  }),
+)

@@ -94,6 +94,8 @@ export type SkillName = string
 
 export type ShellID = string
 
+export type SessionMessageThinking = { mode?: "enabled" | "disabled" | "adaptive"; effort?: string; budget?: number }
+
 export type SessionMessageNative = { [x: string]: JsonValue }
 
 export type SessionMessageToolStateStreaming = { status: "streaming"; input: string }
@@ -1079,22 +1081,6 @@ export type SessionDeleted = {
   data: { sessionID: SessionID }
 }
 
-export type SessionForked = {
-  id: EventID
-  created: number
-  metadata?: { [x: string]: any }
-  type: "session.forked"
-  durable: { aggregateID: string; seq: EventSeq; version: 2 }
-  location?: LocationRef
-  data: {
-    sessionID: SessionID
-    parentID: SessionID
-    boundary: SessionForkBoundary
-    instructions?: { [x: InstructionKey]: InstructionHash }
-    instructionEntries?: InstructionEntrySnapshot
-  }
-}
-
 export type SessionInboxDelivered = {
   id: EventID
   created: number
@@ -1233,6 +1219,7 @@ export type SessionStepStarted = {
     assistantMessageID: SessionMessageID
     agent: AgentID
     model: ModelRef
+    thinking?: SessionMessageThinking
     snapshot?: SnapshotID
     started: number
   }
@@ -2117,6 +2104,7 @@ export type AgentInfo = {
   id: AgentID
   name: string
   model?: ModelRef
+  variant?: string
   request: ProviderRequest
   system?: string
   description?: string
@@ -2130,6 +2118,7 @@ export type AgentInfo = {
 export type SessionInfo = {
   id: SessionID
   parentID?: SessionID
+  taskName?: string
   fork?: { sessionID: SessionID; boundary: SessionForkBoundary }
   projectID: ProjectID
   agent?: AgentID
@@ -2142,6 +2131,7 @@ export type SessionInfo = {
   subpath?: RelativePath
   metadata?: SessionMetadata
   permissions?: PermissionRuleset
+  authority?: Array<PermissionRuleset>
   revert?: SessionRevert
   location: LocationPublicRef
 }
@@ -2159,12 +2149,14 @@ export type SessionCreated = {
     location: LocationRef
     subpath?: RelativePath
     parentID?: SessionID
+    taskName?: string
     slug: string
     title?: string
     agent?: AgentID
     model?: ModelRef
     metadata?: SessionMetadata
     permissions?: PermissionRuleset
+    authority?: Array<PermissionRuleset>
     version: string
   }
 }
@@ -2177,6 +2169,29 @@ export type SessionPermissions = {
   durable: { aggregateID: string; seq: EventSeq; version: 1 }
   location?: LocationRef
   data: { sessionID: SessionID; permissions: PermissionRuleset }
+}
+
+export type SessionForked = {
+  id: EventID
+  created: number
+  metadata?: { [x: string]: any }
+  type: "session.forked"
+  durable: { aggregateID: string; seq: EventSeq; version: 2 }
+  location?: LocationRef
+  data: {
+    sessionID: SessionID
+    parentID: SessionID
+    boundary: SessionForkBoundary
+    instructions?: { [x: InstructionKey]: InstructionHash }
+    instructionEntries?: InstructionEntrySnapshot
+    delegation?: {
+      taskName: string
+      title: string
+      agent: AgentID
+      model?: ModelRef
+      authority: Array<PermissionRuleset>
+    }
+  }
 }
 
 export type ConfigEntry =
@@ -2201,6 +2216,7 @@ export type ConfigEntry =
         agents?: {
           [x: string]: {
             model?: string | { providerID: string; model: string; variant?: string }
+            variant?: string
             request?: { headers?: { [x: string]: string }; body?: { [x: string]: JsonValue } }
             system?: string
             description?: string
@@ -2431,6 +2447,7 @@ export type SessionMessageAssistant = {
   type: "assistant"
   agent: AgentID
   model: ModelRef
+  thinking?: SessionMessageThinking
   content: Array<SessionMessageAssistantText | SessionMessageAssistantReasoning | SessionMessageAssistantTool>
   snapshot?: { start?: SnapshotID; end?: SnapshotID; files?: Array<RelativePath> }
   finish?: "stop" | "length" | "tool-calls" | "content-filter" | "error" | "unknown"
@@ -2988,6 +3005,7 @@ export type SessionListInput = {
     readonly order?: "asc" | "desc" | undefined
     readonly search?: string | undefined
     readonly parentID?: string | null | undefined
+    readonly descendants?: boolean | undefined
     readonly archived?: boolean | undefined
     readonly directory?: string | undefined
     readonly project?: string | undefined
@@ -2999,6 +3017,7 @@ export type SessionListInput = {
     readonly order?: "asc" | "desc" | undefined
     readonly search?: string | undefined
     readonly parentID?: string | null | undefined
+    readonly descendants?: boolean | undefined
     readonly archived?: boolean | undefined
     readonly directory?: string | undefined
     readonly project?: string | undefined
@@ -3010,6 +3029,7 @@ export type SessionListInput = {
     readonly order?: "asc" | "desc" | undefined
     readonly search?: string | undefined
     readonly parentID?: string | null | undefined
+    readonly descendants?: boolean | undefined
     readonly archived?: boolean | undefined
     readonly directory?: string | undefined
     readonly project?: string | undefined
@@ -3021,17 +3041,31 @@ export type SessionListInput = {
     readonly order?: "asc" | "desc" | undefined
     readonly search?: string | undefined
     readonly parentID?: string | null | undefined
+    readonly descendants?: boolean | undefined
     readonly archived?: boolean | undefined
     readonly directory?: string | undefined
     readonly project?: string | undefined
     readonly subpath?: string | undefined
     readonly cursor?: string | undefined
   }["parentID"]
+  readonly descendants?: {
+    readonly limit?: number | undefined
+    readonly order?: "asc" | "desc" | undefined
+    readonly search?: string | undefined
+    readonly parentID?: string | null | undefined
+    readonly descendants?: boolean | undefined
+    readonly archived?: boolean | undefined
+    readonly directory?: string | undefined
+    readonly project?: string | undefined
+    readonly subpath?: string | undefined
+    readonly cursor?: string | undefined
+  }["descendants"]
   readonly archived?: {
     readonly limit?: number | undefined
     readonly order?: "asc" | "desc" | undefined
     readonly search?: string | undefined
     readonly parentID?: string | null | undefined
+    readonly descendants?: boolean | undefined
     readonly archived?: boolean | undefined
     readonly directory?: string | undefined
     readonly project?: string | undefined
@@ -3043,6 +3077,7 @@ export type SessionListInput = {
     readonly order?: "asc" | "desc" | undefined
     readonly search?: string | undefined
     readonly parentID?: string | null | undefined
+    readonly descendants?: boolean | undefined
     readonly archived?: boolean | undefined
     readonly directory?: string | undefined
     readonly project?: string | undefined
@@ -3054,6 +3089,7 @@ export type SessionListInput = {
     readonly order?: "asc" | "desc" | undefined
     readonly search?: string | undefined
     readonly parentID?: string | null | undefined
+    readonly descendants?: boolean | undefined
     readonly archived?: boolean | undefined
     readonly directory?: string | undefined
     readonly project?: string | undefined
@@ -3065,6 +3101,7 @@ export type SessionListInput = {
     readonly order?: "asc" | "desc" | undefined
     readonly search?: string | undefined
     readonly parentID?: string | null | undefined
+    readonly descendants?: boolean | undefined
     readonly archived?: boolean | undefined
     readonly directory?: string | undefined
     readonly project?: string | undefined
@@ -3076,6 +3113,7 @@ export type SessionListInput = {
     readonly order?: "asc" | "desc" | undefined
     readonly search?: string | undefined
     readonly parentID?: string | null | undefined
+    readonly descendants?: boolean | undefined
     readonly archived?: boolean | undefined
     readonly directory?: string | undefined
     readonly project?: string | undefined
@@ -3248,6 +3286,7 @@ export type SessionImportInput = {
     readonly info: {
       readonly id: string
       readonly parentID?: string
+      readonly taskName?: string
       readonly fork?: {
         readonly sessionID: string
         readonly boundary:
@@ -3280,6 +3319,9 @@ export type SessionImportInput = {
         readonly resource: string
         readonly effect: "allow" | "deny" | "ask"
       }>
+      readonly authority?: ReadonlyArray<
+        ReadonlyArray<{ readonly action: string; readonly resource: string; readonly effect: "allow" | "deny" | "ask" }>
+      >
       readonly revert?: {
         readonly messageID: string
         readonly partID?: string
@@ -3301,6 +3343,7 @@ export type SessionImportInput = {
     readonly info: {
       readonly id: string
       readonly parentID?: string
+      readonly taskName?: string
       readonly fork?: {
         readonly sessionID: string
         readonly boundary:
@@ -3333,6 +3376,9 @@ export type SessionImportInput = {
         readonly resource: string
         readonly effect: "allow" | "deny" | "ask"
       }>
+      readonly authority?: ReadonlyArray<
+        ReadonlyArray<{ readonly action: string; readonly resource: string; readonly effect: "allow" | "deny" | "ask" }>
+      >
       readonly revert?: {
         readonly messageID: string
         readonly partID?: string
@@ -3354,6 +3400,7 @@ export type SessionImportInput = {
     readonly info: {
       readonly id: string
       readonly parentID?: string
+      readonly taskName?: string
       readonly fork?: {
         readonly sessionID: string
         readonly boundary:
@@ -3386,6 +3433,9 @@ export type SessionImportInput = {
         readonly resource: string
         readonly effect: "allow" | "deny" | "ask"
       }>
+      readonly authority?: ReadonlyArray<
+        ReadonlyArray<{ readonly action: string; readonly resource: string; readonly effect: "allow" | "deny" | "ask" }>
+      >
       readonly revert?: {
         readonly messageID: string
         readonly partID?: string

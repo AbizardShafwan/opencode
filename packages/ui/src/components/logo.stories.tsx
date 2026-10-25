@@ -2,7 +2,7 @@
 import * as mod from "./logo"
 
 const docs = `### Overview
-OpenCode logo assets: mark, splash, and wordmark.
+Memyr logo assets: mark, splash, and wordmark.
 
 Use Mark for compact spaces, Logo for headers, Splash for hero sections.
 
@@ -19,7 +19,7 @@ Use Mark for compact spaces, Logo for headers, Splash for hero sections.
 - Provide title/aria-label when logos convey meaning.
 
 ### Theming/tokens
-- Uses theme color tokens via CSS variables.
+- Uses currentColor; set color to the Memyr brand gold (#B8860B).
 
 `
 
@@ -39,7 +39,7 @@ export default {
 
 export const Basic = {
   render: () => (
-    <div style={{ display: "grid", gap: "16px", "align-items": "start" }}>
+    <div style={{ display: "grid", gap: "16px", "align-items": "start", color: "#b8860b" }}>
       <div>
         <div style={{ color: "var(--text-weak)", "font-size": "12px" }}>Mark</div>
         <mod.Mark />

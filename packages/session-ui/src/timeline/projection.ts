@@ -1,3 +1,4 @@
+import { isSubagent } from "@opencode/util/tool-name"
 import type {
   ModelRef,
   SessionMessageAssistant,
@@ -995,7 +996,7 @@ function toolGroupType(
     !hasContextGroup &&
     (content.state.status !== "completed" ||
       ("metadata" in content.state && content.state.metadata?.status === "running")) &&
-    (content.name === "shell" || content.name === "execute" || content.name === "subagent")
+    (content.name === "shell" || content.name === "execute" || isSubagent(content.name))
   )
     return undefined
 

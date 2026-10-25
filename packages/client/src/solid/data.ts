@@ -522,7 +522,7 @@ export function createData(config: CreateDataInput) {
     return created
   }
 
-  // Every direct subagent, not only the server's default first page, so a root's family cost
+  // Every descendant, not only the server's default first page, so a root's family cost
   // counts all of them. Pages stay newest first, the order the family index has always used.
   async function listChildren(input: SessionListInput): Promise<SessionInfo[]> {
     const page = await api().session.list(input)
@@ -892,6 +892,7 @@ export function createData(config: CreateDataInput) {
           if (existing?.type === "assistant") {
             existing.agent = event.data.agent
             existing.model = event.data.model
+            existing.thinking = event.data.thinking
             existing.retry = undefined
             existing.error = undefined
             existing.finish = undefined
@@ -913,6 +914,7 @@ export function createData(config: CreateDataInput) {
             type: "assistant",
             agent: event.data.agent,
             model: event.data.model,
+            thinking: event.data.thinking,
             metadata: event.metadata,
             content: [],
             snapshot: event.data.snapshot ? { start: event.data.snapshot } : undefined,
@@ -1656,7 +1658,9 @@ export function createData(config: CreateDataInput) {
         return sync.run(options?.children ? `session.family:${sessionID}` : `session:${sessionID}`, async () => {
           const [info, children] = await Promise.all([
             api().session.get({ sessionID }),
-            options?.children ? listChildren({ parentID: sessionID, order: "desc", limit: CHILD_PAGE }) : [],
+            options?.children
+              ? listChildren({ parentID: sessionID, descendants: true, order: "desc", limit: CHILD_PAGE })
+              : [],
           ])
           const sessions = [info, ...children]
           batch(() => {

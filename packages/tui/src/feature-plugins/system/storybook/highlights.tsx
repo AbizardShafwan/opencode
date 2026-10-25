@@ -9,15 +9,15 @@ import { StoryFooter } from "./footer"
 const items = [
   {
     title: "Built-In Worktree Tools",
-    body: "Ask OpenCode to use `worktree_create`, `worktree_list`, and `worktree_remove` in Code Mode. You can create isolated worktrees, move sessions into them, and remove them with normal edit approval.",
+    body: "Ask Memyr to use `worktree_create`, `worktree_list`, and `worktree_remove` in Code Mode. You can create isolated worktrees, move sessions into them, and remove them with normal edit approval.",
   },
   {
     title: "Safer Remote Pairing",
-    body: "The first `opencode pair --remote` now warns that it will expose your server and asks for confirmation. For non-interactive use, pass `opencode pair --remote --yes`.",
+    body: "The first `memyr pair --remote` now warns that it will expose your server and asks for confirmation. For non-interactive use, pass `memyr pair --remote --yes`.",
   },
   {
     title: "Installable Web App",
-    body: "Use Chrome or Edge’s Install button to install the OpenCode web app, including when it runs behind an authenticating proxy.",
+    body: "Use Chrome or Edge’s Install button to install the Memyr web app, including when it runs behind an authenticating proxy.",
   },
   {
     title: "Clear Session Failures",

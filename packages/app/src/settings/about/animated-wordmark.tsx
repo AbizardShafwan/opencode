@@ -1,9 +1,16 @@
 import { createEffect, For, on, onCleanup } from "solid-js"
 import { createStore } from "solid-js/store"
 
-const target = ["o", "p", "e", "n", "c", "o", "d", "e"] as const
+const target = ["m", "e", "m", "y", "r"] as const
 
-const choices = ["o", "p", "e", "n", "c", "d"] as const
+const choices = ["m", "e", "y", "r"] as const
+
+const paths: Record<(typeof choices)[number], string> = {
+  m: "M0 6H4L12 20L20 6H24V36H20V19L12 31L4 19V36H0Z",
+  e: "M0 6H24V11H4V20H20V25H4V31H24V36H0Z",
+  y: "M0 6H5L12 19L19 6H24L14 26V36H10V26Z",
+  r: "M0 6H20V25H12L24 36H18L8 25H4V36H0V6ZM4 11V20H16V11H4Z",
+}
 
 export function AnimatedWordmark(props: { active: boolean }) {
   const [state, setState] = createStore({ letters: [...target] })
@@ -47,32 +54,13 @@ export function AnimatedWordmark(props: { active: boolean }) {
   onCleanup(() => timers.forEach(clearTimeout))
 
   return (
-    <svg class="settings-about-wordmark" viewBox="0 0 234 42" aria-hidden="true">
+    <svg class="settings-about-wordmark" viewBox="0 0 144 42" aria-hidden="true">
       <defs>
-        <symbol id="settings-about-letter-o" viewBox="0 0 24 42">
-          <path class="settings-about-letter-shadow" d="M18 30H6V18H18V30Z" />
-          <path d="M18 12H6V30H18V12ZM24 36H0V6H24V36Z" />
-        </symbol>
-        <symbol id="settings-about-letter-p" viewBox="0 0 24 42">
-          <path class="settings-about-letter-shadow" d="M18 30H6V18H18V30Z" />
-          <path d="M6 30H18V12H6V30ZM24 36H6V42H0V6H24V36Z" />
-        </symbol>
-        <symbol id="settings-about-letter-e" viewBox="0 0 24 42">
-          <path class="settings-about-letter-shadow" d="M24 24V30H6V24H24Z" />
-          <path d="M24 24H6V30H24V36H0V6H24V24ZM6 18H18V12H6V18Z" />
-        </symbol>
-        <symbol id="settings-about-letter-n" viewBox="0 0 24 42">
-          <path class="settings-about-letter-shadow" d="M18 36H6V18H18V36Z" />
-          <path d="M18 12H6V36H0V6H18V12ZM24 36H18V12H24V36Z" />
-        </symbol>
-        <symbol id="settings-about-letter-c" viewBox="0 0 24 42">
-          <path class="settings-about-letter-shadow" d="M24 30H6V18H24V30Z" />
-          <path d="M24 12H6V30H24V36H0V6H24V12Z" />
-        </symbol>
-        <symbol id="settings-about-letter-d" viewBox="0 0 24 42">
-          <path class="settings-about-letter-shadow" d="M18 30H6V18H18V30Z" />
-          <path d="M18 12H6V30H18V12ZM24 36H0V6H18V0H24V36Z" />
-        </symbol>
+        {choices.map((letter) => (
+          <symbol id={`settings-about-letter-${letter}`} viewBox="0 0 24 42">
+            <path d={paths[letter]} fill-rule={letter === "r" ? "evenodd" : undefined} />
+          </symbol>
+        ))}
       </defs>
       <For each={state.letters}>
         {(letter, index) => (

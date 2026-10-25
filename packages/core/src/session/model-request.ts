@@ -93,22 +93,42 @@ export const baseTranscript = (input: {
   readonly agent: Agent.Info
   readonly model: SessionRunnerModel.Resolved
   readonly tools: Tool.Snapshot
+  readonly policy?: string
   readonly initial: string
   readonly messages: ReadonlyArray<SessionMessage.Info>
 }) => {
   const providerMetadataKey = input.model.model.route.providerMetadataKey ?? input.model.model.provider
+  const inHistory = input.model.model.route.supportsSystemUpdates?.(input.model.model) ?? false
   return {
     providerMetadataKey,
     system: [
-      input.agent.system
-        ? input.agent.system
-        : SessionSystemPrompt.make(input.tools.definitions.map((tool) => tool.name)),
+      (inHistory ? input.policy : undefined) ?? (input.agent.system || SessionSystemPrompt.make()),
       input.initial,
     ]
       .filter((part) => part.length > 0)
       .map(SystemPart.make),
-    messages: toLLMMessages(input.messages, input.model.ref, providerMetadataKey),
+    messages: toLLMMessages(
+      inHistory ? input.messages : input.messages.filter((message) => !SessionSystemPrompt.isUpdate(message)),
+      input.model.ref,
+      providerMetadataKey,
+    ),
   }
+}
+
+// JSON object insertion order must not change the provider's tool prefix. Array
+// order remains authored: enum, tuple and combinator arrays can carry meaning.
+function canonicalSchema(schema: Record<string, unknown>): Record<string, unknown> {
+  const value = (input: unknown): unknown => {
+    if (Array.isArray(input)) return input.map(value)
+    // SAFETY: JSON-schema object nodes have string-keyed values; primitives and arrays are handled separately.
+    if (input !== null && typeof input === "object") return canonicalSchema(input as Record<string, unknown>)
+    return input
+  }
+  return Object.fromEntries(
+    Object.keys(schema)
+      .sort()
+      .map((key) => [key, value(schema[key])]),
+  )
 }
 
 const mimeToModality = (mime: string) => {
@@ -260,10 +280,14 @@ export const layer = Layer.effect(
       // hook and are dropped. `t.name` stays the real name so execution can map renames back.
       const byName = new Map(tools.definitions.map((t) => [t.name, t]))
       const hooked = new Map(
-        Object.entries(shaped.tools ?? {}).flatMap(([name, d]) => {
-          const t = given.get(d) ?? byName.get(name)
-          return t ? [[name, { ...t, description: d.description, inputSchema: d.input }] as const] : []
-        }),
+        Object.entries(shaped.tools ?? {})
+          .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+          .flatMap(([name, d]) => {
+            const t = given.get(d) ?? byName.get(name)
+            return t
+              ? [[name, { ...t, description: d.description, inputSchema: canonicalSchema(d.input) }] as const]
+              : []
+          }),
       )
       const entries = Object.entries(shaped.options)
       const generation = Object.fromEntries(entries.filter(([k]) => GENERATION_KEYS.has(k))) as GenerationOptionsFields

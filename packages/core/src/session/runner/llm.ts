@@ -126,6 +126,7 @@ const layer = Layer.effect(
                         agent: selected.agent,
                         tools: selected.tools,
                         model,
+                        policy: history.policy,
                         initial: history.initial,
                         messages: history.messages,
                       },
@@ -223,6 +224,7 @@ const layer = Layer.effect(
           agent: loaded.agent.info,
           model: loaded.model,
           tools: loaded.tools,
+          policy: loaded.policy,
           initial: loaded.initial,
           messages: loaded.messages,
         })

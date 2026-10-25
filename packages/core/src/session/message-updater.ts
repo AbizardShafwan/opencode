@@ -222,6 +222,7 @@ export function update(adapter: Adapter, event: SessionEvent.DurableEvent) {
               produce(existing, (draft) => {
                 draft.agent = event.data.agent
                 draft.model = castDraft(event.data.model)
+                draft.thinking = event.data.thinking
                 draft.retry = undefined
                 draft.error = undefined
                 draft.finish = undefined
@@ -250,6 +251,7 @@ export function update(adapter: Adapter, event: SessionEvent.DurableEvent) {
               type: "assistant",
               agent: event.data.agent,
               model: event.data.model,
+              thinking: event.data.thinking,
               metadata: event.metadata,
               time: { created: DateTime.makeUnsafe(event.data.started) },
               content: [],

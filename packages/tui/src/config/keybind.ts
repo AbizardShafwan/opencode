@@ -248,6 +248,8 @@ export const Definitions = {
   "composer.subagent.down": keybind("down", "Next subagent"),
   "composer.subagent.select": keybind("return", "Navigate to subagent"),
   "composer.subagent.interrupt": keybind("ctrl+d", "Interrupt subagent"),
+  "composer.subagent.expand": keybind("ctrl+right", "Expand subagent branch"),
+  "composer.subagent.collapse": keybind("ctrl+left", "Collapse subagent branch"),
   "composer.shell.up": keybind("up", "Previous shell"),
   "composer.shell.down": keybind("down", "Next shell"),
   "composer.shell.select": keybind("return", "View shell output"),

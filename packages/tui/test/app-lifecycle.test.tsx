@@ -256,7 +256,7 @@ test("SIGHUP clears title and disposes scoped resources once", async () => {
   })
   const setTitle = setup.renderer.setTerminalTitle.bind(setup.renderer)
   setup.renderer.setTerminalTitle = (title) => {
-    if (title === "OpenCode") started()
+    if (title === "Memyr") started()
     setTitle(title)
   }
   const listeners = new Set(process.listeners("SIGHUP"))
@@ -304,8 +304,8 @@ test("session lifecycle updates the terminal title and prints the epilogue after
   })
   const setTitle = setup.renderer.setTerminalTitle.bind(setup.renderer)
   setup.renderer.setTerminalTitle = (title) => {
-    if (title === "OC | Demo session") initialTitle()
-    if (title === "OC | Renamed session") renamedTitle()
+    if (title === "Memyr | Demo session") initialTitle()
+    if (title === "Memyr | Renamed session") renamedTitle()
     setTitle(title)
   }
   const events = createEventStream()
@@ -369,7 +369,7 @@ test("session lifecycle updates the terminal title and prints the epilogue after
     await task
 
     expect(stdout).toContain("Renamed session")
-    expect(stdout).toContain("opencode -s dummy")
+    expect(stdout).toContain("memyr -s dummy")
     expect(promptRequests).toBe(0)
   } finally {
     process.stdout.write = originalWrite
@@ -387,7 +387,7 @@ test("session title generated while an untitled session is loading remains visib
   const generatedTitle = Promise.withResolvers<void>()
   setup.renderer.setTerminalTitle = (title) => {
     titles.push(title)
-    if (title === "OC | Generated title") generatedTitle.resolve()
+    if (title === "Memyr | Generated title") generatedTitle.resolve()
     setTitle(title)
   }
   const sessionRequested = Promise.withResolvers<void>()
@@ -455,9 +455,9 @@ test("session title generated while an untitled session is loading remains visib
     ])
     await Bun.sleep(20)
 
-    const generated = titles.lastIndexOf("OC | Generated title")
+    const generated = titles.lastIndexOf("Memyr | Generated title")
     expect(generated).toBeGreaterThan(-1)
-    expect(titles.slice(generated + 1)).not.toContain("OpenCode")
+    expect(titles.slice(generated + 1)).not.toContain("Memyr")
     setup.renderer.destroy()
     await task
   } finally {
@@ -2772,14 +2772,14 @@ test.each([44, 100])(
   15_000,
 )
 
-test("restarting after an update tells the user to start OpenCode again", async () => {
+test("restarting after an update tells the user to start Memyr again", async () => {
   await using state = await tmpdir()
   const setup = await createTestRenderer({ width: 80, height: 24 })
   await setup.renderer.setupTerminal()
   const started = Promise.withResolvers<void>()
   const setTitle = setup.renderer.setTerminalTitle.bind(setup.renderer)
   setup.renderer.setTerminalTitle = (title) => {
-    if (title === "OpenCode") started.resolve()
+    if (title === "Memyr") started.resolve()
     setTitle(title)
   }
   const events = createEventStream()
@@ -2815,13 +2815,13 @@ test("restarting after an update tells the user to start OpenCode again", async 
     await started.promise
     await setup.waitForFrame((frame) => frame.includes("commands"))
     await setup.mockInput.typeText("/update")
-    await setup.waitForFrame((frame) => frame.includes("Update OpenCode"))
+    await setup.waitForFrame((frame) => frame.includes("Update Memyr"))
     setup.mockInput.pressEnter()
     await setup.waitForFrame((frame) => frame.includes("Update successful") && frame.includes("Restart"))
     setup.mockInput.pressEnter()
     await task
 
-    expect(Bun.stripANSI(stdout)).toContain("  Run opencode to use 2.0.0\n")
+    expect(Bun.stripANSI(stdout)).toContain("  Run memyr to use 2.0.0\n")
   } finally {
     process.stdout.write = originalWrite
     if (!setup.renderer.isDestroyed) setup.renderer.destroy()
@@ -2829,14 +2829,14 @@ test("restarting after an update tells the user to start OpenCode again", async 
   }
 })
 
-test("quitting after a background update tells the user to start OpenCode again", async () => {
+test("quitting after a background update tells the user to start Memyr again", async () => {
   await using state = await tmpdir()
   const setup = await createTestRenderer({ width: 80, height: 24 })
   await setup.renderer.setupTerminal()
   const started = Promise.withResolvers<void>()
   const setTitle = setup.renderer.setTerminalTitle.bind(setup.renderer)
   setup.renderer.setTerminalTitle = (title) => {
-    if (title === "OpenCode") started.resolve()
+    if (title === "Memyr") started.resolve()
     setTitle(title)
   }
   const events = createEventStream()
@@ -2880,7 +2880,7 @@ test("quitting after a background update tells the user to start OpenCode again"
     setup.mockInput.pressEnter()
     await task
 
-    expect(Bun.stripANSI(stdout)).toContain("  Run opencode to use 2.0.0\n")
+    expect(Bun.stripANSI(stdout)).toContain("  Run memyr to use 2.0.0\n")
   } finally {
     process.stdout.write = originalWrite
     if (!setup.renderer.isDestroyed) setup.renderer.destroy()

@@ -9,6 +9,7 @@ import { SessionMessage } from "./message.js"
 import type { SessionSchema } from "./schema.js"
 import { Instructions } from "../instructions/index.js"
 import { InstructionState } from "./instruction-state.js"
+import { SessionSystemPrompt } from "./system-prompt.js"
 import { SessionRecentText } from "./recent-text.js"
 import { SessionMessageTable } from "./sql.js"
 
@@ -200,7 +201,7 @@ export const entriesForRunner = Effect.fn("SessionHistory.entriesForRunner")(fun
       Effect.gen(function* () {
         const messages = yield* messageEntries(db, sessionID, boundary)
         return {
-          initial: yield* InstructionState.initial(db, sessionID, instructions),
+          ...SessionSystemPrompt.baseline(instructions, yield* InstructionState.baseline(db, sessionID)),
           entries: messages,
         }
       }),
@@ -226,7 +227,7 @@ export const preview = Effect.fn("SessionHistory.preview")(function* (
         const settled = unsettled === -1 ? messages : messages.slice(0, unsettled)
         const assembled = yield* InstructionState.preview(db, sessionID, instructions, observed)
         return {
-          initial: assembled.initial,
+          ...SessionSystemPrompt.baseline(instructions, assembled.values),
           messages: settled.map((entry) => entry.message),
           instructionUpdate: assembled.update,
         }

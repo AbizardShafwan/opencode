@@ -239,16 +239,12 @@
 }
 
 .settings-about-wordmark {
-  width: 178px;
-  height: 32px;
+  width: 144px;
+  height: 42px;
   flex-shrink: 0;
-  opacity: 0.2;
-  color: var(--v2-text-text-muted);
+  opacity: 0.35;
+  color: #b8860b;
   fill: currentColor;
-}
-
-.settings-about-letter-shadow {
-  opacity: 0.3;
 }
 
 .settings-about-faint,

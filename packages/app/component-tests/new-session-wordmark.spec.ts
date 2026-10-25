@@ -12,14 +12,17 @@ for (const theme of ["light", "dark"]) {
       await expect(base).toHaveCSS("opacity", "0.16")
       await expect(shimmer).toHaveCSS("animation-iteration-count", "1")
       await expect(logo.locator("g[mask]")).toHaveCount(0)
-      await expect(shimmer).toHaveCSS("color", "rgb(255, 255, 255)")
+      await expect(logo).toHaveCSS("color", "rgb(184, 134, 11)")
+      await expect(shimmer).toHaveCSS("color", "rgb(240, 210, 122)")
       await expect(shimmer).toHaveCSS("mix-blend-mode", "screen")
-      await expect(base.locator("path").nth(1)).toHaveAttribute("fill", "var(--icon-base)")
-      await expect(base.locator("path").nth(9)).toHaveCSS(
-        "fill",
-        await base.locator("path").nth(1).evaluate((element) => getComputedStyle(element).fill),
-      )
-      await expect(base.locator('path[fill="var(--icon-weak-base)"]')).toHaveCount(8)
+      await expect(base).toHaveAttribute("viewBox", "0 0 760 129")
+      await expect(base.locator("path")).toHaveCount(5)
+      await expect(base.locator('path[fill="var(--icon-weak-base)"]')).toHaveCount(0)
+      const fills = await base
+        .locator("path")
+        .evaluateAll((paths) => paths.map((path) => getComputedStyle(path).fill))
+      expect(new Set(fills).size).toBe(1)
+      expect(fills[0]).toBe("rgb(184, 134, 11)")
 
       await logo.evaluate((element) => {
         element.getAnimations({ subtree: true }).forEach((animation) => {

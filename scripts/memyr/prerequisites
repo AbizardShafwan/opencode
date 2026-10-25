@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+# Sourced by the lifecycle launchers so the private toolchain reaches every build subprocess.
+set -euo pipefail
+
+memyr_run() {
+  if [[ "$memyr_mode" == plan ]]; then
+    printf '  '; printf '%q ' "$@"; printf '\n'
+    return
+  fi
+  "$@"
+}
+
+memyr_system_packages() {
+  local elevate=()
+  if [[ "$EUID" != 0 ]]; then
+    if ! command -v sudo >/dev/null; then
+      echo 'Missing system prerequisites require an administrator; install sudo or run the printed package command as root.' >&2
+      [[ "$memyr_mode" == plan ]] || return 1
+    fi
+    elevate=(sudo)
+  fi
+  if command -v apt-get >/dev/null; then
+    memyr_run "${elevate[@]}" apt-get update
+    memyr_run "${elevate[@]}" apt-get install -y ca-certificates curl unzip tar gzip git build-essential python3 python3-setuptools
+    return
+  fi
+  if command -v pacman >/dev/null; then
+    # Arch does not support partial upgrades.
+    memyr_run "${elevate[@]}" pacman -Syu --needed --noconfirm ca-certificates curl unzip tar gzip git base-devel python python-setuptools
+    return
+  fi
+  if command -v dnf >/dev/null; then
+    memyr_run "${elevate[@]}" dnf install -y ca-certificates curl unzip tar gzip git gcc-c++ make python3 python3-setuptools
+    return
+  fi
+  if command -v zypper >/dev/null; then
+    memyr_run "${elevate[@]}" zypper --non-interactive install ca-certificates curl unzip tar gzip git gcc-c++ make python3 python3-setuptools
+    return
+  fi
+  echo "No supported package manager found. Install the missing tools listed above, then rerun." >&2
+  return 1
+}
+
+memyr_download() {
+  curl --fail --location --show-error --silent --retry 3 --connect-timeout 20 --max-time 600 \
+    --proto '=https' --proto-redir '=https' "$1" -o "$2"
+}
+
+memyr_verify() {
+  local expected
+  expected=$(awk -v name="$2" '$2 == name { print $1 }' "$1")
+  [[ "$expected" =~ ^[[:xdigit:]]{64}$ ]] || { echo "Missing SHA-256 for $2" >&2; return 1; }
+  if command -v sha256sum >/dev/null; then
+    printf '%s  %s\n' "$expected" "$3" | sha256sum --check --status
+    return
+  fi
+  printf '%s  %s\n' "$expected" "$3" | shasum -a 256 --check --status
+}
+
+memyr_fetch_runtime() (
+  # A subshell owns cleanup; it does not replace traps in the calling installer.
+  local stage asset base version destination
+  mkdir -p "$memyr_tools"
+  if [[ ! -f "$memyr_tools/.memyr-toolchain" ]]; then
+    [[ -z "$(ls -A "$memyr_tools")" ]] || { echo "Refusing unowned toolchain directory: $memyr_tools" >&2; exit 1; }
+    printf 'memyr\n' > "$memyr_tools/.memyr-toolchain"
+  fi
+  stage=$(mktemp -d "$memyr_tools/.download-XXXXXX")
+  trap 'rm -rf -- "$stage"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  if [[ "$1" == bun ]]; then
+    asset="bun-$memyr_os-$memyr_arch"
+    [[ "$memyr_arch" != x64 ]] || asset="$asset-baseline"
+    [[ "$memyr_arch" != arm64 ]] || asset="bun-$memyr_os-aarch64"
+    base="https://github.com/oven-sh/bun/releases/download/bun-v$memyr_bun_version"
+    memyr_download "$base/SHASUMS256.txt" "$stage/checksums"
+    memyr_download "$base/$asset.zip" "$stage/$asset.zip"
+    memyr_verify "$stage/checksums" "$asset.zip" "$stage/$asset.zip"
+    unzip -q "$stage/$asset.zip" -d "$stage"
+    [[ "$("$stage/$asset/bun" --version)" == "$memyr_bun_version" ]]
+    destination="$memyr_tools/bun-$memyr_bun_version"
+    [[ ! -e "$destination" ]] || { echo "Remove the invalid private runtime and retry: $destination" >&2; exit 1; }
+    mv "$stage/$asset" "$destination"
+    exit
+  fi
+  base=https://nodejs.org/dist/latest-v24.x
+  memyr_download "$base/SHASUMS256.txt" "$stage/checksums"
+  asset=$(awk -v suffix="-$memyr_os-$memyr_arch.tar.gz" '$2 ~ /^node-v24\./ && substr($2, length($2) - length(suffix) + 1) == suffix { print $2 }' "$stage/checksums")
+  [[ "$asset" =~ ^node-v24\.[0-9]+\.[0-9]+-(linux|darwin)-(x64|arm64)\.tar\.gz$ ]] || { echo 'Node 24 archive was not found' >&2; exit 1; }
+  # Download from the versioned directory, even if latest-v24.x changes during installation.
+  version=${asset#node-}; version=${version%%-*}
+  memyr_download "https://nodejs.org/dist/$version/$asset" "$stage/$asset"
+  memyr_verify "$stage/checksums" "$asset" "$stage/$asset"
+  tar -xzf "$stage/$asset" -C "$stage"
+  "$stage/${asset%.tar.gz}/bin/node" --version
+  [[ ! -e "$memyr_tools/node-24" ]] || { echo "Remove the invalid private runtime and retry: $memyr_tools/node-24" >&2; exit 1; }
+  mv "$stage/${asset%.tar.gz}" "$memyr_tools/node-24"
+)
+
+memyr_prerequisites() {
+  local memyr_mode=${1:-install} memyr_scope=${2:-build}
+  local memyr_root memyr_tools memyr_bun_version memyr_os memyr_arch
+  memyr_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+  memyr_tools=${MEMYR_TOOLCHAIN_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/memyr-toolchain}
+  memyr_bun_version=$(sed -n 's/.*"packageManager": "bun@\([0-9.]*\)".*/\1/p' "$memyr_root/package.json")
+  [[ "$memyr_bun_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Expected a pinned Bun version in package.json' >&2; return 1; }
+  case "$(uname -s)" in
+    Linux) memyr_os=linux
+      getconf GNU_LIBC_VERSION >/dev/null 2>&1 || { echo 'Memyr source builds require glibc Linux (including WSL), not musl.' >&2; return 1; } ;;
+    Darwin) memyr_os=darwin ;;
+    *) echo 'Supported platforms: glibc Linux and macOS; use WSL on Windows.' >&2; return 1 ;;
+  esac
+  case "$(uname -m)" in
+    x86_64|amd64) memyr_arch=x64 ;;
+    aarch64|arm64) memyr_arch=arm64 ;;
+    *) echo 'Supported architectures: x64 and arm64.' >&2; return 1 ;;
+  esac
+  # Prefer a previously downloaded runtime. Never modify the user's global Bun/Node.
+  if [[ -x "$memyr_tools/bun-$memyr_bun_version/bun" ]]; then
+    export PATH="$memyr_tools/bun-$memyr_bun_version:$PATH"
+  fi
+  if [[ -x "$memyr_tools/node-24/bin/node" ]]; then
+    export PATH="$memyr_tools/node-24/bin:$PATH"
+  fi
+  local need_bun=0 need_node=0 missing=() command
+  [[ "$(bun --version 2>/dev/null || true)" == "$memyr_bun_version" ]] || need_bun=1
+  if [[ "$memyr_scope" == build ]]; then
+    node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 24 ? 0 : 1)' >/dev/null 2>&1 || need_node=1
+    for command in git make c++ python3; do
+      command -v "$command" >/dev/null || missing+=("$command")
+    done
+  fi
+  if [[ "$memyr_scope" == build || "$need_bun" == 1 ]]; then
+    for command in curl unzip tar gzip; do
+      command -v "$command" >/dev/null || missing+=("$command")
+    done
+    command -v sha256sum >/dev/null || command -v shasum >/dev/null || missing+=(sha256sum)
+  fi
+  if [[ "$memyr_os" == darwin && "$memyr_scope" == build ]]; then
+    if ! xcode-select -p >/dev/null 2>&1; then
+      echo 'Apple Command Line Tools are required.' >&2
+      [[ "$memyr_mode" != check ]] || return 1
+      memyr_run xcode-select --install
+      echo 'Complete the Apple installer, then rerun this command.' >&2
+      return 1
+    fi
+  fi
+  if [[ ${#missing[@]} != 0 ]]; then
+    echo "Missing system tools: ${missing[*]}" >&2
+    [[ "$memyr_mode" != check ]] || return 1
+    if [[ "$memyr_os" == darwin ]]; then
+      command -v brew >/dev/null || { echo 'Install Homebrew (https://brew.sh) and rerun to install missing tools.' >&2; return 1; }
+      memyr_run brew install curl unzip git make python
+    else
+      memyr_system_packages
+    fi
+  fi
+  if [[ "$need_bun" == 1 || "$need_node" == 1 ]]; then
+    echo "Private toolchain directory: $memyr_tools" >&2
+    if [[ "$need_bun" == 1 ]]; then
+      echo "Requires Bun $memyr_bun_version (repository pin)." >&2
+      [[ "$memyr_mode" != check ]] || return 1
+      memyr_run memyr_fetch_runtime bun
+      [[ "$memyr_mode" == plan ]] || export PATH="$memyr_tools/bun-$memyr_bun_version:$PATH"
+    fi
+    if [[ "$need_node" == 1 ]]; then
+      echo 'Requires Node >=24; downloading the latest Node 24 release.' >&2
+      [[ "$memyr_mode" != check ]] || return 1
+      memyr_run memyr_fetch_runtime node
+      [[ "$memyr_mode" == plan ]] || export PATH="$memyr_tools/node-24/bin:$PATH"
+    fi
+  fi
+  [[ "$memyr_mode" != plan ]] || return 0
+  echo "Memyr prerequisites ready (Bun $memyr_bun_version)." >&2
+}
+
+memyr_launch() {
+  local action=$1 scope=build
+  shift
+  if [[ "${1:-}" == --help ]]; then
+    echo "Usage: $action $([[ "$action" != uninstall ]] && echo '[--artifact /absolute/path/to/memyr]')"
+    echo 'Missing prerequisites are installed automatically. Preview with scripts/memyr/prerequisites --plan.'
+    return
+  fi
+  if [[ $# != 0 && ( $# != 2 || "$1" != --artifact || "$action" == uninstall ) ]]; then
+    echo 'Usage: install|update [--artifact /absolute/path/to/memyr]; uninstall' >&2
+    return 1
+  fi
+  [[ "$action" != uninstall && "${1:-}" != --artifact ]] || scope=runtime
+  memyr_prerequisites install "$scope"
+  exec bun "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lifecycle.ts" "$action" "$@"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  case "${1:-}" in
+    '') memyr_prerequisites install ;;
+    --check) memyr_prerequisites check ;;
+    --plan) memyr_prerequisites plan ;;
+    *) echo 'Usage: prerequisites [--check|--plan]' >&2; exit 1 ;;
+  esac
+fi

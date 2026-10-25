@@ -9,8 +9,16 @@ import { roots } from "#global-roots"
 import { Flock } from "./flock.js"
 import { makeGlobalNode } from "./effect/app-node.js"
 
-const app = "opencode"
-const { data, cache, config, state, tmp } = roots(app)
+declare const OPENCODE_APP_ID: string
+export const name = typeof OPENCODE_APP_ID === "string" ? OPENCODE_APP_ID : "opencode"
+export const envPrefix = name.toUpperCase()
+
+/** Installation-owned overrides must not inherit the other application's paths or credentials. */
+export function env(key: string) {
+  return process.env[`${envPrefix}_${key}`]
+}
+
+const { data, cache, config, state, tmp } = roots(name)
 
 const paths = {
   get home() {
@@ -76,7 +84,7 @@ const acquire = (input: Partial<Interface>) =>
 
 const layer = Layer.effect(
   Service,
-  Effect.suspend(() => acquire({ config: process.env.OPENCODE_CONFIG_DIR ?? Path.config })),
+  Effect.suspend(() => acquire({ config: env("CONFIG_DIR") ?? Path.config })),
 )
 
 export const node = makeGlobalNode({ service: Service, layer: layer, deps: [] })

@@ -23,6 +23,7 @@ import { SessionMessage } from "./message.js"
 import { SessionModelRequest } from "./model-request.js"
 import { SessionRunnerModel } from "./runner/model.js"
 import { SessionSchema } from "./schema.js"
+import { SessionSystemPrompt } from "./system-prompt.js"
 import { SessionStore } from "./store.js"
 
 export interface Selection {
@@ -36,6 +37,7 @@ export interface Loaded {
   readonly session: SessionSchema.Info
   readonly agent: Agent.Selection & { readonly info: Agent.Info }
   readonly model: SessionRunnerModel.Resolved
+  readonly policy?: string
   readonly initial: string
   readonly messages: ReadonlyArray<SessionMessage.Info>
   readonly tools: Tool.Snapshot
@@ -153,6 +155,7 @@ const layer = Layer.effect(
         // prompt-cache prefix: user-level catalog and guidance, then project instructions, then
         // the date and environment, which vary by day and directory.
         instructions: Instructions.combine([
+          SessionSystemPrompt.source(agent.info.system),
           CodeModeInstructions.make(loaded.tools.codeModeCatalog),
           loaded.mcp,
           loaded.references,
@@ -177,6 +180,7 @@ const layer = Layer.effect(
         session: selection.session,
         agent: selection.agent,
         model,
+        policy: history.policy,
         initial: history.initial,
         messages: history.entries.map((entry) => entry.message),
         tools: selection.tools,

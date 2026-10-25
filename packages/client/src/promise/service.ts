@@ -1,3 +1,4 @@
+import { defaultCommand } from "../service-probe.js"
 import { readFile, rm } from "node:fs/promises"
 import type { DiscoverOptions, Endpoint, Info, EnsureOptions, StopOptions } from "../service.js"
 import { contenderPool, spawnServiceContender } from "../service-contender.js"
@@ -38,7 +39,7 @@ export async function ensure(options: EnsureOptions = {}): Promise<Endpoint> {
     options.onStart?.(reason, previousVersion)
   }
   const spawnContender = async () => {
-    const [command, ...args] = options.command ?? ["opencode", "serve", "--service"]
+    const [command, ...args] = options.command ?? [defaultCommand, "serve", "--service"]
     if (command === undefined) throw new Error("Missing service command")
     try {
       return spawnServiceContender(command, args, await PtyHandoff.environment(options.file ?? fallback(), options.env))

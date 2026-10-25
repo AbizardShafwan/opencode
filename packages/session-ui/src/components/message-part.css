@@ -300,7 +300,15 @@
   }
 
   [data-slot="text-part-meta"] {
+    margin-top: 6px;
+    font-variant-numeric: tabular-nums;
     user-select: none;
+  }
+
+  [data-slot="reply-attribution"] {
+    margin-bottom: 6px;
+    line-height: var(--line-height-compact);
+    overflow-wrap: anywhere;
   }
 
   [data-slot="text-part-copy-wrapper"][data-interrupted] {

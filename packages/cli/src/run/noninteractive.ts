@@ -11,6 +11,7 @@ import { SessionMessage } from "@opencode/schema/session-message"
 import { EOL } from "node:os"
 import { readFile } from "node:fs/promises"
 import { nonEmptyToolContent, toolOutputText, type MiniToolPart } from "@opencode/tui/mini/tool"
+import { thinkingLabel } from "@opencode/tui/util/model"
 import { UI } from "./ui"
 
 type Model = {
@@ -271,18 +272,21 @@ export async function runNonInteractivePrompt(input: Input) {
           messageID: event.data.assistantMessageID,
           type: "step-start",
           snapshot: event.data.snapshot,
+          ...(input.compatibility === "v1" ? {} : { model: event.data.model, thinking: event.data.thinking }),
         }
         if (input.compatibility === "v1") {
           pendingStep = {
             timestamp: time,
             part,
-            label: `> ${event.data.agent} · ${event.data.model.id}`,
+            label: `> ${event.data.agent} · ${event.data.model.id} · ${thinkingLabel(event.data.thinking, event.data.model.variant)}`,
           }
           continue
         }
         if (!emit("step_start", time, { part }) && input.format !== "json") {
           UI.empty()
-          UI.println(`> ${event.data.agent} · ${event.data.model.id}`)
+          UI.println(
+            `> ${event.data.agent} · ${event.data.model.id} · ${thinkingLabel(event.data.thinking, event.data.model.variant)}`,
+          )
           UI.empty()
         }
         continue

@@ -1,3 +1,4 @@
+import { isSubagent } from "@opencode/util/tool-name"
 import type { SessionInfo, SessionMessageAssistant, SessionMessageInfo, ShellInfo } from "@opencode/client/promise"
 import { createMemo } from "solid-js"
 
@@ -34,11 +35,11 @@ export function createSessionBackground(input: {
 
       if (message.type !== "assistant") return latest
       message.content.forEach((part) => {
-        if (part.type !== "tool" || (part.name !== "subagent" && part.name !== "shell")) return
+        if (part.type !== "tool" || (!isSubagent(part.name) && part.name !== "shell")) return
 
         if (part.state.status !== "completed" || part.state.metadata?.status !== "running") return
 
-        if (part.name === "subagent") {
+        if (isSubagent(part.name)) {
           const sessionID = part.state.metadata.sessionID
 
           if (typeof sessionID !== "string") return
@@ -79,13 +80,13 @@ export function createSessionBackground(input: {
         assistant?.content.flatMap((part) => {
           if (part.type !== "tool" || part.state.status !== "running") return []
 
-          if (part.name !== "shell" && part.name !== "subagent") return []
+          if (part.name !== "shell" && !isSubagent(part.name)) return []
           const value = part.name === "shell" ? part.state.metadata.shellID : part.state.metadata.sessionID
           const label = part.name === "shell" ? part.state.input.command : part.state.input.description
 
           return [
             {
-              type: part.name as "shell" | "subagent",
+              type: part.name === "shell" ? ("shell" as const) : ("subagent" as const),
               partID: part.id,
               id: typeof value === "string" ? value : undefined,
               label: typeof label === "string" ? label : undefined,

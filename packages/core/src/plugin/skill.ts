@@ -16,9 +16,9 @@ export const OpencodeContent = opencodeContent
 export const ReportContent = reportContent
 
 export const OpencodeDescription =
-  "Use this skill for any question about OpenCode itself, including how OpenCode works, using or configuring it, migrating from V1 to V2, troubleshooting it, developing plugins or integrations, using the OpenCode SDK, clients, server, or API, and contributing to the OpenCode codebase. Also use it for OpenCode agents, commands, skills, tools, permissions, MCP servers, providers, models, themes, keybinds, formatters, the CLI, TUI, desktop app, and web app."
+  "Use this skill for any question about Memyr, a fork of OpenCode, including how Memyr works, using or configuring it, migrating from OpenCode V1 to V2, troubleshooting it, developing plugins or integrations, using the OpenCode SDK, clients, server, or API, and contributing to this codebase. Also use it for Memyr agents, commands, skills, tools, permissions, MCP servers, providers, models, themes, keybinds, formatters, the CLI, TUI, desktop app, and web app."
 const REPORT_DESCRIPTION =
-  "Use when the user wants to report an opencode issue or bug. Collect standard diagnostics, add user-specific reproduction context, and publish the issue with GitHub CLI."
+  "Use when the user wants to report a Memyr issue or bug. Collect standard diagnostics, add user-specific reproduction context, and publish the issue with GitHub CLI."
 
 export const Plugin = define({
   id: "opencode.skill",
@@ -28,7 +28,7 @@ export const Plugin = define({
       editor.add(
         Skill.Info.make({
           id: Skill.ID.make("opencode"),
-          name: Skill.Name.make("OpenCode"),
+          name: Skill.Name.make("Memyr"),
           description: OpencodeDescription,
           path: AbsolutePath.make("/builtin/opencode.md"),
           content: OpencodeContent,
@@ -61,7 +61,7 @@ const reportContentWithDiagnostics = Effect.fn("SkillPlugin.reportContentWithDia
     "",
     "These values were captured when the built-in report skill was registered. Verify them before publishing.",
     "",
-    `- opencode version: ${app.version}`,
+    `- Memyr version: ${app.version}`,
     `- install/channel: ${app.channel}`,
     `- OS: ${os.type()} ${os.release()} (${os.platform()} ${os.arch()}${emulated ? ", emulated on ARM64" : ""})`,
     `- Terminal: ${terminal()}`,

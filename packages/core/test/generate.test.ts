@@ -15,6 +15,7 @@ import { RequestExecutor } from "@opencode/ai/route"
 import { OpenAIChat } from "@opencode/ai/protocols"
 import { TestLLM } from "@opencode/ai/testing"
 import { AISDK } from "@opencode/core/aisdk"
+import { SessionSystemPrompt } from "@opencode/core/session/system-prompt"
 import { Generate } from "@opencode/core/generate"
 import { Integration } from "@opencode/core/integration"
 import { ModelResolver } from "@opencode/core/model-resolver"
@@ -115,6 +116,7 @@ for (const operation of ["request", "read"] as const) {
       expect(yield* Fiber.join(result)).toBe("Fresh answer")
       const requests = yield* llm.requests()
       expect(requests).toHaveLength(2)
+      expect(requests[0]?.system.map((part) => part.text)).toEqual([SessionSystemPrompt.make()])
       expect(requests[1]).toBe(requests[0])
     }),
   )

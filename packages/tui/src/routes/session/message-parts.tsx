@@ -12,6 +12,7 @@ import { reasoningSummary } from "../../context/thinking"
 import { usePlugin } from "../../plugin/context"
 import { SplitBorder } from "../../ui/border"
 import { Locale } from "../../util/locale"
+import { thinkingLabel } from "../../util/model"
 import { use } from "./render-context"
 import { generateThinkingSyntax } from "./thinking-syntax"
 import { canonicalToolName } from "../../util/tool-display"
@@ -179,9 +180,19 @@ export function TextPart(props: {
   const theme = useTheme()
   const { currentSyntax: syntax } = useThemes()
   const plugins = usePlugin()
+  const model = createMemo(
+    () =>
+      ctx
+        .models()
+        .find((model) => model.providerID === props.message.model.providerID && model.id === props.message.model.id)
+        ?.name ?? `${props.message.model.providerID}/${props.message.model.id}`,
+  )
   return (
     <Show when={props.part.text.trim()}>
       <box paddingLeft={3} flexShrink={0}>
+        <text fg={theme.text.muted} wrapMode="word">
+          {model()} · {thinkingLabel(props.message.thinking, props.message.model.variant)}
+        </text>
         {/* Configure custom nodes before parsing; apply content before streaming so completion keeps the final tokens. */}
         <markdown
           syntaxStyle={syntax()}

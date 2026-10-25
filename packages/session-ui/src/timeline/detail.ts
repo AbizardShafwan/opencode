@@ -1,3 +1,4 @@
+import { isSubagent } from "@opencode/util/tool-name"
 import type { SessionMessageAssistant, SessionMessageInfo } from "@opencode/client/promise"
 import { shellResultFailed } from "../message/current-tool-state"
 
@@ -103,7 +104,7 @@ export function timelineCategory(
 
   if (["edit", "write", "patch", "apply_patch"].includes(content.name)) return "edit"
 
-  if (["subagent", "task"].includes(content.name)) return "subagents"
+  if (isSubagent(content.name)) return "subagents"
 
   return "tools"
 }

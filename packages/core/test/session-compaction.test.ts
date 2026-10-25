@@ -111,7 +111,11 @@ test("compaction prompt preserves detailed work state and relevant files", () =>
   expect(prompt).toContain("### Completed")
   expect(prompt).toContain("### Active")
   expect(prompt).toContain("### Blocked")
+  expect(prompt).toContain("## Open Questions")
   expect(prompt).toContain("## Relevant Files")
+  expect(prompt).toContain("preserve their exact wording in double quotes")
+  expect(prompt).toContain("including whether changes are uncommitted, committed, pushed, under review, or merged")
+  expect(prompt).toContain("The newest messages remain verbatim beside this checkpoint")
 })
 
 it.effect("compaction describes tool media without embedding base64", () =>
@@ -254,6 +258,9 @@ const textUser = (text: string) =>
 
 test("compaction prompt requires the checkpoint headings in order", () => {
   const prompt = SessionCompaction.buildPrompt(false)
+  expect(prompt).toContain("You are performing a CONTEXT CHECKPOINT COMPACTION")
+  expect(prompt).toContain("task-scoped delegation permission")
+  expect(prompt).toContain("A timeout does not establish rollback")
   expect(prompt.match(/^#{2,3} .+$/gm)).toEqual([
     "## Objective",
     "## Requirements",
@@ -263,6 +270,7 @@ test("compaction prompt requires the checkpoint headings in order", () => {
     "### Active",
     "### Blocked",
     "## Next Move",
+    "## Open Questions",
     "## Relevant Files",
     "## Important Context",
   ])
@@ -273,6 +281,7 @@ test("compaction update prompt rewrites legacy checkpoints only when asked", () 
   expect(SessionCompaction.buildPrompt(true, true)).toContain(rewrite)
   expect(SessionCompaction.buildPrompt(true)).not.toContain(rewrite)
   expect(SessionCompaction.buildPrompt(false, true)).not.toContain(rewrite)
+  expect(SessionCompaction.buildPrompt(true)).toContain("Do not drop a requirement or decision merely because it seems implied")
 })
 
 test("compaction prompts prohibit task execution", () => {
@@ -681,16 +690,17 @@ it.effect("summary compaction past the ceiling keeps the conversation unchanged 
   Effect.gen(function* () {
     requests = []
     const session = yield* insertSession(Session.ID.make("ses_compaction_near_window"))
-    // About 182k estimated tokens: past the 170k ceiling, within the 184k left after reserving room for the summary.
+    // Leave room for the bundled policy and handoff prompt while exceeding the 170k ceiling.
     const messages = ["first", "second"].map((label) =>
       SessionMessage.User.make({
         id: SessionMessage.ID.create(),
         type: "user",
-        text: `${label} ${"x".repeat(364_000)}`,
+        text: `${label} ${"x".repeat(360_000)}`,
         time: { created: DateTime.makeUnsafe(0) },
       }),
     )
 
+    expect(SessionCompaction.estimateContext(loaded(session, messages))).toBeGreaterThan(170_000)
     expect(yield* compactManually(session, messages)).toEqual({ status: "completed" })
     expect(requests).toHaveLength(1)
     expect(requests[0].messages).toHaveLength(3)

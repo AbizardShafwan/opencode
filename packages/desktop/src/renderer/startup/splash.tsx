@@ -58,7 +58,7 @@ export function LoadingSplash(props: {
             "bg-v2-background-bg-base": !props.deep,
           }}
         >
-          <Splash class="w-16 h-20 opacity-50 animate-pulse" />
+          <Splash class="w-16 aspect-[12/11] text-[#b8860b] opacity-50 animate-pulse" />
         </div>
       }
     >
@@ -84,7 +84,7 @@ export function LoadingSplash(props: {
                 outline
                 fade={false}
                 muted={false}
-                class="mx-auto block h-auto w-4/5 text-v2-icon-icon-faint opacity-50"
+                class="mx-auto block h-auto w-4/5 text-[#b8860b] opacity-50"
               />
             </div>
           </div>

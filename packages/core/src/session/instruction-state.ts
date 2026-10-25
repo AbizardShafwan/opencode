@@ -6,6 +6,7 @@ import type { Database } from "../database/database.js"
 import type { Bus } from "../bus.js"
 import { Instructions } from "../instructions/index.js"
 import { SessionEvent } from "./event.js"
+import { SessionSystemPrompt } from "./system-prompt.js"
 import { SessionSchema } from "./schema.js"
 import { InstructionBlobTable, InstructionStateTable } from "./sql.js"
 
@@ -42,22 +43,40 @@ export const commit = Effect.fn("InstructionState.commit")(function* (
   observation: Observation,
 ) {
   if (!observation.initial && Object.keys(observation.delta).length === 0) return
-  // The rendered text is frozen into the durable event because re-rendering it
-  // later would require the original Location-scoped instruction sources.
-  const text = observation.initial ? "" : yield* renderUpdateText(db, instructions, observation)
-  yield* bus.publish(
-    SessionEvent.InstructionsUpdated,
-    {
-      sessionID: observation.sessionID,
-      delta: observation.delta,
-      ...(text.length > 0 ? { text } : {}),
-    },
-    {
-      // Initial sync establishes the baseline; unlike later deltas it is not chronological history.
-      ...(observation.initial ? { metadata: { instructions: { initial: true } } } : {}),
-      commit: () => insertBlobs(db, observation.blobs),
-    },
-  )
+  // Keep policy updates separate so a leading-only route can consolidate them without
+  // discarding unrelated context. The durable events still contain only new deltas.
+  const groups =
+    !observation.initial && Object.hasOwn(observation.delta, SessionSystemPrompt.key)
+      ? [
+          { [SessionSystemPrompt.key]: observation.delta[SessionSystemPrompt.key] },
+          Object.fromEntries(Object.entries(observation.delta).filter(([key]) => key !== SessionSystemPrompt.key)),
+        ]
+      : [observation.delta]
+  for (const delta of groups) {
+    if (!observation.initial && Object.keys(delta).length === 0) continue
+    // Freeze chronological text at admission, not with later Location-scoped renderers.
+    const text = observation.initial ? "" : yield* renderUpdateText(db, instructions, { ...observation, delta })
+    yield* bus.publish(
+      SessionEvent.InstructionsUpdated,
+      {
+        sessionID: observation.sessionID,
+        delta,
+        ...(text.length > 0 ? { text } : {}),
+      },
+      {
+        ...(observation.initial ? { metadata: { instructions: { initial: true } } } : {}),
+        commit: () =>
+          insertBlobs(
+            db,
+            Object.fromEntries(
+              Object.values(delta).flatMap((hash) =>
+                hash === "removed" ? [] : [[hash, observation.blobs[hash]] as const],
+              ),
+            ),
+          ),
+      },
+    )
+  }
 })
 
 const renderUpdateText = Effect.fnUntraced(function* (
@@ -169,16 +188,23 @@ export const rewind = Effect.fn("InstructionState.rewind")(function* (
     .pipe(Effect.orDie)
 })
 
+/** The immutable epoch baseline, reconstructed from durable content-addressed values. */
+export const baseline = Effect.fn("InstructionState.baseline")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+) {
+  const state = yield* find(db, sessionID)
+  if (!state) return yield* Effect.die(new Error(`Instruction state not found during assembly: ${sessionID}`))
+  return dereference(state.initial_values, yield* loadBlobs(db, Object.values(state.initial_values)))
+})
+
 /** Renders the epoch baseline shown at the start of every model request. */
 export const initial = Effect.fn("InstructionState.initial")(function* (
   db: DatabaseService,
   sessionID: SessionSchema.ID,
   instructions: Instructions.List,
 ) {
-  const state = yield* find(db, sessionID)
-  if (!state) return yield* Effect.die(new Error(`Instruction state not found during assembly: ${sessionID}`))
-  const blobs = yield* loadBlobs(db, Object.values(state.initial_values))
-  return Instructions.renderInitial(instructions, dereference(state.initial_values, blobs))
+  return Instructions.renderInitial(instructions, yield* baseline(db, sessionID))
 })
 
 /** The current instruction values, used to seed a fork's baseline. */
@@ -202,11 +228,13 @@ export const preview = Effect.fn("InstructionState.preview")(function* (
   )
   if (!state) {
     const values = dereference(result.current, observedBlobs)
-    return { initial: Instructions.renderInitial(instructions, values), update: "" }
+    return { initial: Instructions.renderInitial(instructions, values), values, update: "" }
   }
   const stored = yield* loadBlobs(db, [...Object.values(state.initial_values), ...Object.values(state.current_values)])
+  const values = dereference(state.initial_values, stored)
   return {
-    initial: Instructions.renderInitial(instructions, dereference(state.initial_values, stored)),
+    initial: Instructions.renderInitial(instructions, values),
+    values,
     update: Instructions.renderUpdate(
       instructions,
       dereference(state.current_values, stored),

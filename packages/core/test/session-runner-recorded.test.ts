@@ -35,17 +35,28 @@ import { McpInstructions } from "@opencode/core/mcp/instructions"
 import { PluginSupervisor } from "@opencode/core/plugin/supervisor"
 import { Plugin } from "@opencode/core/plugin"
 import { PluginHooks } from "@opencode/core/plugin/hooks"
-import { OptimizePlugin } from "@opencode/core/plugin/optimize"
 import { IdentityPlugin } from "@opencode/core/plugin/identity"
 import { describe, expect } from "bun:test"
 import { eq } from "drizzle-orm"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Schema } from "effect"
+import recorded from "./fixtures/recordings/session-runner/openai-chat-streams-text.json"
 import path from "node:path"
 import { testEffect } from "./lib/effect"
 import { LocationServiceMap } from "@opencode/core/location-service-map"
 import { promptLocationNode } from "./fixture/prompt-location"
 import { permissionLayer } from "./lib/permission"
 import { agentHost, modelHost, host, noProviders } from "./plugin/host"
+
+// This transport regression replays an existing capture, not a live evaluation of today's default policy.
+// Use its original policy as an explicit agent override; keep strict HTTP matching and the capture untouched.
+const recordedRequest = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      messages: Schema.Array(Schema.Struct({ role: Schema.String, content: Schema.String })),
+    }),
+  ),
+)(recorded.interactions[0].request.body)
+const recordedPolicy = recordedRequest.messages[0]!.content.split("\n# Your Model")[0]!
 
 const cassetteName = "session-runner/openai-chat-streams-text"
 const cassetteDirectory = path.resolve(import.meta.dir, "fixtures/recordings")
@@ -176,8 +187,11 @@ describe("SessionRunnerLLM recorded", () => {
       const agents = yield* Agent.Service
       const models = yield* Model.Service
       const hooks = yield* PluginHooks.Service
+      // A cassette mismatch must fail immediately, not wait on the runner's virtual retry clock.
+      yield* hooks.register("session", "retry", (event) => Effect.die(new Error(JSON.stringify(event.error))))
       yield* agents.transform((editor) =>
         editor.update(Agent.ID.make("build"), (agent) => {
+          agent.system = recordedPolicy
           agent.mode = "primary"
           agent.permissions.push({ action: "execute", resource: "*", effect: "deny" })
         }),
@@ -188,7 +202,6 @@ describe("SessionRunnerLLM recorded", () => {
         provider: noProviders,
         session: { hook: (name, callback) => hooks.register("session", name, callback) },
       })
-      yield* Effect.forEach(OptimizePlugin.Plugins, (plugin) => plugin.effect(pluginHost), { discard: true })
       yield* IdentityPlugin.Plugin.effect(pluginHost)
       const { db } = yield* Database.Service
       yield* db

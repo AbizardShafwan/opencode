@@ -289,6 +289,7 @@ const step = (state: OpenResponses.ParserState, input: OpenResponses.Event) => {
 }
 
 export const protocol = Protocol.make({
+  supportsSystemUpdates: () => true,
   id: ADAPTER,
   body: {
     schema: OpenAIResponsesBody,

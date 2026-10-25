@@ -110,6 +110,9 @@ describe("CommandPlugin.Plugin", () => {
           delivery: "steer",
         },
       })
+      expect(prompts[0]?.text).toContain("If it does, do not overwrite or modify it")
+      expect(prompts[1]?.text).toContain("review-only assignment")
+      expect(prompts[1]?.text).toContain('"overall_correctness"')
       expect(prompts).toEqual([
         {
           text: PROMPT_INITIALIZE.replace("${path}", project).replaceAll("$ARGUMENTS", "extra context"),

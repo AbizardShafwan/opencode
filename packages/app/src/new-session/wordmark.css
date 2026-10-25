@@ -1,14 +1,12 @@
 [data-component="new-session-wordmark"] {
-  --icon-strong-base: var(--icon-base);
+  --memyr-gold: #b8860b;
   --wordmark-shimmer-opacity: 0.45;
 
-  .wordmark-shimmer {
-    --icon-base: white;
-    --icon-strong-base: white;
-    --icon-weak-base: transparent;
+  color: var(--memyr-gold);
 
-    /* Blend above the base logo's opacity so the sweep only adds light in either theme. */
-    color: white;
+  .wordmark-shimmer {
+    /* A brighter gold keeps the sweep visible over the base wordmark in either theme. */
+    color: #f0d27a;
     mix-blend-mode: screen;
     opacity: 0;
     mask-image: linear-gradient(to right, transparent 40%, black 50%, transparent 60%);
@@ -16,10 +14,6 @@
     mask-repeat: no-repeat;
     animation: new-session-wordmark-shimmer 800ms linear both;
   }
-}
-
-[data-color-scheme="light"] [data-component="new-session-wordmark"] {
-  --icon-weak-base: color-mix(in srgb, var(--icon-base) 30%, transparent);
 }
 
 [data-color-scheme="dark"] [data-component="new-session-wordmark"] {

@@ -9,26 +9,30 @@ import { Effect, Stream } from "effect"
 import path from "path"
 import { Permission } from "../permission.js"
 
+import PLAN from "../session/runner/prompt/plan.txt"
+import DEFAULT from "../session/runner/prompt/default.txt"
+
 const plan = Agent.ID.make("plan")
 
 const enter = (directory: string) => `<system-reminder>
-You are in Plan mode. Discuss the plan with the user directly in the conversation. Do not create or update plan files unless the user explicitly asks you to; when they do, write them only in:
+${PLAN.trim()}
+
+## Harness contract
+Discuss plans in the conversation. Do not create or update plan files unless the user explicitly requests them; write those only in:
 ${directory}
 
-Do not modify any other files or ask a subagent to do so.
-
-You remain in Plan mode until the user switches agents. If the user asks you to implement changes, do not do so. Tell them they need to switch agents.
+Do not modify any other files or ask a subagent to do so. If implementation is requested, tell the user to switch agents first.
 </system-reminder>`
 
 const leave = `<system-reminder>
-You are NO LONGER in Plan mode. The previous Plan restrictions no longer apply. Any Plan mode instructions from earlier in this conversation are no longer active.
+${DEFAULT.trim()}
 </system-reminder>`
 
 export const Plugin = define({
   id: "opencode.plan",
   effect: Effect.fn(function* (ctx) {
     const global = yield* Global.Service
-    const directory = path.join(global.home, ".opencode", "plan")
+    const directory = path.join(global.home, `.${Global.name}`, "plan")
     const enterReminder = enter(directory)
     yield* ctx.agent.transform((editor) => {
       editor.update(plan, (item) => {

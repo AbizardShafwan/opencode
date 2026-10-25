@@ -210,12 +210,22 @@ export const AssistantRetry = Schema.Struct({
   error: SessionError.Error,
 }).annotate({ identifier: "Session.Message.Assistant.Retry" })
 
+/** Configured reasoning at dispatch, not a measurement of private model computation. Empty means provider default. */
+export interface Thinking extends Schema.Schema.Type<typeof Thinking> {}
+export const Thinking = Schema.Struct({
+  mode: Schema.Literals(["enabled", "disabled", "adaptive"]).pipe(optional),
+  effort: Schema.String.pipe(optional),
+  budget: Schema.Int.check(Schema.isGreaterThanOrEqualTo(-1)).pipe(optional),
+}).annotate({ identifier: "Session.Message.Thinking" })
+
 export interface Assistant extends Schema.Schema.Type<typeof Assistant> {}
 export const Assistant = Schema.Struct({
   ...Base,
   type: Schema.tag("assistant"),
   agent: Agent.ID,
   model: Model.Ref,
+  /** Absent on historical messages whose request settings were not recorded. */
+  thinking: Thinking.pipe(optional),
   content: AssistantContent.pipe(Schema.Array),
   snapshot: Schema.Struct({
     start: Snapshot.ID.pipe(optional),

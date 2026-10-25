@@ -317,7 +317,8 @@ export const make = Effect.fn("Session.make")(function* () {
                 () => new SyntheticConflictError({ sessionID, inputID }),
               ),
             )
-          if (input.resume !== false && !(yield* get(sessionID)).revert) yield* execution.wake(sessionID)
+          const current = yield* get(sessionID)
+          if (input.resume !== false && !current.revert && !current.time.archived) yield* execution.wake(sessionID)
           return admitted
         }),
       ),

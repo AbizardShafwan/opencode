@@ -32,6 +32,7 @@ export interface Info extends Schema.Schema.Type<typeof Info> {}
 export const Info = Schema.Struct({
   id: ID,
   parentID: ID.pipe(optional),
+  taskName: Schema.String.pipe(optional),
   fork: Schema.Struct({
     sessionID: ID,
     boundary: ForkBoundary,
@@ -56,6 +57,8 @@ export const Info = Schema.Struct({
   metadata: Metadata.pipe(optional),
   /** Evaluated after the agent's rules; the last matching rule wins. */
   permissions: Permission.Ruleset.pipe(optional),
+  /** Permission limits captured from the parent when delegated. Each ruleset is an independent ceiling. */
+  authority: Schema.Array(Permission.Ruleset).pipe(optional),
   revert: Revert.pipe(optional),
 }).annotate({ identifier: "Session.Info" })
 
@@ -84,6 +87,15 @@ const ListFilterFields = {
   ])
     .annotate({ description: "Filter by parent session. Use null to return only root sessions." })
     .pipe(Schema.optional),
+  descendants: Schema.Literals(["true", "false"])
+    .pipe(
+      Schema.decodeTo(Schema.Boolean, {
+        decode: SchemaGetter.transform((value) => value === "true"),
+        encode: SchemaGetter.transform((value): "true" | "false" => (value ? "true" : "false")),
+      }),
+      Schema.optional,
+    )
+    .annotate({ description: "With parentID, include the entire descendant tree rather than only direct children." }),
   archived: Schema.Literals(["true", "false"])
     .pipe(
       Schema.decodeTo(Schema.Boolean, {

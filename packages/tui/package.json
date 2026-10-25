@@ -21,6 +21,7 @@
     "./mini": "./src/mini/index.ts",
     "./mini/tool": "./src/mini/tool.public.ts",
     "./model-preference": "./src/model-preference.ts",
+    "./util/model": "./src/util/model.ts",
     "./util/form": "./src/util/form.ts",
     "./logo": "./src/logo.ts",
     "./component/spinner": "./src/component/spinner.tsx",

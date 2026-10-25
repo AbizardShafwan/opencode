@@ -63,6 +63,7 @@ export function gatewayProtocol<Body, Event, State>(
         return { ...body, ...prepared.body }
       }),
     },
+    supportsSystemUpdates: protocol.supportsSystemUpdates,
     supportsEffortUpdates: protocol.supportsEffortUpdates,
     sanitizer: protocol.sanitizer,
     stream: {

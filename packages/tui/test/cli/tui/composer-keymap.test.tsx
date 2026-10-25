@@ -22,9 +22,14 @@ import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 
 const sessions = {
   parent: session("parent", "Parent"),
-  "child-a": session("child-a", "First", "parent"),
+  "child-a": {
+    ...session("child-a", "First", "parent"),
+    taskName: "review",
+    model: { providerID: "test", id: "reviewer", variant: "high" },
+  },
   "child-b": session("child-b", "Second", "parent"),
   "child-c": session("child-c", "Third", "parent"),
+  grandchild: { ...session("grandchild", "Nested audit", "child-a"), taskName: "audit" },
 }
 
 const state = await tmpdir()
@@ -36,6 +41,7 @@ async function renderComposer(
   defaultTab: "subagents" | "shell",
   keybinds: Partial<TuiKeybind.Keybinds>,
   focusedTextarea = false,
+  options: { width?: number; nested?: boolean } = {},
 ) {
   const events = createEventStream()
   const interrupted: string[] = []
@@ -86,6 +92,7 @@ async function renderComposer(
         data.session.sync("child-a"),
         data.session.sync("child-b"),
         data.session.sync("child-c"),
+        options.nested ? data.session.sync("grandchild") : Promise.resolve(),
         data.shell.sync(),
       ])
         .then(() => wait(() => data.session.status("child-a") === "running"))
@@ -142,7 +149,7 @@ async function renderComposer(
         </TuiAppProvider>
       </TestTuiContexts>
     ),
-    { width: 100, height: 20, kittyKeyboard: true },
+    { width: options.width ?? 100, height: 20, kittyKeyboard: true },
   )
   await ready.promise
   await app.renderOnce()
@@ -182,9 +189,14 @@ test("disabled subagent bindings have no component fallbacks", async () => {
   }
 })
 
-test("the inactive subagent filter only changes with its toggle", async () => {
+test("the tree filter shows all initially and only changes with its toggle", async () => {
   const composer = await renderComposer("subagents", {})
   try {
+    expect(composer.app.captureCharFrame()).toContain("First")
+    expect(composer.app.captureCharFrame()).toContain("Third")
+
+    composer.app.mockInput.pressKey("a", { ctrl: true })
+    await composer.app.renderOnce()
     expect(composer.app.captureCharFrame()).toContain("First")
     expect(composer.app.captureCharFrame()).not.toContain("Third")
 
@@ -197,13 +209,32 @@ test("the inactive subagent filter only changes with its toggle", async () => {
     expect(composer.route()).toMatchObject({ type: "session", sessionID: "child-c" })
     await composer.app.renderOnce()
     expect(composer.app.captureCharFrame()).toContain("Third")
-    expect(composer.app.captureCharFrame()).toContain("show active")
+    expect(composer.app.captureCharFrame()).toContain("show all")
     expect(composer.app.captureCharFrame()).not.toContain("First")
 
     composer.app.mockInput.pressKey("a", { ctrl: true })
     await composer.app.renderOnce()
     expect(composer.app.captureCharFrame()).toContain("First")
-    expect(composer.app.captureCharFrame()).not.toContain("Third")
+    expect(composer.app.captureCharFrame()).toContain("Third")
+  } finally {
+    composer.app.renderer.destroy()
+  }
+})
+
+test.each([40, 100])("named thread branches expand at %i columns with model and thinking details", async (width) => {
+  const composer = await renderComposer("subagents", {}, false, { width, nested: true })
+  try {
+    expect(composer.app.captureCharFrame()).toContain("Nested audit")
+    expect(composer.app.captureCharFrame()).toContain("/root/review")
+    expect(composer.app.captureCharFrame()).toContain("test/reviewer")
+    expect(composer.app.captureCharFrame()).toContain("Variant: high")
+    composer.app.mockInput.pressArrow("left", { ctrl: true })
+    await composer.app.renderOnce()
+    expect(composer.app.captureCharFrame()).not.toContain("Nested audit")
+    composer.app.mockInput.pressArrow("right", { ctrl: true })
+    await composer.app.renderOnce()
+    expect(composer.app.captureCharFrame()).toContain("Nested audit")
+    await Bun.write(`/tmp/memyr-thread-tree-${width}.txt`, composer.app.captureCharFrame())
   } finally {
     composer.app.renderer.destroy()
   }

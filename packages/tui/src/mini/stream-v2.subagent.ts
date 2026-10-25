@@ -937,7 +937,7 @@ export function createSubagentTracker(input: SubagentTrackerInput): SubagentTrac
 
   const mainTool = (item: SessionMessageAssistantTool, active?: Record<string, unknown>) => {
     const tool = normalizeTool(item)
-    if (tool.name !== "subagent" || tool.state.status === "streaming") return
+    if (canonicalToolName(tool.name) !== "subagent" || tool.state.status === "streaming") return
     const found = childSessionID(record(tool.state.metadata))
     if (!found) return
     const child = admitChild(found.sessionID)

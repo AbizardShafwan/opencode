@@ -15,6 +15,17 @@ const sources: ConfigDiscovery.Sources = {
 }
 
 describe("ConfigWatch.plan", () => {
+  test("watches shared role contents and keeps the root recreation watch", () => {
+    const directory = path.join(project, ".agents", "agents")
+    const targets = Array.from(ConfigWatch.plan(sources, { roots: sources.agents, directories: [directory] }).values())
+    expect(targets).toContainEqual({ path: directory, type: "directory", ignore: FSUtil.ignoreGlobs })
+    expect(targets).toContainEqual({
+      path: project,
+      type: "entries",
+      names: [".agents", ".claude", ".opencode", "opencode.json", "opencode.jsonc"],
+    })
+  })
+
   test("groups missing candidates and keeps parent watches when roots appear", () => {
     const missing = ConfigWatch.plan(sources)
     expect(Array.from(missing.values())).toEqual([

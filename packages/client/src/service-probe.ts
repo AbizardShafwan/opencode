@@ -35,9 +35,16 @@ function fail(message: string) {
   return { _tag: "fail" as const, error: new Error(message) }
 }
 
+declare const OPENCODE_APP_ID: string
+export const defaultCommand = typeof OPENCODE_APP_ID === "string" ? OPENCODE_APP_ID : "opencode"
+
 /** The default registration file. */
 export function fallback() {
-  return join(process.env["XDG_STATE_HOME"] ?? join(homedir(), ".local", "state"), "opencode", "service.json")
+  return join(
+    process.env["XDG_STATE_HOME"] ?? join(homedir(), ".local", "state"),
+    defaultCommand,
+    defaultCommand === "memyr" ? "service-memyr.json" : "service.json",
+  )
 }
 
 /** Whether two registrations describe the same service instance. */

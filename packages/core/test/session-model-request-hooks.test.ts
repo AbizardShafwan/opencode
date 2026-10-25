@@ -1,4 +1,6 @@
 import { describe, expect } from "bun:test"
+import { Message, SystemPart, ToolDefinition } from "@opencode/ai"
+import { SessionSystemPrompt } from "@opencode/core/session/system-prompt"
 import { OpenAIChat } from "@opencode/ai/protocols"
 import { Agent } from "@opencode/schema/agent"
 import { Money } from "@opencode/schema/money"
@@ -154,3 +156,63 @@ describe("SessionModelRequest HTTP hooks", () => {
     }),
   )
 })
+
+it.effect("keeps wire tools and the conversation prefix stable after hook reordering", () =>
+  Effect.gen(function* () {
+    const hooks = yield* PluginHooks.Service
+    let reverse = false
+    yield* hooks.register("session", "context", (event) =>
+      Effect.sync(() => {
+        if (!reverse) return
+        event.tools = Object.fromEntries(Object.entries(event.tools).reverse())
+        event.tools.alpha.input = {
+          properties: { z: { description: "Last", type: "string" }, a: { type: "number" } },
+          required: ["z", "a"],
+          type: "object",
+        }
+      }),
+    )
+    const requests = yield* SessionModelRequest.Service.pipe(Effect.provide(SessionModelRequest.layer))
+    const definitions = ["zebra", "alpha"].map(
+      (name) =>
+        new ToolDefinition({
+          name,
+          description: name,
+          inputSchema:
+            name === "alpha"
+              ? {
+                  type: "object",
+                  required: ["z", "a"],
+                  properties: { a: { type: "number" }, z: { type: "string", description: "Last" } },
+                }
+              : { type: "object", properties: {} },
+        }),
+    )
+    const input = {
+      session,
+      agent: Agent.ID.make("build"),
+      model,
+      system: [SystemPart.make(SessionSystemPrompt.make()), SystemPart.make("Project context")],
+      tools: { definitions, execute: () => Effect.die("not executed") },
+      messages: [Message.user("Inspect the project")],
+    }
+    const first = yield* requests.primary(input)
+    reverse = true
+    const next = yield* requests.primary({
+      ...input,
+      messages: [...input.messages, Message.assistant("Inspected"), Message.user("Continue")],
+    })
+    const before = yield* OpenAIChat.fromRequest(first.request)
+    const after = yield* OpenAIChat.fromRequest(next.request)
+    expect(before.tools?.map((tool) => (tool.type === "function" ? tool.function.name : undefined))).toEqual([
+      "alpha",
+      "zebra",
+    ])
+    expect(JSON.stringify(after.tools)).toBe(JSON.stringify(before.tools))
+    expect(JSON.stringify(after.messages.slice(0, before.messages.length))).toBe(JSON.stringify(before.messages))
+    expect(next.request.promptCacheKey).toBe(first.request.promptCacheKey)
+    expect(definitions.map((tool) => tool.name)).toEqual(["zebra", "alpha"])
+    expect(after.tools?.[0]).toMatchObject({ function: { parameters: { required: ["z", "a"] } } })
+    expect(Object.keys(definitions[1]!.inputSchema)).toEqual(["type", "required", "properties"])
+  }).pipe(Effect.provideService(SessionModelTransport.Service, transport)),
+)

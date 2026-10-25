@@ -5,11 +5,19 @@ import { FSUtil } from "@opencode/util/fs-util"
 import type { Watcher } from "../filesystem/watcher.js"
 import type { ConfigDiscovery } from "./discovery.js"
 
-export function plan(sources: ConfigDiscovery.Sources) {
+export function agentDirectories(roots: readonly string[]) {
+  return roots.flatMap((root) => ["agent", "agents", "mode", "modes"].map((name) => path.join(root, name)))
+}
+
+export function plan(
+  sources: ConfigDiscovery.Sources,
+  agents?: { roots: readonly string[]; directories: readonly string[] },
+) {
   const directories = [
     ...(sources.system?.present ? [sources.system.path] : []),
     ...(sources.global ? [sources.global] : []),
     ...sources.project.filter((root) => root.present).map((root) => root.path),
+    ...(agents?.directories ?? []),
   ]
   const files = [
     ...(sources.system ? [sources.system.path] : []),
@@ -17,6 +25,7 @@ export function plan(sources: ConfigDiscovery.Sources) {
     ...sources.project.map((root) => root.path),
     ...sources.claude,
     ...sources.agents,
+    ...agentDirectories(agents?.roots ?? []),
     ...(sources.explicit ? [sources.explicit] : []),
   ]
   // Keep a parent watch for each root so deletion/recreation is observable.

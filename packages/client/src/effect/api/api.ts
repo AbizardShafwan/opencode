@@ -121,6 +121,7 @@ export type SessionListInput = {
   readonly order?: "asc" | "desc" | undefined
   readonly search?: string | undefined
   readonly parentID?: Session.ID | null | undefined
+  readonly descendants?: boolean | undefined
   readonly archived?: boolean | undefined
   readonly directory?: AbsolutePath | undefined
   readonly project?: Project.ID | undefined
@@ -446,12 +447,14 @@ export type SessionLogOutput =
             readonly location: { readonly directory: AbsolutePath; readonly workspaceID?: Workspace.ID | undefined }
             readonly subpath?: RelativePath | undefined
             readonly parentID?: Session.ID | undefined
+            readonly taskName?: string | undefined
             readonly slug: string
             readonly title?: string | undefined
             readonly agent?: Agent.ID | undefined
             readonly model?: Model.Ref | undefined
             readonly metadata?: Session.Metadata | undefined
             readonly permissions?: Permission.Ruleset | undefined
+            readonly authority?: ReadonlyArray<Permission.Ruleset> | undefined
             readonly version: string
           }
         }
@@ -593,6 +596,15 @@ export type SessionLogOutput =
             readonly boundary: Session.ForkBoundary
             readonly instructions?: { readonly [x: Instruction.Key]: Instruction.Hash } | undefined
             readonly instructionEntries?: InstructionEntry.Snapshot | undefined
+            readonly delegation?:
+              | {
+                  readonly taskName: string
+                  readonly title: string
+                  readonly agent: Agent.ID
+                  readonly model?: Model.Ref | undefined
+                  readonly authority: ReadonlyArray<Permission.Ruleset>
+                }
+              | undefined
           }
         }
       | {
@@ -795,6 +807,7 @@ export type SessionLogOutput =
             readonly assistantMessageID: SessionMessage.ID
             readonly agent: Agent.ID
             readonly model: Model.Ref
+            readonly thinking?: SessionMessage.Thinking | undefined
             readonly snapshot?: Snapshot.ID | undefined
             readonly started: number
           }

@@ -28,6 +28,7 @@ import { SessionUsage } from "../usage.js"
 import { SessionRunnerModel } from "./model.js"
 import { createLLMEventPublisher } from "./publish-llm-event.js"
 import { SessionRunnerRetry } from "./retry.js"
+import { SessionThinking } from "./thinking.js"
 
 export type Outcome = Data.TaggedEnum<{
   Completed: { readonly needsContinuation: boolean }
@@ -79,6 +80,7 @@ export const make = Effect.gen(function* () {
       assistantMessageID: input.assistantMessageID,
       agent: input.agent,
       model: input.model.ref,
+      thinking: SessionThinking.configured(input.prepared.request),
       providerMetadataKey: input.model.model.route.providerMetadataKey ?? input.model.model.provider,
       pendingSnapshot: Fiber.join(pendingStartSnapshot),
       started: yield* Clock.currentTimeMillis,

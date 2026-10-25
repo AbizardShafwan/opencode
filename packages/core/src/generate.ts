@@ -1,6 +1,7 @@
 export * as Generate from "./generate.js"
 
 import { LLM, LLMClient, AIError } from "@opencode/ai"
+import { SessionSystemPrompt } from "./session/system-prompt.js"
 import { SessionID } from "@opencode/schema/session-id"
 import { Context, Effect, Layer, Schema } from "effect"
 import { makeLocationNode } from "@opencode/util/effect/app-node"
@@ -66,6 +67,7 @@ export const layer = Layer.effect(
         .generate(
           LLM.request({
             model: resolved.model,
+            system: SessionSystemPrompt.make(),
             prompt: input.prompt,
             // Gateways require session attribution even for a stateless call; no Session is stored.
             http: { headers: { "x-opencode-session": SessionID.create() } },

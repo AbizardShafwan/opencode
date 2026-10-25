@@ -50,7 +50,7 @@ function knownThemes() {
 }
 
 const names: Record<string, string> = {
-  "oc-2": "OpenCode",
+  "oc-2": "Memyr",
   amoled: "AMOLED",
   aura: "Aura",
   ayu: "Ayu",
@@ -66,6 +66,7 @@ const names: Record<string, string> = {
   github: "GitHub",
   gruvbox: "Gruvbox",
   kanagawa: "Kanagawa",
+  kanso: "Kanso",
   "lucent-orng": "Lucent Orng",
   material: "Material",
   matrix: "Matrix",

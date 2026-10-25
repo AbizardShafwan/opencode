@@ -207,7 +207,10 @@ function RetryAndRecoverStory() {
             ? {
                 attempt: 2,
                 at: 1_900_000_000_000,
-                error: { type: "ProviderRateLimitError" as const, message: "Rate limit reached. Retrying with backoff." },
+                error: {
+                  type: "ProviderRateLimitError" as const,
+                  message: "Rate limit reached. Retrying with backoff.",
+                },
               }
             : undefined,
           time: { created: STORY_TIME, completed: finished ? STORY_TIME + 300 : undefined },
@@ -662,6 +665,39 @@ export const InstructionsUpdatedMultiple = {
       description="A system notice in the timeline showing multiple updated instruction sources."
       document={instructionsUpdatedMultipleDocument}
       width="600px"
+    />
+  ),
+}
+
+export const ReplyAttribution = {
+  render: () => (
+    <CurrentSessionTimelineStory
+      title="Reply attribution"
+      description="Persisted settings stay with each reply while another model is streaming."
+      document={{
+        sessionID: CURRENT_SESSION_ID,
+        status: { type: "busy" },
+        diffs: [],
+        messages: [
+          noticeUser,
+          {
+            ...noticeAssistant,
+            id: "msg_old",
+            model: { providerID: "demo", id: "old-model" },
+            thinking: { effort: "high" },
+            content: [{ type: "text", text: "Earlier verified reply." }],
+          },
+          {
+            ...noticeAssistant,
+            id: "msg_new",
+            model: { providerID: "demo", id: "new-model" },
+            thinking: { mode: "disabled" },
+            content: [{ type: "text", text: "Streaming current reply." }],
+            time: { created: STORY_TIME + 3 },
+          },
+        ],
+      }}
+      width="100%"
     />
   ),
 }

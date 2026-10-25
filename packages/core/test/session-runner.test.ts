@@ -54,7 +54,6 @@ import { PluginSupervisor } from "@opencode/core/plugin/supervisor"
 import { Plugin } from "@opencode/core/plugin"
 import { PluginHooks } from "@opencode/core/plugin/hooks"
 import { PluginPromise } from "@opencode/core/plugin/promise"
-import { OptimizePlugin } from "@opencode/core/plugin/optimize"
 import { IdentityPlugin } from "@opencode/core/plugin/identity"
 import { QuestionTool } from "@opencode/core/tool/plugin/question"
 import { Agent } from "@opencode/core/agent"
@@ -114,7 +113,7 @@ const testModel = (id: string, limit: ModelLimit = defaultModelLimit) => {
   return LanguageModel.make({ id, provider: "fake", route: OpenAIChat.route })
 }
 const model = testModel("fake-model")
-const defaultSystem = SessionSystemPrompt.make([])
+const defaultSystem = SessionSystemPrompt.make()
 const identity = (providerID: string, id: string) =>
   ["# Your Model", `- Name: ${id}`, `- Provider ID: ${providerID}`, `- Model ID: ${id}`].join("\n")
 const fakeIdentity = identity("fake", "fake-model")
@@ -530,9 +529,6 @@ const setup = Effect.gen(function* () {
     model: modelHost(models),
     provider: noProviders,
     session: { hook: (name, callback) => hooks.register("session", name, callback) },
-  })
-  yield* Effect.forEach(OptimizePlugin.Plugins, (plugin) => plugin.effect(pluginHost), {
-    discard: true,
   })
   yield* IdentityPlugin.Plugin.effect(pluginHost)
   yield* agents.transform((editor) => {
@@ -1752,21 +1748,17 @@ describe("SessionRunnerLLM", () => {
     expect(s.requests.at(-1)?.system.map((part) => part.text)).toEqual([defaultSystem, fakeIdentity, "Latest context"])
   })
 
-  scenario("uses the selected model family prompt when the agent does not override it", function* (s) {
+  scenario("uses the Codex policy when the agent does not override it", function* (s) {
     s.currentModel = LanguageModel.make({ id: "gpt-5", provider: "openai", route: OpenAIChat.route })
     yield* s.admit("First")
 
     yield* s.llm.push(TestLLM.text("Done", "text-provider-prompt"))
     yield* s.resume
 
-    expect(s.requests.at(-1)?.system.map((part) => part.text)).toEqual([
-      expect.stringContaining("# Delegation"),
-      gptIdentity,
-      "Initial context",
-    ])
+    expect(s.requests.at(-1)?.system.map((part) => part.text)).toEqual([defaultSystem, gptIdentity, "Initial context"])
   })
 
-  scenario("uses the selected model family prompt when the agent system override is empty", function* (s) {
+  scenario("uses the Codex policy when the agent system override is empty", function* (s) {
     s.currentModel = LanguageModel.make({ id: "gpt-5", provider: "openai", route: OpenAIChat.route })
     const agent = yield* Agent.Service
     yield* agent.transform((editor) =>
@@ -1780,11 +1772,7 @@ describe("SessionRunnerLLM", () => {
     yield* s.llm.push(TestLLM.text("Done", "text-empty-agent-system"))
     yield* s.resume
 
-    expect(s.requests.at(-1)?.system.map((part) => part.text)).toEqual([
-      expect.stringContaining("# Delegation"),
-      gptIdentity,
-      "Initial context",
-    ])
+    expect(s.requests.at(-1)?.system.map((part) => part.text)).toEqual([defaultSystem, gptIdentity, "Initial context"])
   })
 
   scenario("includes the effective default agent system before durable context", function* (s) {
@@ -2072,7 +2060,12 @@ describe("SessionRunnerLLM", () => {
   })
 
   scenario("records a same-model effort switch as a cache-preserving effort update", function* (s) {
-    s.currentModel = LanguageModel.make({ id: "claude-opus-5", provider: "anthropic", route: AnthropicMessages.route })
+    s.currentModel = LanguageModel.make({
+      id: "claude-opus-5",
+      provider: "anthropic",
+      route: AnthropicMessages.route,
+      defaults: { providerOptions: { effort: "high" } },
+    })
     const model = { id: ID.make("claude-opus-5"), providerID: Provider.ID.make("anthropic") }
     yield* s.bus.publish(SessionEvent.ModelSelected, {
       sessionID,
@@ -2088,6 +2081,15 @@ describe("SessionRunnerLLM", () => {
     yield* s.llm.push(TestLLM.text("Later answer", "text-effort-low"))
     yield* s.runPrompt("Second")
 
+    const replies = (yield* s.messages).filter((message) => message.type === "assistant")
+    expect(
+      replies.find((message) => message.content.some((part) => part.type === "text" && part.text === "Earlier answer"))
+        ?.thinking,
+    ).toEqual({ effort: "high" })
+    expect(
+      replies.find((message) => message.content.some((part) => part.type === "text" && part.text === "Later answer"))
+        ?.thinking,
+    ).toEqual({ effort: "low" })
     expect(messageRoles(s.requests[1])).toEqual(["user", "assistant", "system", "user"])
     expect(s.requests[1]?.messages[2]).toEqual(Message.effort({ effort: "low", previous: "high" }))
 
@@ -3146,14 +3148,15 @@ describe("SessionRunnerLLM", () => {
 
   scenario("automatically compacts into a completed summary and retained recent turn", function* (s) {
     const store = yield* SessionStore.Service
-    yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "text-first", 3_950))
+    yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "text-first", 5_950))
     yield* s.runPrompt("Earlier question ".repeat(180))
 
-    s.currentModel = compactModel
+    // Fit the complete transcript plus the bundled policy and handoff prompt, while still triggering compaction.
+    s.currentModel = testModel("summary-window", { context: 6_000, output: 50 })
     s.requests.length = 0
     yield* s.llm.push(
       TestLLM.text("## Objective\n- Preserve the task", "text-summary"),
-      TestLLM.textWithUsage("Continued", "text-final", 3_950),
+      TestLLM.textWithUsage("Continued", "text-final", 5_950),
     )
     yield* s.runPrompt("Recent exact request ".repeat(180))
 

@@ -57,6 +57,7 @@ export interface Route<
   readonly transport: Transport<Body, Prepared, unknown>
   readonly defaults: RouteDefaults
   readonly body: RouteBody<Body>
+  readonly supportsSystemUpdates?: (model: LanguageModel) => boolean
   readonly supportsEffortUpdates?: (request: LLMRequest) => boolean
   readonly sanitizer?: LanguageModelSanitizerCompatibility
   readonly with: {
@@ -380,6 +381,7 @@ function makeFromTransport<Body, Prepared, Frame, Event, State>(
       transport: routeInput.transport,
       defaults: routeInput.defaults ?? {},
       body: protocol.body,
+      supportsSystemUpdates: protocol.supportsSystemUpdates,
       supportsEffortUpdates: protocol.supportsEffortUpdates,
       sanitizer: protocol.sanitizer,
       with: (patch: RoutePatch<Body, Prepared>) => {
@@ -391,9 +393,7 @@ function makeFromTransport<Body, Prepared, Frame, Event, State>(
           provider: provider ?? routeInput.provider,
           providerMetadataKey:
             providerMetadataKey ??
-            (provider !== undefined && provider !== routeInput.provider
-              ? provider
-              : routeInput.providerMetadataKey),
+            (provider !== undefined && provider !== routeInput.provider ? provider : routeInput.providerMetadataKey),
           auth: auth ?? routeInput.auth,
           endpoint: endpoint ? Endpoint.merge(routeInput.endpoint, endpoint) : routeInput.endpoint,
           transport: (transport as Transport<Body, Prepared, Frame> | undefined) ?? routeInput.transport,

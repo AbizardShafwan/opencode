@@ -74,6 +74,7 @@ const step = (state: OpenResponses.ParserState, input: OpenResponses.Event) => {
 }
 
 export const protocol = Protocol.make({
+  supportsSystemUpdates: OpenResponses.protocol.supportsSystemUpdates,
   id: ADAPTER,
   body: {
     schema: OpenResponses.OpenResponsesBody,

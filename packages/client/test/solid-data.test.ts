@@ -66,12 +66,22 @@ test("counts every subagent page in a root session's cost", async () => {
       const url = new URL((input instanceof Request ? input : new Request(input, init)).url)
       requests.push(`${url.pathname}?${url.searchParams}`)
 
-      if (url.pathname === "/api/session/ses_root") return Response.json({ data: { ...session(0), id: "ses_root", cost: 0.5 } })
+      if (url.pathname === "/api/session/ses_root")
+        return Response.json({ data: { ...session(0), id: "ses_root", cost: 0.5 } })
 
       if (url.searchParams.get("cursor") === "page_2")
-        return Response.json({ data: Array.from({ length: 50 }, (_, index) => child(200 + index)), cursor: { next: "page_3" } })
+        return Response.json({
+          data: [
+            ...Array.from({ length: 50 }, (_, index) => child(200 + index)),
+            { ...child(250), parentID: "ses_child_0" },
+          ],
+          cursor: { next: "page_3" },
+        })
 
-      return Response.json({ data: Array.from({ length: 200 }, (_, index) => child(index)), cursor: { next: "page_2" } })
+      return Response.json({
+        data: Array.from({ length: 200 }, (_, index) => child(index)),
+        cursor: { next: "page_2" },
+      })
     },
   })
   const setup = createRoot((dispose) => ({
@@ -81,12 +91,13 @@ test("counts every subagent page in a root session's cost", async () => {
 
   try {
     await setup.data.session.sync("ses_root", { children: true })
-    expect(setup.data.session.family("ses_root")).toHaveLength(251)
-    expect(setup.data.session.cost("ses_root")).toBe(250.5)
+    expect(setup.data.session.family("ses_root")).toHaveLength(252)
+    expect(setup.data.session.cost("ses_root")).toBe(251.5)
+    expect(setup.data.session.get("ses_child_250")?.parentID).toBe("ses_child_0")
     expect(requests.toSorted()).toEqual([
       "/api/session/ses_root?",
       "/api/session?limit=200&cursor=page_2",
-      "/api/session?limit=200&order=desc&parentID=ses_root",
+      "/api/session?limit=200&order=desc&parentID=ses_root&descendants=true",
     ])
   } finally {
     setup.dispose()
@@ -1207,6 +1218,56 @@ function modelInfo(name: string): ModelInfo {
     limit: { context: 8192, output: 1024 },
   }
 }
+
+test("keeps dispatch thinking with each reply across model changes and retries", () => {
+  const setup = activityFixture(() => Response.json({ data: {} }))
+  try {
+    const started = {
+      id: "evt_reply_started",
+      created: 1,
+      type: "session.step.started" as const,
+      durable: { aggregateID: "ses_refresh", seq: 1, version: 1 },
+      data: {
+        sessionID: "ses_refresh",
+        assistantMessageID: "msg_first",
+        agent: "build",
+        model: { providerID: "demo", id: "old-model", variant: "custom" },
+        thinking: { effort: "high" },
+        started: 1,
+      },
+    }
+    setup.emit(started)
+    setup.emit({
+      ...started,
+      id: "evt_next",
+      durable: { ...started.durable, seq: 2 },
+      data: {
+        ...started.data,
+        assistantMessageID: "msg_second",
+        model: { providerID: "demo", id: "new-model", variant: "custom" },
+        thinking: { effort: "low" },
+        started: 2,
+      },
+    })
+    expect(setup.data.session.message.list("ses_refresh")).toMatchObject([
+      { id: "msg_first", model: { id: "old-model" }, thinking: { effort: "high" } },
+      { id: "msg_second", model: { id: "new-model" }, thinking: { effort: "low" } },
+    ])
+    setup.emit({
+      ...started,
+      id: "evt_retry",
+      durable: { ...started.durable, seq: 3 },
+      data: {
+        ...started.data,
+        thinking: { effort: "max" },
+        started: 3,
+      },
+    })
+    expect(setup.data.session.message.list("ses_refresh")[0]).toMatchObject({ thinking: { effort: "max" } })
+  } finally {
+    setup.dispose()
+  }
+})
 
 function activityFixture(read: () => Response | Promise<Response>) {
   const listeners = new Set<Parameters<CreateDataInput["event"]["listen"]>[0]>()

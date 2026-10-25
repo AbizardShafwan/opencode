@@ -1,3 +1,4 @@
+import { isSubagent } from "@opencode/util/tool-name"
 import type { SessionMessageInfo } from "@opencode/client/promise"
 import { DialogFooter, DialogHeader, DialogTitleGroup, Dialog } from "@opencode/ui/dialog"
 import { Button } from "@opencode/ui/button"
@@ -33,7 +34,7 @@ const taskDescription = (message: SessionMessageInfo, sessionID: string): string
   if (message.type !== "assistant") return
 
   const tool = message.content.findLast((item) => {
-    if (item.type !== "tool" || (item.name !== "task" && item.name !== "subagent")) return false
+    if (item.type !== "tool" || !isSubagent(item.name)) return false
 
     const metadata =
       item.state.status === "running" || item.state.status === "completed" ? item.state.metadata : undefined

@@ -21,6 +21,9 @@ interface SubagentEntry {
   status: string
   current: boolean
   prefix: string
+  path: string
+  model: string
+  hasChildren: boolean
 }
 
 export function SubagentsTab(props: { sessionID: string }) {
@@ -34,34 +37,56 @@ export function SubagentsTab(props: { sessionID: string }) {
   const shortcuts = Keymap.useShortcuts()
 
   const session = createMemo(() => data.session.get(props.sessionID))
-  const [store, setStore] = createStore({ selected: 0 })
+  const [store, setStore] = createStore({ selected: 0, collapsed: {} as Record<string, boolean> })
   // The session route remounts on navigation, so the filter lives in TUI memory and only ctrl+a changes it.
-  const [filter, updateFilter] = useStorage().memory("subagents-filter", { initial: { active: true } })
+  const [filter, updateFilter] = useStorage().memory("subagents-tree-filter", {
+    initial: { mode: "all" as "all" | "active" | "inactive" },
+  })
+  const nextFilter = () => (filter.mode === "all" ? "active" : filter.mode === "active" ? "inactive" : "all")
 
   const entries = createMemo<SubagentEntry[]>(() => {
     const current = session()
     if (!current) return []
 
-    const result = sessionFamily<SessionInfo>(data.session.list(), current.id).map(
-      ({ session, prefix }): SubagentEntry => {
-        const title = withTimestampedFallback(session)
-        const agentMatch = title.match(/@(\w+) subagent/)
-        return {
-          sessionID: session.id,
-          agent: session.agent
-            ? Locale.titlecase(session.agent)
-            : agentMatch
-              ? Locale.titlecase(agentMatch[1])
-              : "Subagent",
-          title: agentMatch ? title.replace(agentMatch[0], "").trim() || title : title,
-          status: data.session.status(session.id),
-          current: session.id === route.sessionID,
-          prefix,
-        }
-      },
-    )
+    const sessions = data.session.list()
+    const byID = new Map(sessions.map((session) => [session.id, session]))
+    const result = sessionFamily<SessionInfo>(sessions, current.id).map(({ session, prefix }): SubagentEntry => {
+      const title = withTimestampedFallback(session)
+      const agentMatch = title.match(/@(\w+) subagent/)
+      const names: string[] = []
+      let node: SessionInfo | undefined = session
+      while (node?.parentID) {
+        names.unshift(node.taskName ?? node.id)
+        node = byID.get(node.parentID)
+      }
+      return {
+        sessionID: session.id,
+        agent: session.agent
+          ? Locale.titlecase(session.agent)
+          : agentMatch
+            ? Locale.titlecase(agentMatch[1])
+            : "Subagent",
+        title: agentMatch ? title.replace(agentMatch[0], "").trim() || title : title,
+        status: data.session.status(session.id),
+        current: session.id === route.sessionID,
+        prefix,
+        path: `/root/${names.join("/")}`,
+        model: session.model
+          ? `${session.model.providerID}/${session.model.id} · Variant: ${session.model.variant ?? "default"}`
+          : "Model: inherited default",
+        hasChildren: sessions.some((child) => child.parentID === session.id),
+      }
+    })
 
-    return result.filter((entry) => (filter.active ? entry.status === "running" : entry.status !== "running"))
+    const matching = result.filter(
+      (entry) =>
+        filter.mode === "all" || (filter.mode === "active" ? entry.status === "running" : entry.status !== "running"),
+    )
+    return result.filter(
+      (entry) =>
+        matching.some((match) => match.path === entry.path || match.path.startsWith(`${entry.path}/`)) &&
+        !result.some((parent) => store.collapsed[parent.sessionID] && entry.path.startsWith(`${parent.path}/`)),
+    )
   })
 
   let selectedSessionID = ""
@@ -126,9 +151,20 @@ export function SubagentsTab(props: { sessionID: string }) {
             ? [{ label: "interrupt", shortcut: shortcuts.get("composer.subagent.interrupt") ?? "" }]
             : []),
           {
-            label: `show ${filter.active ? "inactive" : "active"}`,
+            label: `show ${nextFilter()}`,
             shortcut: shortcuts.get("composer.subagent.toggle-activity") ?? "",
           },
+          ...(entry?.hasChildren
+            ? [
+                {
+                  label: store.collapsed[entry.sessionID] ? "expand" : "collapse",
+                  shortcut:
+                    shortcuts.get(
+                      store.collapsed[entry.sessionID] ? "composer.subagent.expand" : "composer.subagent.collapse",
+                    ) ?? "",
+                },
+              ]
+            : []),
         ]
       },
     })
@@ -172,12 +208,30 @@ export function SubagentsTab(props: { sessionID: string }) {
         },
       },
       {
+        id: "composer.subagent.expand",
+        title: "Expand subagent branch",
+        group: "Composer",
+        run() {
+          const entry = selectedEntry()
+          if (entry) setStore("collapsed", entry.sessionID, false)
+        },
+      },
+      {
+        id: "composer.subagent.collapse",
+        title: "Collapse subagent branch",
+        group: "Composer",
+        run() {
+          const entry = selectedEntry()
+          if (entry?.hasChildren) setStore("collapsed", entry.sessionID, true)
+        },
+      },
+      {
         id: "composer.subagent.toggle-activity",
         title: "Toggle active subagents",
         group: "Composer",
         bind: "ctrl+a",
         run() {
-          updateFilter((draft) => (draft.active = !draft.active))
+          updateFilter((draft) => (draft.mode = nextFilter()))
           setStore("selected", 0)
           scroll?.scrollTo(0)
         },
@@ -197,17 +251,21 @@ export function SubagentsTab(props: { sessionID: string }) {
 
   return (
     <Show when={composer.active("subagents")}>
-      <scrollbox scrollbarOptions={{ visible: false }} maxHeight={5} ref={(r: ScrollBoxRenderable) => (scroll = r)}>
+      <scrollbox
+        scrollbarOptions={{ visible: false }}
+        maxHeight={Math.max(1, Math.min(10, entries().length))}
+        ref={(r: ScrollBoxRenderable) => (scroll = r)}
+      >
         <Show
           when={entries().length > 0}
-          fallback={<text fg={theme.text.muted}> No {filter.active ? "active" : "inactive"} subagents</text>}
+          fallback={<text fg={theme.text.muted}> No {filter.mode === "all" ? "" : `${filter.mode} `}subagents</text>}
         >
           <For each={entries()}>
             {(entry, index) => {
               const active = createMemo(() => index() === store.selected)
               const status = createMemo(() => {
                 if (entry.status === "running") return "Running"
-                return ""
+                return Locale.titlecase(entry.status)
               })
               return (
                 <box
@@ -240,6 +298,7 @@ export function SubagentsTab(props: { sessionID: string }) {
                       wrapMode="none"
                     >
                       {entry.prefix}
+                      {entry.hasChildren ? (store.collapsed[entry.sessionID] ? "▸ " : "▾ ") : "  "}
                       {entry.agent}: {entry.title}
                     </text>
                   </box>
@@ -254,6 +313,18 @@ export function SubagentsTab(props: { sessionID: string }) {
           </For>
         </Show>
       </scrollbox>
+      <Show when={selectedEntry()}>
+        {(entry) => (
+          <box paddingLeft={1} flexDirection="column">
+            <text fg={theme.text.muted} wrapMode="word">
+              {entry().path}
+            </text>
+            <text fg={theme.text.muted} wrapMode="word">
+              {entry().model}
+            </text>
+          </box>
+        )}
+      </Show>
     </Show>
   )
 }

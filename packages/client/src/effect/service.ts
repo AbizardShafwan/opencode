@@ -1,3 +1,4 @@
+import { defaultCommand } from "../service-probe.js"
 import { Effect, FileSystem, Option, Schedule, Schema } from "effect"
 import type { DiscoverOptions, EnsureOptions, StopOptions } from "../service.js"
 import { contenderPool, spawnServiceContender } from "../service-contender.js"
@@ -58,7 +59,7 @@ export const ensure = Effect.fn("service.ensure")(function* (options: EnsureOpti
       options.onStart?.(reason, previousVersion)
     })
   const spawnContender = Effect.gen(function* () {
-    const [command, ...args] = options.command ?? ["opencode", "serve", "--service"]
+    const [command, ...args] = options.command ?? [defaultCommand, "serve", "--service"]
     if (command === undefined) return yield* Effect.fail(new Error("Missing service command"))
     const env = yield* Effect.tryPromise(() => PtyHandoff.environment(options.file ?? fallback(), options.env))
     return yield* Effect.try({

@@ -51,7 +51,10 @@ const make: Effect.Effect<Interface, never, Session.Service | Job.Service | Scop
           metadata: {},
           recovery,
           run: Effect.gen(function* () {
-            yield* sessions.resume(recovery.childSessionID)
+            const pending = yield* sessions.inbox(recovery.childSessionID)
+            yield* pending.length > 0
+              ? sessions.resume(recovery.childSessionID)
+              : sessions.wait(recovery.childSessionID)
             const messages = yield* sessions.messages({ sessionID: recovery.childSessionID, order: "desc", limit: 20 })
             const assistant = messages.find(
               (message) =>

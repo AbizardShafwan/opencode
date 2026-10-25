@@ -1,3 +1,4 @@
+import { isSubagent } from "@opencode/util/tool-name"
 // Current Session tool presentation grouped by visual family.
 import {
   Component,
@@ -305,7 +306,7 @@ function agentColor(value: string | undefined, themeColors: ReadonlyMap<string, 
 
 const webSearchProviderNames = new Map([
   ["tinyfish", "TinyFish"],
-  ["opencode", "OpenCode"],
+  ["opencode", "Memyr"],
 ])
 
 function webSearchProviderLabel(provider: string | undefined, i18n: ReturnType<typeof useI18n>) {
@@ -332,7 +333,7 @@ function currentSkillName(tool: SessionMessageAssistantTool) {
 
 // Context group labels name each tool once; detailed subtitles belong to the tool rows.
 function toolTitle(tool: SessionMessageAssistantTool, i18n: UiI18n) {
-  switch (tool.name) {
+  switch (isSubagent(tool.name) ? "subagent" : tool.name) {
     case "read":
       return i18n.t("ui.tool.read")
     case "list":
@@ -1160,7 +1161,7 @@ export function registerTool(input: { name: string; render?: ToolComponent }) {
 }
 
 export function getTool(name: string) {
-  return state[name]?.render
+  return state[isSubagent(name) ? "subagent" : name]?.render
 }
 
 export const ToolRegistry = {
@@ -1353,7 +1354,7 @@ export function ToolDisplay(
   const hideQuestion = () => props.tool === "question" && (props.status === "streaming" || props.status === "running")
 
   const taskId = createMemo(() => {
-    if (props.tool !== "subagent") return undefined
+    if (!isSubagent(props.tool)) return undefined
 
     return toolMetadata(props.metadata).sessionID || undefined
   })
@@ -1361,7 +1362,7 @@ export function ToolDisplay(
   const taskHref = createMemo(() => sessionLink(taskId(), data.sessionHref))
 
   const taskSubtitle = createMemo(() => {
-    if (props.tool !== "subagent") return undefined
+    if (!isSubagent(props.tool)) return undefined
 
     return toolInput(props.input).description || taskId()
   })

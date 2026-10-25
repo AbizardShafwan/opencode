@@ -1,3 +1,4 @@
+import { Global } from "@opencode/util/global"
 import { readdir, stat } from "node:fs/promises"
 import path from "node:path"
 import { localSource } from "@opencode/plugin/source"
@@ -7,7 +8,7 @@ export { localSource }
 
 export async function localPluginDirectories(cwd: string, configDirectory: string) {
   const projectDirectory = await localProjectDirectory(cwd)
-  const projectConfig = path.join(projectDirectory, ".opencode")
+  const projectConfig = path.join(projectDirectory, `.${Global.name}`)
   const directories = [configDirectory, ...projectConfigDirectories(projectDirectory, cwd)]
   const exists = await Promise.all(
     directories.map(async (directory) => {

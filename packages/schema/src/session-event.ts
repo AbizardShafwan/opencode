@@ -45,6 +45,7 @@ export const Created = Event.durable({
     location: Location.Ref,
     subpath: RelativePath.pipe(optional),
     parentID: SessionID.pipe(optional),
+    taskName: Schema.String.pipe(optional),
     slug: Schema.String,
     title: Schema.String.pipe(optional),
     agent: Agent.ID.pipe(optional),
@@ -52,6 +53,7 @@ export const Created = Event.durable({
     /** Host-supplied annotations resolved at creation, including any inherited from a parent. */
     metadata: SessionMetadata.pipe(optional),
     permissions: Permission.Ruleset.pipe(optional),
+    authority: Schema.Array(Permission.Ruleset).pipe(optional),
     version: Schema.String,
   },
 })
@@ -201,6 +203,14 @@ export const Forked = Event.durable({
     boundary: SessionFork.Boundary,
     instructions: Instruction.Values.pipe(optional),
     instructionEntries: InstructionEntry.Snapshot.pipe(optional),
+    /** Set only when the history fork is a delegated child. */
+    delegation: Schema.Struct({
+      taskName: Schema.String,
+      title: Schema.String,
+      agent: Agent.ID,
+      model: Model.Ref.pipe(optional),
+      authority: Schema.Array(Permission.Ruleset),
+    }).pipe(optional),
   },
 })
 export type Forked = typeof Forked.Type
@@ -339,6 +349,7 @@ export namespace Step {
       assistantMessageID: SessionMessage.ID,
       agent: Agent.ID,
       model: Model.Ref,
+      thinking: SessionMessage.Thinking.pipe(optional),
       snapshot: Snapshot.ID.pipe(optional),
       /** Request dispatch time, before waiting for provider output. */
       started: NonNegativeInt,

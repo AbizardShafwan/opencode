@@ -120,9 +120,7 @@ Effect.gen(function* () {
   Effect.provide(
     LayerNode.compile(LayerNode.group([Global.node, AppProcess.node, Npm.node, EffectFlock.node]), {
       replacements: [
-        Global.node.replace(
-          Global.layerWith(process.env.OPENCODE_CONFIG_DIR ? { config: process.env.OPENCODE_CONFIG_DIR } : {}),
-        ),
+        Global.node.replace(Global.layerWith(Global.env("CONFIG_DIR") ? { config: Global.env("CONFIG_DIR") } : {})),
       ],
     }),
   ),

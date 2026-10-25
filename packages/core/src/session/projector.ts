@@ -151,7 +151,9 @@ const projectFork = Effect.fn("SessionProjector.projectFork")(function* (
     .insert(SessionTable)
     .values({
       id: event.data.sessionID,
-      parent_id: null,
+      parent_id: event.data.delegation ? parent.id : null,
+      task_name: event.data.delegation?.taskName,
+      authority: event.data.delegation?.authority ?? parent.authority,
       fork_session_id: event.data.parentID,
       fork_boundary: event.data.boundary,
       project_id: parent.project_id,
@@ -159,9 +161,9 @@ const projectFork = Effect.fn("SessionProjector.projectFork")(function* (
       slug: Slug.create(),
       directory: parent.directory,
       path: parent.path,
-      title: forkTitle(parent.title ?? undefined),
-      agent: parent.agent,
-      model: parent.model,
+      title: event.data.delegation?.title ?? forkTitle(parent.title ?? undefined),
+      agent: event.data.delegation?.agent ?? parent.agent,
+      model: event.data.delegation?.model ?? parent.model,
       metadata: parent.metadata,
       permission: parent.permission,
       version: parent.version,
@@ -250,12 +252,7 @@ function run(db: DatabaseService, event: MessageEvent) {
       return db
         .update(SessionMessageTable)
         .set({ type, time_created: DateTime.toEpochMillis(message.time.created), data })
-        .where(
-          and(
-            eq(SessionMessageTable.id, message.id),
-            eq(SessionMessageTable.session_id, event.data.sessionID),
-          ),
-        )
+        .where(and(eq(SessionMessageTable.id, message.id), eq(SessionMessageTable.session_id, event.data.sessionID)))
         .run()
         .pipe(Effect.orDie)
     }
@@ -459,6 +456,8 @@ const layer = Layer.effectDiscard(
             project_id: event.data.projectID,
             workspace_id: event.data.location.workspaceID ?? null,
             parent_id: event.data.parentID,
+            task_name: event.data.taskName,
+            authority: event.data.authority,
             slug: event.data.slug,
             directory: event.data.location.directory,
             path: event.data.subpath,

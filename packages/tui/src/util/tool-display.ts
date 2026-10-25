@@ -1,9 +1,4 @@
-export function canonicalToolName(name: string) {
-  if (name === "bash") return "shell"
-  if (name === "task") return "subagent"
-  if (name === "apply_patch") return "patch"
-  return name
-}
+export { canonicalToolName } from "@opencode/util/tool-name"
 
 export function finiteNumber(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) return
