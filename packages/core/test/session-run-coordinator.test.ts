@@ -7,6 +7,191 @@ import { testEffect } from "./lib/effect"
 const it = testEffect(Layer.empty)
 
 describe("SessionRunCoordinator", () => {
+  it.effect("joins the current failure during drain cleanup while preserving a wake for remaining work", () =>
+    Effect.gen(function* () {
+      const cleanup = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      let runs = 0
+      const coordinator = yield* SessionRunCoordinator.make({
+        drain: () =>
+          Effect.suspend(() =>
+            ++runs === 1
+              ? Effect.fail("old execution failed").pipe(
+                  Effect.ensuring(Deferred.succeed(cleanup, undefined).pipe(Effect.andThen(Deferred.await(release)))),
+                )
+              : Effect.void,
+          ),
+        result: () => Effect.succeed("successor answer"),
+      })
+      const first = yield* coordinator.schedule("child")
+      yield* Deferred.await(cleanup)
+      const joined = yield* coordinator.run("child").pipe(Effect.exit, Effect.forkChild({ startImmediately: true }))
+      const followup = yield* coordinator.schedule("child")
+      if (!first || !followup) throw new Error("Missing scheduled execution")
+      expect(followup.owner).toBe(first.owner)
+      yield* Deferred.succeed(release, undefined)
+      expect((yield* first.outcome).exit).toEqual(Exit.fail("old execution failed"))
+      expect(yield* Fiber.join(joined)).toEqual(Exit.fail("old execution failed"))
+      expect((yield* followup.outcome).exit).toEqual(Exit.fail("old execution failed"))
+      yield* coordinator.awaitIdle("child")
+      expect(runs).toBe(2)
+    }),
+  )
+
+  it.effect("recognizes joined receipts as the same active execution owner", () =>
+    Effect.gen(function* () {
+      const firstStarted = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const nextStarted = yield* Deferred.make<void>()
+      let runs = 0
+      const coordinator = yield* SessionRunCoordinator.make<string, never, "user">({
+        drain: () =>
+          Effect.suspend(() =>
+            ++runs === 1
+              ? Deferred.succeed(firstStarted, undefined).pipe(Effect.andThen(Deferred.await(release)))
+              : Deferred.succeed(nextStarted, undefined).pipe(Effect.andThen(Effect.never)),
+          ),
+      })
+      const first = yield* coordinator.schedule("child")
+      yield* Deferred.await(firstStarted)
+      const followup = yield* coordinator.schedule("child")
+      if (!first || !followup) throw new Error("Missing scheduled execution")
+      yield* Deferred.succeed(release, undefined)
+      yield* Deferred.await(nextStarted)
+      expect(yield* coordinator.interrupt("child", "user", followup.owner)).toBe(true)
+      const outcome = yield* followup.outcome
+      expect(outcome.reason).toBe("user")
+      expect(Exit.isFailure(outcome.exit) && Cause.hasInterruptsOnly(outcome.exit.cause)).toBe(true)
+      expect((yield* first.outcome).reason).toBe("user")
+    }),
+  )
+
+  it.effect("does not let a stale receipt interrupt a settlement-window successor", () =>
+    Effect.gen(function* () {
+      const settling = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      let runs = 0
+      const coordinator = yield* SessionRunCoordinator.make<string, never, "user", number>({
+        drain: () =>
+          Effect.sync(() => {
+            runs++
+          }),
+        result: () => Effect.succeed(runs),
+        settled: () =>
+          runs === 1
+            ? Deferred.succeed(settling, undefined).pipe(Effect.andThen(Deferred.await(release)))
+            : Effect.void,
+      })
+      const old = yield* coordinator.schedule("child")
+      yield* Deferred.await(settling)
+      const next = yield* coordinator.schedule("child")
+      if (!old || !next) throw new Error("Missing scheduled execution")
+      expect(yield* coordinator.interrupt("child", "user", old.owner)).toBe(false)
+      yield* Deferred.succeed(release, undefined)
+      expect(yield* next.wait).toBe(2)
+    }),
+  )
+
+  it.effect("observes empty work without starting or waking execution", () =>
+    Effect.gen(function* () {
+      const release = yield* Deferred.make<void>()
+      const started = yield* Deferred.make<void>()
+      let runs = 0
+      const coordinator = yield* SessionRunCoordinator.make({
+        drain: () =>
+          Effect.sync(() => runs++).pipe(
+            Effect.andThen(Deferred.succeed(started, undefined)),
+            Effect.andThen(Deferred.await(release)),
+          ),
+        result: () => Effect.succeed("owned result"),
+      })
+      expect(yield* coordinator.schedule("child", { work: false })).toBeUndefined()
+      const receipt = yield* coordinator.schedule("child")
+      if (!receipt) throw new Error("Missing scheduled execution")
+      yield* Deferred.await(started)
+      const observed = yield* coordinator.schedule("child", { work: false })
+      expect(observed?.owner).toBe(receipt.owner)
+      yield* Deferred.succeed(release, undefined)
+      expect(yield* receipt.wait).toBe("owned result")
+      expect(runs).toBe(1)
+      expect(yield* coordinator.schedule("child", { work: false })).toBeUndefined()
+    }),
+  )
+
+  it.effect("associates a settlement-window admission with the successor result", () =>
+    Effect.gen(function* () {
+      const settling = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      let runs = 0
+      const coordinator = yield* SessionRunCoordinator.make({
+        drain: () =>
+          Effect.sync(() => {
+            runs++
+          }),
+        result: () => Effect.succeed(`result ${runs}`),
+        settled: () =>
+          runs === 1
+            ? Deferred.succeed(settling, undefined).pipe(Effect.andThen(Deferred.await(release)))
+            : Effect.void,
+      })
+      const first = yield* coordinator.schedule("child")
+      yield* Deferred.await(settling)
+      const next = yield* coordinator.schedule("child")
+      if (!first || !next) throw new Error("Missing scheduled execution")
+      expect(next.owner).not.toBe(first.owner)
+      yield* Deferred.succeed(release, undefined)
+      expect(yield* first.wait).toBe("result 1")
+      expect(yield* next.wait).toBe("result 2")
+      expect(runs).toBe(2)
+    }),
+  )
+
+  it.effect("settles a pending successor receipt when interrupted during settlement", () =>
+    Effect.gen(function* () {
+      const settling = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      let runs = 0
+      const coordinator = yield* SessionRunCoordinator.make({
+        drain: () =>
+          Effect.sync(() => {
+            runs++
+          }),
+        settled: () => Deferred.succeed(settling, undefined).pipe(Effect.andThen(Deferred.await(release))),
+      })
+      yield* coordinator.wake("child")
+      yield* Deferred.await(settling)
+      const next = yield* coordinator.schedule("child")
+      if (!next) throw new Error("Missing scheduled execution")
+      yield* coordinator.interrupt("child")
+      const cancelled = yield* Effect.exit(next.wait)
+      expect(Exit.isFailure(cancelled) && Cause.hasInterruptsOnly(cancelled.cause)).toBe(true)
+      yield* Deferred.succeed(release, undefined)
+      yield* coordinator.awaitIdle("child")
+      expect(runs).toBe(1)
+    }),
+  )
+
+  it.effect("settles pending successor receipts when the owning scope closes", () =>
+    Effect.gen(function* () {
+      const receipt = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const settling = yield* Deferred.make<void>()
+          const coordinator = yield* SessionRunCoordinator.make({
+            drain: () => Effect.void,
+            settled: () =>
+              Deferred.succeed(settling, undefined).pipe(Effect.andThen(Effect.never), Effect.interruptible),
+          })
+          yield* coordinator.wake("child")
+          yield* Deferred.await(settling)
+          return yield* coordinator.schedule("child")
+        }),
+      )
+      if (!receipt) throw new Error("Missing scheduled execution")
+      const cancelled = yield* Effect.exit(receipt.wait)
+      expect(Exit.isFailure(cancelled) && Cause.hasInterruptsOnly(cancelled.cause)).toBe(true)
+    }),
+  )
+
   it.effect("joins concurrent resumes for one key", () =>
     Effect.gen(function* () {
       const gate = yield* Deferred.make<void>()

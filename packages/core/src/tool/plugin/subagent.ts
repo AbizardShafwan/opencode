@@ -6,7 +6,6 @@ import type { SessionHooks } from "@opencode/plugin/effect/session"
 import { Effect, Predicate, Schema, Semaphore } from "effect"
 import { Agent } from "../../agent.js"
 import { Config } from "../../config.js"
-import { Job } from "../../job.js"
 import { Model } from "../../model.js"
 import { Permission } from "../../permission.js"
 import { Session } from "../../session.js"
@@ -77,7 +76,6 @@ export const Plugin = {
   id: "opencode.tool.subagent",
   effect: Effect.fn("SubagentTool.Plugin")(function* (ctx: Context) {
     const sessions = yield* Session.Service
-    const jobs = yield* Job.Service
     const agents = yield* Agent.Service
     const config = yield* Config.Service
     const permission = yield* Permission.Service
@@ -157,25 +155,6 @@ export const Plugin = {
                   message:
                     "Full-history children inherit role, model and thinking; omit model, variant and sessionID overrides.",
                 })
-              const agent = yield* agents.resolve(fork ? parent.agent : input.agent)
-              if (agent === undefined) return yield* new ToolFailure({ message: `Unknown agent: ${input.agent}` })
-              if (!fork && agent.mode === "primary")
-                return yield* new ToolFailure({ message: `Agent ${input.agent} cannot run as a subagent` })
-              yield* permission
-                .assert({
-                  action: name,
-                  resources: [agent.id],
-                  save: [agent.id],
-                  sessionID: context.sessionID,
-                  agent: context.agent,
-                  source: {
-                    type: "tool",
-                    messageID: context.messageID,
-                    id: context.id,
-                  },
-                })
-                .pipe(Effect.mapError((error) => new ToolFailure({ message: `Subagent denied: ${agent.id}`, error })))
-
               const existing =
                 input.sessionID === undefined
                   ? undefined
@@ -191,6 +170,27 @@ export const Plugin = {
                 return yield* new ToolFailure({
                   message: `Session ${existing.id} is not a child of the current session`,
                 })
+              const role = fork ? parent.agent : (input.agent ?? (existing === undefined ? "general" : existing.agent))
+              const agent = yield* agents.resolve(role)
+              if (agent === undefined) return yield* new ToolFailure({ message: `Unknown agent: ${role}` })
+              // Full-history children may keep their inherited primary role on continuation.
+              if (!fork && agent.mode === "primary" && (input.agent !== undefined || existing?.agent !== agent.id))
+                return yield* new ToolFailure({ message: `Agent ${role} cannot run as a subagent` })
+              yield* permission
+                .assert({
+                  action: name,
+                  resources: [agent.id],
+                  save: [agent.id],
+                  sessionID: context.sessionID,
+                  agent: context.agent,
+                  source: {
+                    type: "tool",
+                    messageID: context.messageID,
+                    id: context.id,
+                  },
+                })
+                .pipe(Effect.mapError((error) => new ToolFailure({ message: `Subagent denied: ${agent.id}`, error })))
+
               const message = yield* sessions.message({ sessionID: parent.id, messageID: context.messageID })
               const inherited = message?.type === "assistant" ? message.model : parent.model
               const switched = existing !== undefined && existing.agent !== agent.id
@@ -230,6 +230,15 @@ export const Plugin = {
                     (error) => new ToolFailure({ message: `Failed to switch subagent session: ${existing.id}`, error }),
                   ),
                 )
+                if (existing.time.archived !== undefined)
+                  yield* sessions
+                    .unarchive(existing.id)
+                    .pipe(
+                      Effect.mapError(
+                        (error) =>
+                          new ToolFailure({ message: `Failed to reopen subagent session: ${existing.id}`, error }),
+                      ),
+                    )
               }
 
               const model = override ?? agent.model ?? inherited
@@ -281,9 +290,6 @@ export const Plugin = {
               const background = input.background === true
               yield* context.progress({ sessionID: child.id, status: "running" })
 
-              // Steer a running child, but let the job start an idle child from its admitted prompt.
-              // Waking here too would race the job and can start a second, inputless execution.
-              const running = (yield* sessions.active).has(child.id)
               yield* sessions
                 .prompt({
                   sessionID: child.id,
@@ -291,7 +297,7 @@ export const Plugin = {
                     existing === undefined
                       ? ["You are a subagent spawned by another session.", input.prompt].join("\n")
                       : input.prompt,
-                  ...(running ? {} : { resume: false }),
+                  resume: false,
                 })
                 .pipe(
                   Effect.mapError(
@@ -306,22 +312,22 @@ export const Plugin = {
                 agent: agent.name,
                 description: input.description,
               }
-              yield* subagents.start(recovery)
+              const job = yield* subagents.start(recovery)
 
               if (background) {
-                yield* subagents.background(recovery)
+                yield* subagents.background(recovery, job)
                 return backgroundResult(child.id)
               }
 
-              const result = yield* jobs.block({ id: child.id, sessionID: context.sessionID }).pipe(
+              const result = yield* job.block(context.sessionID).pipe(
                 Effect.onInterrupt(() =>
-                  Effect.all([sessions.interrupt(child.id), jobs.cancel(child.id)], {
+                  Effect.all([job.interrupt, job.cancel], {
                     discard: true,
                   }),
                 ),
               )
               if (result?.type === "backgrounded") {
-                yield* subagents.notify(recovery, result.info.started_at)
+                yield* subagents.notify(recovery, job)
                 return backgroundResult(child.id)
               }
               // Failure surfaces keep the sessionID visible so the model can continue the child.
@@ -363,10 +369,7 @@ export const Plugin = {
           execute: (input, context) => {
             if (input.fork_turns === "all" && input.agent !== undefined)
               return Effect.fail(new ToolFailure({ message: "Full-history children inherit their role; omit agent." }))
-            return original.execute(
-              { ...input, agent: input.agent ?? "general", background: input.background ?? true },
-              context,
-            )
+            return original.execute({ ...input, background: input.background ?? true }, context)
           },
         })
       })

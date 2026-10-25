@@ -453,6 +453,7 @@ const layer = Layer.unwrap(
           isActive: coordinator.isActive,
           resume: coordinator.run,
           wake: coordinator.wake,
+          schedule: coordinator.schedule,
           interrupt: (sessionID) => coordinator.interrupt(sessionID),
           awaitIdle: coordinator.awaitIdle,
         })

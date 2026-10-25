@@ -13,6 +13,13 @@ import { SessionSchema } from "./schema.js"
 import { SessionStore } from "./store.js"
 import { toSessionError } from "./to-session-error.js"
 import { SessionInbox } from "./inbox.js"
+import { SessionMessage } from "./message.js"
+
+export type Receipt = SessionRunCoordinator.Receipt<
+  SessionMessage.Info | void,
+  SessionRunner.RunError,
+  "user" | "shutdown"
+>
 
 export interface Interface {
   /** Snapshots active execution owned by this process. */
@@ -23,6 +30,8 @@ export interface Interface {
   readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, SessionRunner.RunError>
   /** Registers newly recorded work. Repeated wakeups may coalesce. */
   readonly wake: (sessionID: SessionSchema.ID) => Effect.Effect<void>
+  /** Captures the current busy period or schedules admitted work. `force` restores interrupted work at restart only. */
+  readonly schedule: (sessionID: SessionSchema.ID, options?: { force?: boolean }) => Effect.Effect<Receipt | undefined>
   /**
    * Interrupt active work owned by this process. Idle interruption is a no-op. Resolves once
    * the interruption is accepted; cleanup settles asynchronously in the execution fiber.
@@ -33,6 +42,8 @@ export interface Interface {
     sessionID: SessionSchema.ID,
     options?: {
       readonly resume?: boolean
+      /** Only interrupt work owned by this process-local scheduling receipt. */
+      readonly owner?: object
     },
   ) => Effect.Effect<boolean>
   /** Resolves once this process owns no active execution for the Session. Returns immediately when idle and never starts work. */
@@ -105,15 +116,42 @@ export const layer = Layer.effect(
         Reloaded: (result) => drain(sessionID, result.force, result.continuation, promotable),
       })
     })
-    const coordinator = yield* SessionRunCoordinator.make<SessionSchema.ID, SessionRunner.RunError, InterruptReason>({
+    const baselines = new Map<SessionSchema.ID, SessionMessage.ID | undefined>()
+    const latestAssistant = (sessionID: SessionSchema.ID) =>
+      store
+        .messages({ sessionID, type: "assistant", order: "desc", limit: 1 })
+        .pipe(Effect.map((messages) => messages[0]))
+    const coordinator = yield* SessionRunCoordinator.make<
+      SessionSchema.ID,
+      SessionRunner.RunError,
+      InterruptReason,
+      SessionMessage.Info | undefined
+    >({
       started: (sessionID) =>
-        reportLifecycle(
-          sessionID,
-          bus.publish(SessionEvent.Execution.Started, { sessionID }, claimOnCommit(sessionID)),
+        latestAssistant(sessionID).pipe(
+          Effect.tap((message) => Effect.sync(() => baselines.set(sessionID, message?.id))),
+          Effect.andThen(
+            reportLifecycle(
+              sessionID,
+              bus.publish(SessionEvent.Execution.Started, { sessionID }, claimOnCommit(sessionID)),
+            ),
+          ),
+          Effect.asVoid,
         ),
       drain: (sessionID, force, promotable) => drain(sessionID, force, undefined, promotable),
+      result: (sessionID) =>
+        latestAssistant(sessionID).pipe(
+          Effect.map((message) =>
+            message?.id !== baselines.get(sessionID) &&
+            message?.type === "assistant" &&
+            message.time.completed !== undefined &&
+            message.error === undefined
+              ? message
+              : undefined,
+          ),
+        ),
       // One terminal observation per busy period, covering every coalesced drain.
-      settled: (sessionID, exit, reason) =>
+      settled: (sessionID, exit, reason, owner) =>
         reportLifecycle(
           sessionID,
           Effect.gen(function* () {
@@ -124,7 +162,7 @@ export const layer = Layer.effect(
             }
             if (outcome.type === "interrupted") {
               // Deliberate stops release the claim; shutdown keeps it for restart continuity.
-              if (outcome.reason !== "shutdown") yield* jobs.cancel(sessionID)
+              if (outcome.reason !== "shutdown") yield* jobs.cancel(sessionID, owner)
               yield* bus.publish(
                 SessionEvent.Execution.Interrupted,
                 { sessionID, reason: outcome.reason },
@@ -141,7 +179,7 @@ export const layer = Layer.effect(
               releaseOnCommit(sessionID),
             )
           }),
-        ),
+        ).pipe(Effect.ensuring(Effect.sync(() => baselines.delete(sessionID)))),
     })
 
     return Service.of({
@@ -149,7 +187,7 @@ export const layer = Layer.effect(
       isActive: coordinator.isActive,
       interrupt: (sessionID, options) =>
         Effect.gen(function* () {
-          const interrupted = yield* coordinator.interrupt(sessionID, "user")
+          const interrupted = yield* coordinator.interrupt(sessionID, "user", options?.owner)
           if (!options?.resume) return interrupted
           // Resume steering input and between-turn control work from the interrupted
           // intent. Queued next-turn prompts stay parked: a steer-scoped drain never
@@ -167,6 +205,19 @@ export const layer = Layer.effect(
         }),
       resume: coordinator.run,
       wake: coordinator.wake,
+      schedule: (sessionID, options) =>
+        SessionInbox.serialized(
+          sessionID,
+          Effect.gen(function* () {
+            // Share delivery's lock: the runner cannot consume the row and go idle between
+            // this eligibility read and capturing the execution that will service it.
+            const pending = yield* SessionInbox.nextPromotable(db, sessionID, "input")
+            return yield* coordinator.schedule(sessionID, {
+              work: options?.force || pending !== undefined,
+              force: options?.force,
+            })
+          }),
+        ),
       awaitIdle: coordinator.awaitIdle,
     })
   }),
@@ -186,6 +237,7 @@ export const noopLayer = Layer.succeed(
     isActive: () => Effect.succeed(false),
     resume: () => Effect.void,
     wake: () => Effect.void,
+    schedule: () => Effect.succeed(undefined),
     interrupt: () => Effect.succeed(false),
     awaitIdle: () => Effect.void,
   }),

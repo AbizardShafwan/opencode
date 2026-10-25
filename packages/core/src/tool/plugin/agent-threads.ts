@@ -154,12 +154,7 @@ export const install = Effect.fn("AgentThreadTools.install")(function* (ctx: Con
             yield* authorize(context, "subagent", entry.session.agent ?? "general")
             yield* context.progress({ sessionID: entry.session.id, status: "running" })
             yield* sessions.unarchive(entry.session.id)
-            const running = (yield* sessions.active).has(entry.session.id)
-            yield* sessions.prompt({
-              sessionID: entry.session.id,
-              text: input.prompt,
-              ...(running ? {} : { resume: false }),
-            })
+            yield* sessions.prompt({ sessionID: entry.session.id, text: input.prompt, resume: false })
             if (!entry.session.parentID)
               return yield* new ToolFailure({ message: "Cannot resume a root as a subagent." })
             const recovery = {
@@ -169,8 +164,8 @@ export const install = Effect.fn("AgentThreadTools.install")(function* (ctx: Con
               agent: entry.session.agent ?? "general",
               description: entry.session.title ?? entry.path,
             }
-            yield* subagents.start(recovery)
-            yield* subagents.background(recovery)
+            const job = yield* subagents.start(recovery)
+            yield* subagents.background(recovery, job)
             return {
               content: `Task admitted for ${entry.path}. Completion will be reported automatically.`,
               metadata: { sessionID: entry.session.id, status: "running" },

@@ -29,6 +29,7 @@ it.live("serves turn diffs by user message with range validation", () =>
           active: Effect.succeed(new Set()),
           isActive: () => Effect.succeed(false),
           resume: () => Effect.void,
+          schedule: () => Effect.succeed(undefined),
           wake: (sessionID) =>
             Effect.gen(function* () {
               yield* bus.publish(SessionEvent.InboxDelivered, { sessionID, inboxID: ids.user })

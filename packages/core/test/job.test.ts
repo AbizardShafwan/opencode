@@ -11,6 +11,102 @@ import { testEffect } from "./lib/effect"
 const it = testEffect(AppNodeBuilder.build(LayerNode.group([Job.node, KV.node])))
 
 describe("Job", () => {
+  it.live("keeps a Job cancellable when registered by an uninterruptible caller", () =>
+    Effect.gen(function* () {
+      const jobs = yield* Job.Service
+      const started = yield* Deferred.make<void>()
+      const finalized = yield* Deferred.make<void>()
+      const job = yield* jobs
+        .startObserved({
+          id: "masked_registration",
+          type: "test",
+          run: Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(Effect.never),
+            Effect.ensuring(Deferred.succeed(finalized, undefined)),
+          ),
+        })
+        .pipe(Effect.uninterruptible)
+      yield* Deferred.await(started)
+      yield* job.cancel
+      yield* Deferred.await(finalized)
+      expect((yield* job.wait()).info?.status).toBe("cancelled")
+    }),
+  )
+
+  it.live("keeps displaced completion and background acknowledgment bound to their generation", () =>
+    Effect.gen(function* () {
+      const jobs = yield* Job.Service
+      const oldOutput = yield* Deferred.make<string>()
+      const newOutput = yield* Deferred.make<string>()
+      const recovery = {
+        kind: "subagent" as const,
+        parentSessionID: SessionSchema.ID.make("ses_generation_parent"),
+        childSessionID: SessionSchema.ID.make("ses_generation_child"),
+        agent: "general",
+        description: "generation handoff",
+      }
+      const old = yield* jobs.startObserved({
+        id: "generation_handoff",
+        type: "subagent",
+        owner: {},
+        recovery,
+        run: Deferred.await(oldOutput),
+      })
+      const marker = yield* old.background
+      const successor = yield* jobs.startObserved({
+        id: old.info.id,
+        type: "subagent",
+        owner: {},
+        recovery,
+        run: Deferred.await(newOutput),
+      })
+      expect(successor.owner).not.toBe(old.owner)
+      yield* Deferred.succeed(oldOutput, "old output")
+      expect((yield* old.wait()).info).toMatchObject({ status: "completed", output: "old output" })
+      expect(yield* jobs.get(old.info.id)).toMatchObject({ status: "running" })
+      expect(
+        (yield* jobs.pendingBackground).find((entry) => entry.notificationID === marker?.notificationID),
+      ).toMatchObject({ status: "completed", output: "old output" })
+      if (!marker?.notificationID) throw new Error("Missing background marker")
+      yield* jobs.completeBackground(marker.notificationID)
+      expect((yield* jobs.pendingBackground).some((entry) => entry.notificationID === marker.notificationID)).toBe(
+        false,
+      )
+      expect((yield* jobs.observe(old.info.id))?.owner).toBe(successor.owner)
+      yield* Deferred.succeed(newOutput, "new output")
+      expect((yield* successor.block(recovery.parentSessionID)).info).toMatchObject({
+        status: "completed",
+        output: "new output",
+      })
+    }),
+  )
+
+  it.live("cancels a captured old generation without cancelling its successor", () =>
+    Effect.gen(function* () {
+      const jobs = yield* Job.Service
+      const finalized = yield* Deferred.make<void>()
+      const output = yield* Deferred.make<string>()
+      const old = yield* jobs.startObserved({
+        id: "generation_cancel",
+        type: "test",
+        owner: {},
+        run: Effect.never.pipe(Effect.ensuring(Deferred.succeed(finalized, undefined))),
+      })
+      const successor = yield* jobs.startObserved({
+        id: old.info.id,
+        type: "test",
+        owner: {},
+        run: Deferred.await(output),
+      })
+      expect((yield* old.cancel)?.status).toBe("cancelled")
+      yield* Deferred.await(finalized)
+      expect((yield* old.wait()).info?.status).toBe("cancelled")
+      expect((yield* jobs.get(old.info.id))?.status).toBe("running")
+      yield* Deferred.succeed(output, "successor output")
+      expect((yield* successor.wait()).info).toMatchObject({ status: "completed", output: "successor output" })
+    }),
+  )
+
   it.live("tracks process-local work through explicit observation", () =>
     Effect.gen(function* () {
       const jobs = yield* Job.Service

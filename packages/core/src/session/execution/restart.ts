@@ -11,6 +11,7 @@ import { SessionSchema } from "../schema.js"
 import { SessionStore } from "../store.js"
 import { ShellResult } from "../../shell/result.js"
 import { SubagentCompletion } from "../subagent-completion.js"
+import { SubagentJob } from "../subagent-job.js"
 
 const CONTINUE_AFTER_SERVER_RESTART =
   "The server restarted while you were working. Continue from where you left off without repeating completed work."
@@ -139,6 +140,7 @@ export const layer = (options?: Options) =>
         background: Job.Background,
         recovery: Extract<Job.Recovery, { kind: "subagent" }>,
         suspended: ReadonlySet<SessionSchema.ID>,
+        restored: Map<SessionSchema.ID, Job.Handle>,
       ) {
         const child = yield* store.get(recovery.childSessionID)
         if (!child || child.parentID !== recovery.parentSessionID || !(yield* store.get(recovery.parentSessionID))) {
@@ -159,31 +161,36 @@ export const layer = (options?: Options) =>
           yield* notify(background)
           return
         }
+        const existing = restored.get(recovery.childSessionID)
+        if (existing) {
+          // Several admission generations can survive a crash for the same child.
+          // Restore its durable work once, but acknowledge every running marker.
+          yield* existing.wait().pipe(
+            Effect.flatMap((result) => (result.info ? notify(result.info) : Effect.void)),
+            Effect.forkIn(scope),
+          )
+          return
+        }
         if (yield* execution.isActive(recovery.childSessionID)) return
         if (!(yield* prepareResume(recovery.childSessionID))) {
           yield* notify({ status: "error", error: RESUME_EXHAUSTED.message })
           return
         }
 
-        yield* jobs.start({
+        const receipt = yield* execution.schedule(recovery.childSessionID, { force: true })
+        if (!receipt) return
+        const job = yield* jobs.startObserved({
           id: background.id,
           type: "subagent",
           title: recovery.description,
           notificationID: background.notificationID,
           recovery,
-          run: execution.resume(recovery.childSessionID).pipe(
-            Effect.andThen(store.context(recovery.childSessionID)),
-            Effect.map((messages) => {
-              const assistant = messages.findLast(
-                (message) =>
-                  message.type === "assistant" && message.time.completed !== undefined && message.error === undefined,
-              )
-              return SubagentCompletion.text(assistant)
-            }),
-          ),
+          owner: receipt.owner,
+          run: SubagentJob.result(receipt),
         })
-        yield* jobs.background(background.id)
-        yield* jobs.wait({ id: background.id }).pipe(
+        restored.set(recovery.childSessionID, job)
+        yield* job.background
+        yield* job.wait().pipe(
           Effect.flatMap((result) => (result.info ? notify(result.info) : Effect.void)),
           Effect.forkIn(scope),
         )
@@ -203,15 +210,19 @@ export const layer = (options?: Options) =>
             [...(yield* store.listSuspended()), ...children].filter((sessionID) => !active.has(sessionID)),
           )
           yield* store.releaseChildClaims(children)
+          const restored = new Map<SessionSchema.ID, Job.Handle>()
           yield* Effect.forEach(
             // Admit shell outcomes before a recovered child can start its first model request.
             pending.toSorted((a, b) => Number(a.recovery.kind === "subagent") - Number(b.recovery.kind === "subagent")),
             Effect.fnUntraced(function* (background) {
-              if ((yield* jobs.get(background.id))?.status === "running") return
               const recovery = background.recovery
-              yield* recovery.kind === "shell"
-                ? recoverShell(background, recovery)
-                : recoverSubagent(background, recovery, suspended)
+              if (recovery.kind === "shell") {
+                if ((yield* jobs.get(background.id))?.status === "running") return
+                yield* recoverShell(background, recovery)
+                return
+              }
+              if (active.has(recovery.childSessionID) && background.status === "running") return
+              yield* recoverSubagent(background, recovery, suspended, restored)
             }),
             { discard: true },
           )

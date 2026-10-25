@@ -113,8 +113,8 @@ export const Plugin = define({
                     agent: selected.id,
                     description: command.description ?? name,
                   }
-                  yield* subagents.start(recovery)
-                  yield* subagents.background(recovery)
+                  const job = yield* subagents.start(recovery)
+                  yield* subagents.background(recovery, job)
                   return
                 }
                 if (agent !== undefined) {

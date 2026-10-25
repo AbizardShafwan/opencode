@@ -60,6 +60,7 @@ const execution = Layer.succeed(
         wakeCalls.push(sessionID)
       }),
     awaitIdle: () => Effect.void,
+    schedule: () => Effect.succeed(undefined),
   }),
 )
 const locations = makeGlobalNode({
