@@ -20,7 +20,8 @@ was the local `~/Documents/codex` checkout (HEAD
   adapted to the project root and command arguments. Existing AGENTS.md is not overwritten.
 - `plugin/command/review.txt`: `codex-rs/prompts/templates/review/rubric.md`,
   with this harness's commit/branch/PR target selection and instruction-file discovery. The Codex JSON output
-  contract is retained; the command delivers it as ordinary assistant text.
+  contract is retained. The hidden review role reuses the rubric portion as its system assignment; `/review`
+  launches a fresh reviewer and sends only the target section as the child prompt.
 - `default.txt`: `codex-rs/collaboration-mode-templates/templates/default.md`,
   adapted to the same mode control and question tool, with a Plan-exit marker.
 
@@ -35,6 +36,67 @@ repository instructions, environment facts and plugin customizations remain
 owned by this harness, rather than copying unsupported Codex tool names.
 
 See `packages/core/NOTICE` and `packages/core/LICENSE.codex`.
+
+## Review command
+
+`/review` resolves its target before drawing conclusions. With no argument it reviews uncommitted
+changes (staged, unstaged and relevant untracked files). A commit selects that commit, a branch
+compares against its merge base, and a pull-request URL or number selects that diff and context.
+Only the `## Review target` section is sent as the child prompt; the rubric is the hidden
+`review` role's system assignment.
+
+Each invocation creates a fresh child Session with the caller as `parentID`. It uses
+`sessions.create`, not `fork`, so no parent messages are copied. The child receives only the
+resolved target prompt, while files and skills attached to the command are preserved. Its task name
+is unique, its role is hidden, and its metadata includes `oneShotReview: true`.
+
+The review role uses the existing agent configuration shape; no review-specific config key exists:
+
+```json
+{
+  "agents": {
+    "review": {
+      "model": "provider/model#variant",
+      "variant": "high"
+    }
+  }
+}
+```
+
+`model` accepts the short `provider/model#variant` form or the explicit
+`{ "providerID": "...", "model": "...", "variant": "..." }` form. The role model is used first and
+its embedded variant wins over the standalone `variant`; the standalone variant applies when the
+role model has no embedded variant. Without a role model, the caller's model and variant are
+inherited unless the role `variant` overrides them. If neither the role nor the caller selects a
+model, the catalog default is used, with the role `variant` applied when present.
+Role system and permission fields remain available through the normal agent config, but `/review`
+also installs a separate read-only authority ceiling that denies editing, delegation, web tools and
+Code Mode regardless of role config. That ceiling filters the advertised tool and Code Mode
+catalog; the snapshot executor dispatches only tools present in that filtered catalog, while
+resource-specific decisions remain with each tool's permission checks. Setting `disabled: true`
+removes the role and `/review` fails clearly.
+
+A completed review is rendered from the reviewer's structured report. Malformed output is preserved
+as raw text rather than treated as a clean review; missing final assistant text is reported as an
+empty response; failure and cancellation are marked explicitly. Delivery publishes one durable
+parent `session.synthetic` host notice with `source: "subagent"`, `childID`, the role name and the
+terminal state. It does not add an inbox item, wake the parent model, or apply automatic fixes. The
+existing linked-subagent notice opens the raw reviewer session and report; there is no new inline
+review UI. Archiving after completion retains the reviewer Session and its history; it is not
+deletion or an API-level closure.
+
+The reviewer may use shell commands only under the review prompt's inspection instructions. That is
+policy guidance, not an operating-system sandbox.
+
+`/review` requires an idle parent and immediate (`steer`) delivery. Queued delivery and launching
+while the parent is executing are rejected with a command error rather than silently replacing or
+deferring the user's work.
+
+Review work runs as a durable background subagent job. Restart recovery reconciles a terminal review
+from its child outcome without sampling the reviewer again, and retries delivery, child archival and
+marker acknowledgement idempotently. A process death between the started notice and job registration
+can still leave an admitted child without a recovery marker; this pre-registration gap is the same
+one that exists for ordinary subagents and is not made transactional here.
 
 ## Stable-prefix implementation
 

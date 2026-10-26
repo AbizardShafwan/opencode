@@ -136,6 +136,32 @@ export const layer = (options?: Options) =>
         yield* jobs.completeBackground(background.notificationID)
       })
 
+      // Review children are one-shot: a durable outcome proves the review run is
+      // terminal even when the Job marker still says running after a crash.
+      const terminalReview = Effect.fnUntraced(function* (child: SessionSchema.Info) {
+        if (child.outcome === undefined || child.time.idle === undefined) return
+        const messages = yield* store
+          .messages({ sessionID: child.id, type: "assistant", order: "desc" })
+          .pipe(Effect.orDie)
+        if (child.outcome === "succeeded") {
+          const completed = messages.find(
+            (message) => message.type === "assistant" && message.time.completed !== undefined,
+          )
+          return {
+            status: "completed" as const,
+            output: completed?.type === "assistant" ? SubagentCompletion.text(completed) : undefined,
+          }
+        }
+        if (child.outcome === "failed") {
+          const failed = messages.find((message) => message.type === "assistant" && message.error !== undefined)
+          return {
+            status: "error" as const,
+            error: failed?.type === "assistant" ? failed.error?.message : undefined,
+          }
+        }
+        return { status: "cancelled" as const }
+      })
+
       const recoverSubagent = Effect.fnUntraced(function* (
         background: Job.Background,
         recovery: Extract<Job.Recovery, { kind: "subagent" }>,
@@ -143,23 +169,46 @@ export const layer = (options?: Options) =>
         restored: Map<SessionSchema.ID, Job.Handle>,
       ) {
         const child = yield* store.get(recovery.childSessionID)
-        if (!child || child.parentID !== recovery.parentSessionID || !(yield* store.get(recovery.parentSessionID))) {
+        if (!child || child.parentID !== recovery.parentSessionID) {
+          yield* jobs.completeBackground(background.notificationID)
+          return
+        }
+        if (!(yield* store.get(recovery.parentSessionID))) {
+          if (recovery.mode === "review")
+            yield* sessions
+              .archive(child.id)
+              .pipe(Effect.catchTag("Session.NotFoundError", () => Effect.void))
           yield* jobs.completeBackground(background.notificationID)
           return
         }
 
-        const notify = Effect.fnUntraced(function* (result: Pick<Job.Background, "status" | "output" | "error">) {
+        const notify = Effect.fnUntraced(function* (
+          result: Pick<Job.Background, "status" | "output" | "error">,
+          terminal = false,
+        ) {
           yield* SubagentCompletion.deliver(sessions, jobs, {
             ...result,
             recovery,
             notificationID: background.notificationID,
             resume: suspended.has(recovery.parentSessionID) ? false : undefined,
-          }).pipe(Effect.orDie)
+            ...(terminal ? { terminal: true } : {}),
+          }).pipe(
+            Effect.provideService(Bus.Service, bus),
+            Effect.provideService(SessionStore.Service, store),
+            Effect.orDie,
+          )
         })
 
         if (background.status !== "running") {
           yield* notify(background)
           return
+        }
+        if (recovery.mode === "review") {
+          const terminal = yield* terminalReview(child)
+          if (terminal) {
+            yield* notify(terminal, true)
+            return
+          }
         }
         const existing = restored.get(recovery.childSessionID)
         if (existing) {

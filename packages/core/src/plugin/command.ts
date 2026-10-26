@@ -2,11 +2,16 @@ export * as CommandPlugin from "./command.js"
 
 import { define } from "@opencode/plugin/effect/plugin"
 import { Effect, Stream } from "effect"
+import { Agent } from "../agent.js"
 import { Bus } from "../bus.js"
 import { Location } from "../location.js"
 import { Mcp } from "../mcp/index.js"
+import { Model } from "../model.js"
+import { Permission } from "../permission.js"
+import { Session } from "../session.js"
+import { SessionReview } from "../session/review.js"
+import { SubagentJob } from "../session/subagent-job.js"
 import PROMPT_INITIALIZE from "./command/initialize.txt"
-import PROMPT_REVIEW from "./command/review.txt"
 
 export const Plugin = define({
   id: "opencode.command",
@@ -14,6 +19,11 @@ export const Plugin = define({
     const location = yield* Location.Service
     const mcp = yield* Mcp.Service
     const bus = yield* Bus.Service
+    const sessions = yield* Session.Service
+    const agents = yield* Agent.Service
+    const models = yield* Model.Service
+    const permission = yield* Permission.Service
+    const subagents = yield* SubagentJob.Service
     const loaded = { prompts: [] as Mcp.Prompt[] }
     yield* bus.subscribe(Mcp.PromptsChanged).pipe(
       Stream.runForEach(() =>
@@ -43,14 +53,16 @@ export const Plugin = define({
         name: "review",
         description: "review changes [commit|branch|pr], defaults to uncommitted",
         execute: (input) =>
-          ctx.session
-            .prompt({
-              ...input.prompt,
-              sessionID: input.sessionID,
-              text: append(PROMPT_REVIEW.replace("${path}", location.project.directory), input.prompt.text),
-              delivery: input.delivery,
-            })
-            .pipe(Effect.asVoid),
+          SessionReview.launch(input).pipe(
+            Effect.provideService(Session.Service, sessions),
+            Effect.provideService(Agent.Service, agents),
+            Effect.provideService(Model.Service, models),
+            Effect.provideService(Permission.Service, permission),
+            Effect.provideService(SubagentJob.Service, subagents),
+            Effect.provideService(Location.Service, location),
+            Effect.provideService(Bus.Service, bus),
+            Effect.asVoid,
+          ),
       })
       for (const prompt of loaded.prompts) {
         editor.add({

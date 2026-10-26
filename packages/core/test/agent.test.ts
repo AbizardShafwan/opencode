@@ -183,6 +183,7 @@ describe("Agent", () => {
         "compaction",
         "explore",
         "general",
+        "review",
         "summary",
         "title",
       ])
@@ -204,7 +205,7 @@ describe("Agent", () => {
       expect(Permission.evaluate("external_directory", path.join(global.config, "*"), permissions).effect).toBe("allow")
       expect(Permission.evaluate("external_directory", path.join(global.tmp, "*"), permissions).effect).toBe("allow")
       expect(Permission.evaluate("external_directory", "/outside/*", permissions).effect).toBe("allow")
-      for (const id of ["explore", "title", "summary"]) {
+      for (const id of ["explore", "review", "title", "summary"]) {
         const role = yield* agent.get(Agent.ID.make(id))
         expect(role?.system?.startsWith(SessionSystemPrompt.make())).toBe(true)
       }
@@ -241,6 +242,52 @@ describe("Agent", () => {
           )
         }),
       )
+    }),
+  )
+
+  it.effect("defines a hidden review role with a review-only allowlist", () =>
+    Effect.gen(function* () {
+      const agent = yield* Agent.Service
+      yield* AgentPlugin.Plugin.effect(
+        host({
+          agent: agentHost(agent),
+        }),
+      )
+
+      const review = yield* agent.get(Agent.ID.make("review"))
+      if (!review) throw new Error("expected built-in review agent")
+      expect(review.mode).toBe("subagent")
+      expect(review.hidden).toBe(true)
+      expect(review.system?.startsWith(SessionSystemPrompt.make())).toBe(true)
+      expect(review.system).toContain("review-only assignment")
+      expect(review.system).toContain('"overall_correctness"')
+      expect(review.system).not.toContain("## Review target")
+
+      const allowed = [
+        ["shell", "git diff HEAD~1"],
+        ["grep", "TODO"],
+        ["glob", "**/*.ts"],
+        ["read", "src/index.ts"],
+      ] as const
+      for (const [tool, resource] of allowed)
+        expect(Permission.evaluate(tool, resource, review.permissions).effect).toBe("allow")
+
+      const denied = [
+        ["edit", "src/index.ts"],
+        ["write", "src/index.ts"],
+        ["patch", "src/index.ts"],
+        ["webfetch", "https://example.com"],
+        ["websearch", "query"],
+        ["subagent", "general"],
+      ] as const
+      for (const [tool, resource] of denied)
+        expect(Permission.evaluate(tool, resource, review.permissions).effect).toBe("deny")
+
+      expect(Permission.evaluate("read", ".env", review.permissions).effect).toBe("ask")
+      expect(Permission.evaluate("read", ".env.local", review.permissions).effect).toBe("ask")
+      expect(Permission.evaluate("read", ".env.example", review.permissions).effect).toBe("allow")
+      expect(Permission.evaluate("external_directory", "/outside/*", review.permissions).effect).toBe("allow")
+      expect(Permission.evaluate("todowrite", "anything", review.permissions).effect).toBe("deny")
     }),
   )
 })

@@ -35,6 +35,8 @@ const Background = Schema.Struct({
       childSessionID: SessionSchema.ID,
       agent: Schema.String,
       description: Schema.String,
+      /** Present on review launches; older persisted jobs omit it. */
+      mode: Schema.optionalKey(Schema.Literal("review")),
     }),
   ]),
   status: Schema.Literals(["running", "completed", "error", "cancelled"]),

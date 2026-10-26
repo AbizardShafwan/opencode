@@ -1,15 +1,20 @@
 import type { FileSystem } from "@opencode/core/filesystem"
 import { describe, expect, test } from "bun:test"
 import { AIError, TransportError } from "@opencode/ai"
+import { Agent } from "@opencode/core/agent"
 import { Database } from "@opencode/core/database/database"
 import { AppNodeBuilder } from "@opencode/core/effect/app-node-builder"
+import { EventTable } from "@opencode/core/event/sql"
 import { LayerNode } from "@opencode/util/effect/layer-node"
+import { Event } from "@opencode/schema/event"
 import { Bus } from "@opencode/core/bus"
 import { Instance } from "@opencode/core/instance/service"
 import { Job } from "@opencode/core/job"
 import { KV } from "@opencode/core/kv"
 import { LocationServiceMap } from "@opencode/core/location-service-map"
 import type { LocationServices } from "@opencode/core/location-services"
+import { Model } from "@opencode/core/model"
+import { Money } from "@opencode/schema/money"
 import { Project } from "@opencode/core/project"
 import { ProjectTable } from "@opencode/core/project/sql"
 import { AbsolutePath } from "@opencode/core/schema"
@@ -22,7 +27,7 @@ import { SessionMessage } from "@opencode/core/session/message"
 import { SessionRunner } from "@opencode/core/session/runner/index"
 import { SessionInboxTable, SessionTable } from "@opencode/core/session/sql"
 import { SessionStore } from "@opencode/core/session/store"
-import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, LayerMap, Scope } from "effect"
+import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, LayerMap, Scope, Stream } from "effect"
 import { eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
@@ -1254,6 +1259,58 @@ function seedBackground(
   )
 }
 
+const reviewModel = Model.Ref.parse("test/review")
+const reviewTokens = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+const reviewReport = JSON.stringify({
+  findings: [],
+  overall_correctness: "patch is correct",
+  overall_explanation: "No blocking defect.",
+  overall_confidence_score: 0.7,
+})
+
+const completeReview = (bus: Bus.Interface, sessionID: Session.ID, text: string) =>
+  Effect.gen(function* () {
+    const assistantMessageID = SessionMessage.ID.create()
+    yield* bus.publish(SessionEvent.Step.Started, {
+      sessionID,
+      assistantMessageID,
+      agent: Agent.ID.make("review"),
+      model: reviewModel,
+      started: 0,
+    })
+    yield* bus.publish(SessionEvent.Text.Started, { sessionID, assistantMessageID, ordinal: 0 })
+    yield* bus.publish(SessionEvent.Text.Ended, { sessionID, assistantMessageID, ordinal: 0, text })
+    yield* bus.publish(SessionEvent.Step.Ended, {
+      sessionID,
+      assistantMessageID,
+      finish: "stop",
+      cost: Money.USD.zero,
+      tokens: reviewTokens,
+    })
+  })
+
+const seedReviewBackground = (
+  jobs: Job.Interface,
+  parent: Session.ID,
+  child: Session.ID,
+  run: Effect.Effect<string> = Effect.never,
+) =>
+  Effect.gen(function* () {
+    const recovery = {
+      kind: "subagent" as const,
+      parentSessionID: parent,
+      childSessionID: child,
+      agent: "Review",
+      description: "Review restart",
+      mode: "review" as const,
+    }
+    yield* jobs.start({ id: child, type: "subagent", title: recovery.description, recovery, run })
+    yield* jobs.background(child)
+    const background = (yield* jobs.pendingBackground).find((item) => item.id === child)
+    if (!background) return yield* Effect.die("review background missing")
+    return { recovery, background, notificationID: background.notificationID }
+  })
+
 /** Plain deliveries seed user prompts; objects seed control items. */
 function seedInbox(
   database: Database.Service["Service"],
@@ -1392,3 +1449,671 @@ function buildExecution(
     )
   })
 }
+
+describe("SessionRestart review recovery", () => {
+  it.effect("reconciles a terminal review child with a running marker without resuming", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const bus = yield* Bus.Service
+      const store = yield* SessionStore.Service
+      const parent = Session.ID.make("ses_review_terminal_parent")
+      const child = Session.ID.make("ses_review_terminal_child")
+      yield* seedSessions(database, [parent])
+      yield* seedSessions(database, [child], { parent_id: parent })
+
+      const firstScope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(firstScope, Exit.void))
+      const firstJobs = yield* Job.make.pipe(Scope.provide(firstScope))
+      const review = yield* seedReviewBackground(firstJobs, parent, child)
+      const first = yield* buildExecution(
+        firstScope,
+        ({ sessionID }) => (sessionID === child ? completeReview(bus, child, reviewReport) : Effect.void),
+        undefined,
+        firstJobs,
+      )
+      const firstExecution = Context.get(first, SessionExecution.Service)
+      yield* firstExecution.resume(child)
+      yield* firstExecution.awaitIdle(child)
+      expect((yield* store.get(child))?.outcome).toBe("succeeded")
+      yield* Scope.close(firstScope, Exit.void)
+
+      const restartedScope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(restartedScope, Exit.void))
+      const restartedJobs = yield* Job.make.pipe(Scope.provide(restartedScope))
+      const drained: Session.ID[] = []
+      const context = yield* buildExecution(
+        restartedScope,
+        ({ sessionID }) => Effect.sync(() => void drained.push(sessionID)),
+        undefined,
+        restartedJobs,
+      )
+      const restart = Context.get(context, SessionRestart.Service)
+      const notices = yield* bus
+        .subscribe(SessionEvent.Synthetic)
+        .pipe(
+          Stream.filter((event) => event.data.sessionID === parent),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkScoped({ startImmediately: true }),
+        )
+      const archived = yield* bus
+        .subscribe(SessionEvent.Archived)
+        .pipe(
+          Stream.filter((event) => event.data.sessionID === child),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkScoped({ startImmediately: true }),
+        )
+      yield* Effect.yieldNow
+      yield* restart.resumeSuspendedSessions
+      const events = Array.from(yield* Fiber.join(notices).pipe(Effect.timeout("5 seconds")))
+      yield* Fiber.join(archived).pipe(Effect.timeout("5 seconds"))
+      yield* Effect.yieldNow
+
+      expect(drained).toEqual([])
+      expect(events[0]?.data.metadata).toMatchObject({
+        source: "subagent",
+        childID: child,
+        agent: "Review",
+        state: "completed",
+      })
+      expect(events[0]?.data.text).toContain("## Review report")
+      expect((yield* store.get(child))?.time.archived).toBeDefined()
+      expect(yield* restartedJobs.pendingBackground).toEqual([])
+      expect(yield* SessionInbox.list(database.db, parent)).toEqual([])
+      const synthetic = (yield* store.context(parent)).filter((message) => message.type === "synthetic")
+      expect(synthetic).toHaveLength(1)
+      expect(synthetic[0]?.id).toBe(review.notificationID)
+      yield* restart.resumeSuspendedSessions
+      expect((yield* store.context(parent)).filter((message) => message.type === "synthetic")).toHaveLength(1)
+    }),
+  )
+
+  it.effect("resumes a genuinely running review job and delivers its report", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const bus = yield* Bus.Service
+      const store = yield* SessionStore.Service
+      const parent = Session.ID.make("ses_review_running_parent")
+      const child = Session.ID.make("ses_review_running_child")
+      yield* seedSessions(database, [parent])
+      yield* seedSessions(database, [child], { parent_id: parent })
+
+      const firstScope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(firstScope, Exit.void))
+      const firstJobs = yield* Job.make.pipe(Scope.provide(firstScope))
+      const review = yield* seedReviewBackground(firstJobs, parent, child)
+      yield* Scope.close(firstScope, Exit.void)
+
+      const restartedScope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(restartedScope, Exit.void))
+      const restartedJobs = yield* Job.make.pipe(Scope.provide(restartedScope))
+      const drained: { sessionID: Session.ID; force: boolean }[] = []
+      let childAttempts: number | undefined
+      const context = yield* buildExecution(
+        restartedScope,
+        ({ sessionID, force }) =>
+          Effect.gen(function* () {
+            drained.push({ sessionID, force })
+            if (sessionID === child) {
+              childAttempts = yield* attempts(database, child)
+              yield* completeReview(bus, child, reviewReport)
+            }
+          }),
+        undefined,
+        restartedJobs,
+      )
+      const restart = Context.get(context, SessionRestart.Service)
+      const notices = yield* bus
+        .subscribe(SessionEvent.Synthetic)
+        .pipe(
+          Stream.filter((event) => event.data.sessionID === parent),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkScoped({ startImmediately: true }),
+        )
+      const archived = yield* bus
+        .subscribe(SessionEvent.Archived)
+        .pipe(
+          Stream.filter((event) => event.data.sessionID === child),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkScoped({ startImmediately: true }),
+        )
+      yield* Effect.yieldNow
+      yield* restart.resumeSuspendedSessions
+      const events = Array.from(yield* Fiber.join(notices).pipe(Effect.timeout("5 seconds")))
+      yield* Fiber.join(archived).pipe(Effect.timeout("5 seconds"))
+      yield* Effect.yieldNow
+
+      expect(drained).toEqual([{ sessionID: child, force: true }])
+      expect(childAttempts).toBe(1)
+      expect(events[0]?.data.metadata).toMatchObject({
+        source: "subagent",
+        childID: child,
+        agent: "Review",
+        state: "completed",
+      })
+      expect(events[0]?.data.text).toContain("## Review report")
+      expect((yield* store.get(child))?.time.archived).toBeDefined()
+      expect(yield* restartedJobs.pendingBackground).toEqual([])
+      expect(yield* SessionInbox.list(database.db, parent)).toEqual([])
+      const synthetic = (yield* store.context(parent)).filter((message) => message.type === "synthetic")
+      expect(synthetic).toHaveLength(1)
+      expect(synthetic[0]?.id).toBe(review.notificationID)
+    }),
+  )
+
+  it.effect("does not treat a shutdown-interrupted review as a user cancellation", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const bus = yield* Bus.Service
+      const store = yield* SessionStore.Service
+      const parent = Session.ID.make("ses_review_shutdown_parent")
+      const child = Session.ID.make("ses_review_shutdown_child")
+      yield* seedSessions(database, [parent])
+      yield* seedSessions(database, [child], { parent_id: parent, time_suspended: Date.now() })
+
+      const firstScope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(firstScope, Exit.void))
+      const firstJobs = yield* Job.make.pipe(Scope.provide(firstScope))
+      yield* seedReviewBackground(firstJobs, parent, child)
+      yield* bus.publish(SessionEvent.Execution.Interrupted, { sessionID: child, reason: "shutdown" })
+      expect((yield* store.get(child))?.outcome).toBeUndefined()
+      yield* Scope.close(firstScope, Exit.void)
+
+      const restartedScope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(restartedScope, Exit.void))
+      const restartedJobs = yield* Job.make.pipe(Scope.provide(restartedScope))
+      const drained: Session.ID[] = []
+      const context = yield* buildExecution(
+        restartedScope,
+        ({ sessionID }) =>
+          Effect.gen(function* () {
+            drained.push(sessionID)
+            if (sessionID === child) yield* completeReview(bus, child, reviewReport)
+          }),
+        undefined,
+        restartedJobs,
+      )
+      const restart = Context.get(context, SessionRestart.Service)
+      const notices = yield* bus
+        .subscribe(SessionEvent.Synthetic)
+        .pipe(
+          Stream.filter((event) => event.data.sessionID === parent),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkScoped({ startImmediately: true }),
+        )
+      const archived = yield* bus
+        .subscribe(SessionEvent.Archived)
+        .pipe(
+          Stream.filter((event) => event.data.sessionID === child),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkScoped({ startImmediately: true }),
+        )
+      yield* Effect.yieldNow
+      yield* restart.resumeSuspendedSessions
+      const events = Array.from(yield* Fiber.join(notices).pipe(Effect.timeout("5 seconds")))
+      yield* Fiber.join(archived).pipe(Effect.timeout("5 seconds"))
+      yield* Effect.yieldNow
+
+      expect(drained).toEqual([child])
+      expect(events[0]?.data.metadata).toMatchObject({ state: "completed", childID: child })
+      expect(events[0]?.data.text).toContain("## Review report")
+      expect(events[0]?.data.text).not.toContain("## Review cancelled")
+      expect((yield* store.get(child))?.time.archived).toBeDefined()
+      expect(yield* restartedJobs.pendingBackground).toEqual([])
+      expect(yield* SessionInbox.list(database.db, parent)).toEqual([])
+    }),
+  )
+
+  it.effect("delivers a completed persisted review without resuming", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const bus = yield* Bus.Service
+      const store = yield* SessionStore.Service
+      const parent = Session.ID.make("ses_review_completed_parent")
+      const child = Session.ID.make("ses_review_completed_child")
+      yield* seedSessions(database, [parent])
+      yield* seedSessions(database, [child], { parent_id: parent })
+
+      const firstScope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(firstScope, Exit.void))
+      const firstJobs = yield* Job.make.pipe(Scope.provide(firstScope))
+      yield* seedReviewBackground(firstJobs, parent, child, Effect.succeed(reviewReport))
+      yield* firstJobs.wait({ id: child })
+      expect((yield* firstJobs.pendingBackground).find((item) => item.id === child)).toMatchObject({
+        status: "completed",
+      })
+      yield* Scope.close(firstScope, Exit.void)
+
+      const restartedScope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(restartedScope, Exit.void))
+      const restartedJobs = yield* Job.make.pipe(Scope.provide(restartedScope))
+      const drained: Session.ID[] = []
+      const context = yield* buildExecution(
+        restartedScope,
+        ({ sessionID }) => Effect.sync(() => void drained.push(sessionID)),
+        undefined,
+        restartedJobs,
+      )
+      const restart = Context.get(context, SessionRestart.Service)
+      const archived = yield* bus
+        .subscribe(SessionEvent.Archived)
+        .pipe(
+          Stream.filter((event) => event.data.sessionID === child),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkScoped({ startImmediately: true }),
+        )
+      yield* Effect.yieldNow
+      yield* restart.resumeSuspendedSessions
+      yield* Fiber.join(archived).pipe(Effect.timeout("5 seconds"))
+      yield* Effect.yieldNow
+
+      expect(drained).toEqual([])
+      const synthetic = (yield* store.context(parent)).filter((message) => message.type === "synthetic")
+      expect(synthetic).toHaveLength(1)
+      expect(synthetic[0]?.text).toContain("## Review report")
+      expect((yield* store.get(child))?.time.archived).toBeDefined()
+      expect(yield* restartedJobs.pendingBackground).toEqual([])
+      expect(yield* SessionInbox.list(database.db, parent)).toEqual([])
+    }),
+  )
+
+  it.effect("reconciles a user-cancelled review with a running marker", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const bus = yield* Bus.Service
+      const store = yield* SessionStore.Service
+      const parent = Session.ID.make("ses_review_cancelled_parent")
+      const child = Session.ID.make("ses_review_cancelled_child")
+      yield* seedSessions(database, [parent])
+      yield* seedSessions(database, [child], { parent_id: parent })
+
+      const firstScope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(firstScope, Exit.void))
+      const firstJobs = yield* Job.make.pipe(Scope.provide(firstScope))
+      yield* seedReviewBackground(firstJobs, parent, child)
+      const running = yield* Deferred.make<void>()
+      const first = yield* buildExecution(
+        firstScope,
+        ({ sessionID }) =>
+          sessionID === child ? Deferred.succeed(running, undefined).pipe(Effect.andThen(Effect.never)) : Effect.void,
+        undefined,
+        firstJobs,
+      )
+      const firstExecution = Context.get(first, SessionExecution.Service)
+      yield* firstExecution.resume(child).pipe(Effect.forkScoped)
+      yield* Deferred.await(running)
+      expect(yield* firstExecution.interrupt(child)).toBeTrue()
+      yield* firstExecution.awaitIdle(child)
+      expect((yield* store.get(child))?.outcome).toBe("interrupted")
+      yield* Scope.close(firstScope, Exit.void)
+
+      const restartedScope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(restartedScope, Exit.void))
+      const restartedJobs = yield* Job.make.pipe(Scope.provide(restartedScope))
+      const drained: Session.ID[] = []
+      const context = yield* buildExecution(
+        restartedScope,
+        ({ sessionID }) => Effect.sync(() => void drained.push(sessionID)),
+        undefined,
+        restartedJobs,
+      )
+      const restart = Context.get(context, SessionRestart.Service)
+      const notices = yield* bus
+        .subscribe(SessionEvent.Synthetic)
+        .pipe(
+          Stream.filter((event) => event.data.sessionID === parent),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkScoped({ startImmediately: true }),
+        )
+      const archived = yield* bus
+        .subscribe(SessionEvent.Archived)
+        .pipe(
+          Stream.filter((event) => event.data.sessionID === child),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkScoped({ startImmediately: true }),
+        )
+      yield* Effect.yieldNow
+      yield* restart.resumeSuspendedSessions
+      const events = Array.from(yield* Fiber.join(notices).pipe(Effect.timeout("5 seconds")))
+      yield* Fiber.join(archived).pipe(Effect.timeout("5 seconds"))
+      yield* Effect.yieldNow
+
+      expect(drained).toEqual([])
+      expect(events[0]?.data.metadata).toMatchObject({
+        source: "subagent",
+        childID: child,
+        agent: "Review",
+        state: "cancelled",
+      })
+      expect(events[0]?.data.text).toContain("## Review cancelled")
+      expect(events[0]?.data.text.toLowerCase()).not.toContain("no findings")
+      expect((yield* store.get(child))?.time.archived).toBeDefined()
+      expect(yield* restartedJobs.pendingBackground).toEqual([])
+      expect(yield* SessionInbox.list(database.db, parent)).toEqual([])
+    }),
+  )
+
+  it.effect("reconciles a failed review from its failed assistant", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const bus = yield* Bus.Service
+      const store = yield* SessionStore.Service
+      const parent = Session.ID.make("ses_review_failed_parent")
+      const child = Session.ID.make("ses_review_failed_child")
+      yield* seedSessions(database, [parent])
+      yield* seedSessions(database, [child], { parent_id: parent })
+
+      const firstScope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(firstScope, Exit.void))
+      const firstJobs = yield* Job.make.pipe(Scope.provide(firstScope))
+      yield* seedReviewBackground(firstJobs, parent, child)
+      const assistantMessageID = SessionMessage.ID.create()
+      yield* bus.publish(SessionEvent.Step.Started, {
+        sessionID: child,
+        assistantMessageID,
+        agent: Agent.ID.make("review"),
+        model: reviewModel,
+        started: 0,
+      })
+      yield* bus.publish(SessionEvent.Step.Failed, {
+        sessionID: child,
+        assistantMessageID,
+        error: { type: "test", message: "review failed" },
+      })
+      yield* bus.publish(SessionEvent.Execution.Failed, {
+        sessionID: child,
+        error: { type: "test", message: "review failed" },
+      })
+      expect((yield* store.get(child))?.outcome).toBe("failed")
+      yield* Scope.close(firstScope, Exit.void)
+
+      const restartedScope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(restartedScope, Exit.void))
+      const restartedJobs = yield* Job.make.pipe(Scope.provide(restartedScope))
+      const drained: Session.ID[] = []
+      const context = yield* buildExecution(
+        restartedScope,
+        ({ sessionID }) => Effect.sync(() => void drained.push(sessionID)),
+        undefined,
+        restartedJobs,
+      )
+      const restart = Context.get(context, SessionRestart.Service)
+      const notices = yield* bus
+        .subscribe(SessionEvent.Synthetic)
+        .pipe(
+          Stream.filter((event) => event.data.sessionID === parent),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkScoped({ startImmediately: true }),
+        )
+      const archived = yield* bus
+        .subscribe(SessionEvent.Archived)
+        .pipe(
+          Stream.filter((event) => event.data.sessionID === child),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkScoped({ startImmediately: true }),
+        )
+      yield* Effect.yieldNow
+      yield* restart.resumeSuspendedSessions
+      const events = Array.from(yield* Fiber.join(notices).pipe(Effect.timeout("5 seconds")))
+      yield* Fiber.join(archived).pipe(Effect.timeout("5 seconds"))
+      yield* Effect.yieldNow
+
+      expect(drained).toEqual([])
+      expect(events[0]?.data.metadata).toMatchObject({ state: "error", childID: child })
+      expect(events[0]?.data.text).toContain("## Review failed")
+      expect(events[0]?.data.text).toContain("review failed")
+      expect(events[0]?.data.text.toLowerCase()).not.toContain("no findings")
+      expect((yield* store.get(child))?.time.archived).toBeDefined()
+      expect(yield* restartedJobs.pendingBackground).toEqual([])
+      expect(yield* SessionInbox.list(database.db, parent)).toEqual([])
+    }),
+  )
+
+  it.effect("reports a review with no final assistant as an empty report", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const bus = yield* Bus.Service
+      const store = yield* SessionStore.Service
+      const parent = Session.ID.make("ses_review_empty_parent")
+      const child = Session.ID.make("ses_review_empty_child")
+      yield* seedSessions(database, [parent])
+      yield* seedSessions(database, [child], { parent_id: parent })
+
+      const firstScope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(firstScope, Exit.void))
+      const firstJobs = yield* Job.make.pipe(Scope.provide(firstScope))
+      yield* seedReviewBackground(firstJobs, parent, child)
+      yield* bus.publish(SessionEvent.Execution.Succeeded, { sessionID: child })
+      expect((yield* store.get(child))?.outcome).toBe("succeeded")
+      yield* Scope.close(firstScope, Exit.void)
+
+      const restartedScope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(restartedScope, Exit.void))
+      const restartedJobs = yield* Job.make.pipe(Scope.provide(restartedScope))
+      const drained: Session.ID[] = []
+      const context = yield* buildExecution(
+        restartedScope,
+        ({ sessionID }) => Effect.sync(() => void drained.push(sessionID)),
+        undefined,
+        restartedJobs,
+      )
+      const restart = Context.get(context, SessionRestart.Service)
+      const notices = yield* bus
+        .subscribe(SessionEvent.Synthetic)
+        .pipe(
+          Stream.filter((event) => event.data.sessionID === parent),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkScoped({ startImmediately: true }),
+        )
+      const archived = yield* bus
+        .subscribe(SessionEvent.Archived)
+        .pipe(
+          Stream.filter((event) => event.data.sessionID === child),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkScoped({ startImmediately: true }),
+        )
+      yield* Effect.yieldNow
+      yield* restart.resumeSuspendedSessions
+      const events = Array.from(yield* Fiber.join(notices).pipe(Effect.timeout("5 seconds")))
+      yield* Fiber.join(archived).pipe(Effect.timeout("5 seconds"))
+      yield* Effect.yieldNow
+
+      expect(drained).toEqual([])
+      expect(events[0]?.data.text).toContain("empty response")
+      expect(events[0]?.data.text.toLowerCase()).not.toContain("no findings")
+      expect((yield* store.get(child))?.time.archived).toBeDefined()
+      expect(yield* restartedJobs.pendingBackground).toEqual([])
+      expect(yield* SessionInbox.list(database.db, parent)).toEqual([])
+    }),
+  )
+
+  it.effect("reports an explicit failure when no failed assistant recorded an error", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const bus = yield* Bus.Service
+      const store = yield* SessionStore.Service
+      const parent = Session.ID.make("ses_review_failed_empty_parent")
+      const child = Session.ID.make("ses_review_failed_empty_child")
+      yield* seedSessions(database, [parent])
+      yield* seedSessions(database, [child], { parent_id: parent })
+
+      const firstScope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(firstScope, Exit.void))
+      const firstJobs = yield* Job.make.pipe(Scope.provide(firstScope))
+      yield* seedReviewBackground(firstJobs, parent, child)
+      yield* bus.publish(SessionEvent.Execution.Failed, {
+        sessionID: child,
+        error: { type: "test", message: "review failed" },
+      })
+      expect((yield* store.get(child))?.outcome).toBe("failed")
+      yield* Scope.close(firstScope, Exit.void)
+
+      const restartedScope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(restartedScope, Exit.void))
+      const restartedJobs = yield* Job.make.pipe(Scope.provide(restartedScope))
+      const drained: Session.ID[] = []
+      const context = yield* buildExecution(
+        restartedScope,
+        ({ sessionID }) => Effect.sync(() => void drained.push(sessionID)),
+        undefined,
+        restartedJobs,
+      )
+      const restart = Context.get(context, SessionRestart.Service)
+      const notices = yield* bus
+        .subscribe(SessionEvent.Synthetic)
+        .pipe(
+          Stream.filter((event) => event.data.sessionID === parent),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkScoped({ startImmediately: true }),
+        )
+      const archived = yield* bus
+        .subscribe(SessionEvent.Archived)
+        .pipe(
+          Stream.filter((event) => event.data.sessionID === child),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkScoped({ startImmediately: true }),
+        )
+      yield* Effect.yieldNow
+      yield* restart.resumeSuspendedSessions
+      const events = Array.from(yield* Fiber.join(notices).pipe(Effect.timeout("5 seconds")))
+      yield* Fiber.join(archived).pipe(Effect.timeout("5 seconds"))
+      yield* Effect.yieldNow
+
+      expect(drained).toEqual([])
+      expect(events[0]?.data.text).toContain("## Review failed")
+      expect(events[0]?.data.text).toContain("failed without an error message")
+      expect(events[0]?.data.text.toLowerCase()).not.toContain("no findings")
+      expect((yield* store.get(child))?.time.archived).toBeDefined()
+      expect(yield* restartedJobs.pendingBackground).toEqual([])
+      expect(yield* SessionInbox.list(database.db, parent)).toEqual([])
+    }),
+  )
+
+  it.effect("archives a surviving review child when its parent was deleted", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const bus = yield* Bus.Service
+      const store = yield* SessionStore.Service
+      const parent = Session.ID.make("ses_review_orphan_parent")
+      const child = Session.ID.make("ses_review_orphan_child")
+      yield* seedSessions(database, [parent])
+      yield* seedSessions(database, [child], { parent_id: parent })
+
+      const firstScope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(firstScope, Exit.void))
+      const firstJobs = yield* Job.make.pipe(Scope.provide(firstScope))
+      yield* seedReviewBackground(firstJobs, parent, child)
+      yield* database.db.delete(SessionTable).where(eq(SessionTable.id, parent)).run().pipe(Effect.orDie)
+      yield* Scope.close(firstScope, Exit.void)
+
+      const restartedScope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(restartedScope, Exit.void))
+      const restartedJobs = yield* Job.make.pipe(Scope.provide(restartedScope))
+      const drained: Session.ID[] = []
+      const context = yield* buildExecution(
+        restartedScope,
+        ({ sessionID }) => Effect.sync(() => void drained.push(sessionID)),
+        undefined,
+        restartedJobs,
+      )
+      const restart = Context.get(context, SessionRestart.Service)
+      const archived = yield* bus
+        .subscribe(SessionEvent.Archived)
+        .pipe(
+          Stream.filter((event) => event.data.sessionID === child),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkScoped({ startImmediately: true }),
+        )
+      yield* Effect.yieldNow
+      yield* restart.resumeSuspendedSessions
+      yield* Fiber.join(archived).pipe(Effect.timeout("5 seconds"))
+      yield* Effect.yieldNow
+
+      expect(drained).toEqual([])
+      expect((yield* store.get(child))?.time.archived).toBeDefined()
+      expect(yield* restartedJobs.pendingBackground).toEqual([])
+    }),
+  )
+
+  it.effect("keeps one projected review notice after event removal when recovery retries archive and ack", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const bus = yield* Bus.Service
+      const store = yield* SessionStore.Service
+      const parent = Session.ID.make("ses_review_idempotent_parent")
+      const child = Session.ID.make("ses_review_idempotent_child")
+      yield* seedSessions(database, [parent])
+      yield* seedSessions(database, [child], { parent_id: parent })
+
+      const firstScope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(firstScope, Exit.void))
+      const firstJobs = yield* Job.make.pipe(Scope.provide(firstScope))
+      const review = yield* seedReviewBackground(firstJobs, parent, child, Effect.succeed(reviewReport))
+      yield* firstJobs.wait({ id: child })
+      const deliveredText = "## Review report\n\nAlready delivered."
+      yield* bus.publish(
+        SessionEvent.Synthetic,
+        {
+          sessionID: parent,
+          text: deliveredText,
+          description: "Review restart — completed",
+          metadata: { source: "subagent", childID: child, agent: "Review", state: "completed" },
+        },
+        { id: Event.ID.make(review.notificationID.replace(/^msg_/, "evt_")) },
+      )
+      yield* database.db
+        .delete(EventTable)
+        .where(eq(EventTable.aggregate_id, parent))
+        .run()
+        .pipe(Effect.orDie)
+      yield* Scope.close(firstScope, Exit.void)
+
+      const restartedScope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(restartedScope, Exit.void))
+      const restartedJobs = yield* Job.make.pipe(Scope.provide(restartedScope))
+      const drained: Session.ID[] = []
+      const context = yield* buildExecution(
+        restartedScope,
+        ({ sessionID }) => Effect.sync(() => void drained.push(sessionID)),
+        undefined,
+        restartedJobs,
+      )
+      const restart = Context.get(context, SessionRestart.Service)
+      const archived = yield* bus
+        .subscribe(SessionEvent.Archived)
+        .pipe(
+          Stream.filter((event) => event.data.sessionID === child),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkScoped({ startImmediately: true }),
+        )
+      yield* Effect.yieldNow
+      yield* restart.resumeSuspendedSessions
+      yield* Fiber.join(archived).pipe(Effect.timeout("5 seconds"))
+      yield* Effect.yieldNow
+
+      expect(drained).toEqual([])
+      const synthetic = (yield* store.context(parent)).filter((message) => message.type === "synthetic")
+      expect(synthetic).toHaveLength(1)
+      expect(synthetic[0]).toMatchObject({ id: review.notificationID, text: deliveredText })
+      expect((yield* store.get(child))?.time.archived).toBeDefined()
+      expect(yield* restartedJobs.pendingBackground).toEqual([])
+      expect(yield* SessionInbox.list(database.db, parent)).toEqual([])
+    }),
+  )
+})

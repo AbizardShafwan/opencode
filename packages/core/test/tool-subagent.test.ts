@@ -159,6 +159,7 @@ const nodes = LayerNode.group([
   Bus.node,
   Job.node,
   Session.node,
+  SessionStore.node,
   SessionExecution.node,
   LocationServiceMap.node,
 ])

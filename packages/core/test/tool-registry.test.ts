@@ -6,6 +6,7 @@ import { Image } from "@opencode/core/image"
 import { PluginHooks } from "@opencode/core/plugin/hooks"
 import { Session } from "@opencode/core/session"
 import { SessionMessage } from "@opencode/core/session/message"
+import { ReviewAuthority } from "@opencode/core/session/review-authority"
 import { State } from "@opencode/core/state"
 import { Tool } from "@opencode/core/tool"
 import type { Info } from "@opencode/schema/tool"
@@ -1180,6 +1181,86 @@ describe("Tool", () => {
         { stage: "old" },
         { toolCalls: [{ tool: "echo", status: "completed", input: { text: "request" } }] },
       ])
+    }),
+  )
+})
+
+describe("Tool snapshot authority ceiling", () => {
+  const counted = (name: string, options: Tool.Options) => {
+    const executed: string[] = []
+    const tool: Info = {
+      name,
+      description: name,
+      input: Schema.Struct({}),
+      output: Schema.Struct({}),
+      options,
+      execute: () => Effect.sync(() => void executed.push(name)).pipe(Effect.as({ output: {}, content: name })),
+    }
+    return { tool, executed }
+  }
+
+  it.effect("hides wholly denied tools and CodeMode while preserving leaf-level resource checks", () =>
+    Effect.gen(function* () {
+      const service = yield* Tool.Service
+      const edit = counted("edit", { codemode: false, permission: "edit" })
+      const patch = counted("patch", { codemode: false, permission: "edit" })
+      const webfetch = counted("webfetch", { codemode: false, permission: "webfetch" })
+      const subagent = counted("subagent", { codemode: false, permission: "subagent" })
+      const openCodeMutation = counted("session_rename", { codemode: true })
+      const read = counted("read", { codemode: false, permission: "read" })
+      const shell = counted("shell", { codemode: false, permission: "shell" })
+      yield* service.transform((editor) => {
+        for (const item of [edit, patch, webfetch, subagent, openCodeMutation, read, shell]) editor.add(item.tool)
+      })
+
+      const snapshot = yield* service.snapshot(
+        [{ action: "*", resource: "*", effect: "allow" }],
+        [ReviewAuthority.rules],
+      )
+      expect(snapshot.definitions.map((tool) => tool.name)).toEqual(["read", "shell"])
+      expect(snapshot.codeModeCatalog).toBeUndefined()
+      for (const name of ["edit", "patch", "webfetch", "subagent", "session_rename", "execute"])
+        expect(yield* snapshot.execute(call(name)).pipe(Effect.flip)).toBeInstanceOf(Tool.Error)
+      expect([edit, patch, webfetch, subagent, openCodeMutation].flatMap((item) => item.executed)).toEqual([])
+      expect(yield* snapshot.execute(call("read"))).toMatchObject({ content: [{ type: "text", text: "read" }] })
+
+      // A resource-specific ceiling must not hide the tool; the leaf still owns that check.
+      const resourceScoped = yield* service.snapshot(
+        [{ action: "*", resource: "*", effect: "allow" }],
+        [[{ action: "read", resource: "*.env", effect: "deny" }]],
+      )
+      expect(resourceScoped.definitions.map((tool) => tool.name)).toContain("read")
+    }),
+  )
+
+  it.effect("never lets an authority allow widen a configured role or inherited deny", () =>
+    Effect.gen(function* () {
+      const service = yield* Tool.Service
+      const read = counted("read", { codemode: false, permission: "read" })
+      const shell = counted("shell", { codemode: false, permission: "shell" })
+      yield* service.transform((editor) => {
+        editor.add(read.tool)
+        editor.add(shell.tool)
+      })
+
+      const roleDenied = yield* service.snapshot(
+        [
+          { action: "read", resource: "*", effect: "deny" },
+          { action: "shell", resource: "*", effect: "deny" },
+        ],
+        [ReviewAuthority.rules],
+      )
+      expect(roleDenied.definitions).toEqual([])
+
+      const inheritedDenied = yield* service.snapshot(
+        [{ action: "*", resource: "*", effect: "allow" }],
+        [
+          [{ action: "read", resource: "*", effect: "deny" }],
+          [{ action: "shell", resource: "*", effect: "deny" }],
+        ],
+      )
+      expect(inheritedDenied.definitions.map((tool) => tool.name)).not.toContain("read")
+      expect(inheritedDenied.definitions.map((tool) => tool.name)).not.toContain("shell")
     }),
   )
 })

@@ -40,7 +40,10 @@ type Data = {
 
 export interface Interface extends State.Transformable<Editor> {
   readonly list: () => Effect.Effect<ReadonlyArray<Tool.Info & { readonly id: string }>>
-  readonly snapshot: (permissions?: Permission.Ruleset) => Effect.Effect<Snapshot>
+  readonly snapshot: (
+    permissions?: Permission.Ruleset,
+    authority?: ReadonlyArray<Permission.Ruleset>,
+  ) => Effect.Effect<Snapshot>
 }
 
 /** A local execution result after hooks and content normalization. */
@@ -224,19 +227,19 @@ const layer = Layer.effect(
       transform: state.transform,
       reload: state.reload,
       list: () => Effect.sync(() => Array.from(state.get().tools.values())),
-      snapshot: Effect.fn("Tool.snapshot")((permissions) =>
+      snapshot: Effect.fn("Tool.snapshot")((permissions, authority) =>
         Effect.sync(() => {
           const data = state.get()
           const active = new Map<string, Tool.Info>()
           const rules = permissions ?? []
           for (const [name, tool] of data.tools) {
-            if (whollyDisabled(tool.options?.permission ?? name, rules)) continue
+            if (disabled(tool.options?.permission ?? name, rules, authority)) continue
             active.set(name, tool)
           }
           const direct = new Map(Array.from(active).filter(([, tool]) => tool.options?.codemode === false))
           const codeModeTools = new Map(Array.from(active).filter(([, tool]) => tool.options?.codemode !== false))
           const names = Array.from(codeModeTools.keys()).join("\0")
-          const codeModeEnabled = !whollyDisabled("execute", rules)
+          const codeModeEnabled = !disabled("execute", rules, authority)
           // Discovery is immutable for a registry revision and visible tool set. Keep request
           // definitions/executors fresh, but share the inventory, whose prepared runtime and much
           // larger rendered catalog are cached by identity, across steps.
@@ -289,6 +292,9 @@ const layer = Layer.effect(
     })
   }),
 )
+
+const disabled = (action: string, rules: Permission.Ruleset, authority?: ReadonlyArray<Permission.Ruleset>) =>
+  whollyDisabled(action, rules) || (authority?.some((ruleset) => whollyDisabled(action, ruleset)) ?? false)
 
 const whollyDisabled = (action: string, rules: Permission.Ruleset) => {
   const rule = rules.findLast((rule) => Wildcard.match(action, rule.action))
