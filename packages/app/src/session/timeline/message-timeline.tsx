@@ -402,6 +402,7 @@ function MessageTimelineView(
   const activity = () => (
     <Show when={showWorking() || backgroundHintPresence.present()}>
       <div
+        data-timeline-row="Activity"
         classList={{
           "min-w-0 w-full max-w-full": true,
           "md:max-w-session md:mx-auto": props.centered,

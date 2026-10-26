@@ -1288,7 +1288,7 @@ html[data-theme="norse"] [data-slot="text-part-copy-wrapper"] {
 /* Reasoning and tool rows read as rune + line, not cards. */
 html[data-theme="norse"] [data-component="reasoning-part"] {
   max-width: 100%;
-  margin: 14px 0;
+  margin: 0;
   border: 0;
   padding: 0;
 }
@@ -1325,7 +1325,7 @@ html[data-theme="norse"]
   > [data-slot="collapsible-trigger"]:is([aria-expanded="true"], [data-locked]) {
   min-height: 0;
   padding-block: 0 var(--tool-content-gap);
-  background: var(--v2-background-bg-base);
+  background: var(--norse-card);
 }
 
 html[data-theme="norse"]
@@ -1351,9 +1351,14 @@ html[data-theme="norse"]
 
 @supports (backdrop-filter: blur(24px)) {
   html[data-theme="norse"]
-    [data-component="collapsed-tool-group"]
+    :is(
+      [data-component="collapsed-tool-group"],
+      [data-component="edit-tool"],
+      [data-component="write-tool"],
+      [data-component="apply-patch-tool"]
+    )
     > [data-component="collapsible"].tool-collapsible
-    > [data-slot="collapsible-trigger"][aria-expanded="true"] {
+    > [data-slot="collapsible-trigger"]:is([aria-expanded="true"], [data-locked]) {
     background-color: color-mix(in srgb, var(--norse-card) 60%, transparent);
     background-image: linear-gradient(110deg, var(--norse-royal-soft), var(--norse-gold-soft));
     backdrop-filter: blur(24px) saturate(1.2);
@@ -1365,6 +1370,48 @@ html[data-theme="norse"]
   > [data-component="collapsible"].tool-collapsible
   > [data-slot="collapsible-trigger"]:is([aria-expanded="true"], [data-locked]) {
   height: var(--sticky-accordion-offset);
+}
+
+/* File disclosures share the rune rows' open surface, not the original design's opaque cards. */
+html[data-theme="norse"] [data-component="accordion"][data-scope="apply-patch"] {
+  [data-component="sticky-accordion-header"] {
+    background: transparent;
+    border-radius: 6px;
+  }
+
+  [data-slot="accordion-trigger"] {
+    border-color: transparent;
+    color: var(--norse-text);
+  }
+
+  [data-slot="accordion-trigger"]:focus-visible {
+    outline: 2px solid var(--norse-royal);
+    outline-offset: -2px;
+  }
+
+  [data-component="sticky-accordion-header"][data-expanded] {
+    background: var(--norse-card);
+    background-image: linear-gradient(110deg, var(--norse-royal-soft), var(--norse-gold-soft));
+    box-shadow: inset 0 0 0 1px var(--norse-gold-line);
+  }
+
+  @supports (backdrop-filter: blur(24px)) {
+    [data-component="sticky-accordion-header"][data-expanded] {
+      background-color: color-mix(in srgb, var(--norse-card) 60%, transparent);
+      backdrop-filter: blur(24px) saturate(1.2);
+    }
+  }
+}
+
+/* Important declarations reverse layer priority; override the shared file background in its own layer. */
+@layer components {
+  html[data-theme="norse"] [data-component="accordion"][data-scope="apply-patch"] [data-slot="accordion-trigger"] {
+    background-color: transparent !important;
+
+    &:hover {
+      background-color: var(--norse-gold-soft) !important;
+    }
+  }
 }
 
 html[data-theme="norse"] [data-component="tool-trigger"],

@@ -1,5 +1,27 @@
 import { expect, story } from "../../storybook/playwright/story"
 
+story("Norse file rows stay transparent when collapsed and readable when expanded", async ({ mount, page }) => {
+  await page.addInitScript(() => localStorage.setItem("opencode-theme-id", "norse"))
+  const root = await mount("current-tool-group--patch-follow-ups")
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "norse")
+  const file = root.locator('[data-slot="accordion-item"]').filter({ hasText: "a.ts" })
+  const header = file.locator('[data-component="sticky-accordion-header"]')
+  const trigger = file.getByRole("button")
+  await expect(trigger).toHaveAttribute("aria-expanded", "false")
+  await expect(header).toHaveCSS("background-color", "rgba(0, 0, 0, 0)")
+  await expect(trigger).toHaveCSS("background-color", "rgba(0, 0, 0, 0)")
+  await trigger.focus()
+  await expect(trigger).toHaveCSS("outline-width", "2px")
+  await trigger.press("Enter")
+  await expect(trigger).toHaveAttribute("aria-expanded", "true")
+  await expect(file.getByRole("region")).toBeVisible()
+  await expect(header).toHaveCSS("backdrop-filter", "blur(24px) saturate(1.2)")
+  await expect(header).toHaveCSS("height", "32px")
+  await trigger.press("Enter")
+  await expect(trigger).toHaveAttribute("aria-expanded", "false")
+  await expect(header).toHaveCSS("background-color", "rgba(0, 0, 0, 0)")
+})
+
 story("keeps grouped file choices when the Used group reopens", async ({ mount }) => {
   const root = await mount("current-session-research-agents--agent-research", { args: { scenario: "workflow" } })
   const group = root.locator('[data-component="collapsed-tool-group"]').filter({ hasText: "Patch" })

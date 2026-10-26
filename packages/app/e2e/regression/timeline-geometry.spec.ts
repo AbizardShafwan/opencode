@@ -42,6 +42,32 @@ const contextSelector = `[data-timeline-part-ids="${contextTools.map((tool) => t
 
 const output = (tool: string) => `Completed ${tool}.\n${"detail line\n".repeat(8)}`
 
+test("Norse aligns Working with the transcript rows", async ({ page }) => {
+  await seed(page, { theme: { id: "norse", scheme: "dark" } })
+  await setupTimeline(page, {
+    messages: [userMessage(), assistantMessage([textPart("alignment_reply", "Checking the remaining files.")])],
+    sessionStatus: { [sessionID]: { type: "busy" } },
+    viewport: { width: 1440, height: 900 },
+  })
+  const working = page.locator('[data-component="session-working"]')
+  const transcript = page.locator('[data-timeline-row="AssistantPart"] [data-slot="session-turn-message-container"]')
+  await expect(working).toBeInViewport()
+  await expect(transcript).toContainText("Checking the remaining files.")
+  await page.evaluate(() => document.fonts.ready.then(() => undefined))
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 })
+    await expect
+      .poll(async () => {
+        const row = await transcript.boundingBox()
+        const status = await working.boundingBox()
+        if (!row || !status) throw new Error("Missing transcript or activity row")
+        const padding = await transcript.evaluate((node) => parseFloat(getComputedStyle(node).paddingLeft))
+        return Math.abs(status.x - row.x - padding)
+      })
+      .toBeLessThanOrEqual(1)
+  }
+})
+
 test("Norse clips scrolling tools below the session title without clipping the title controls", async ({ page }) => {
   await seed(page, { theme: { id: "norse", scheme: "dark" } })
   await setupTimeline(page, {
