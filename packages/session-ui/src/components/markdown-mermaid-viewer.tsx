@@ -2,6 +2,9 @@ import { Dialog } from "@kobalte/core/dialog"
 import { Button } from "@opencode/ui/button"
 import { useDialog } from "@opencode/ui/context/dialog"
 import { useI18n, type UiI18n } from "@opencode/ui/context/i18n"
+import { Icon } from "@opencode/ui/icon"
+import { IconButton } from "@opencode/ui/icon-button"
+import { Tooltip } from "@opencode/ui/tooltip"
 import { createEffect, createMemo, createSignal, createUniqueId, on, onCleanup, onMount, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { render } from "solid-js/web"
@@ -68,9 +71,14 @@ export function createMarkdownMermaid() {
                   <Dialog.Content data-component="mermaid-dialog">
                     <header>
                       <Dialog.Title>{i18n.t("ui.mermaid.title")}</Dialog.Title>
-                      <Dialog.CloseButton as={Button} variant="ghost">
-                        {i18n.t("ui.common.close")}
-                      </Dialog.CloseButton>
+                      <Tooltip value={i18n.t("ui.common.close")}>
+                        <Dialog.CloseButton
+                          as={IconButton}
+                          variant="ghost-muted"
+                          aria-label={i18n.t("ui.common.close")}
+                          icon={<Icon name="close" />}
+                        />
+                      </Tooltip>
                     </header>
                     <MermaidViewer input={value()} i18n={i18n} expanded />
                   </Dialog.Content>
@@ -188,22 +196,40 @@ function MermaidViewer(props: {
 
   return (
     <section data-component="markdown-mermaid" data-expanded={props.expanded || undefined}>
-      <div data-slot="mermaid-toolbar" role="group" aria-label={props.i18n.t("ui.mermaid.title")}>
-        <Button variant="ghost" aria-pressed={!sourceView()} onClick={() => setState("code", false)}>
-          {props.i18n.t("ui.mermaid.diagram")}
-        </Button>
-        <Button variant="ghost" aria-pressed={sourceView()} onClick={() => setState("code", true)}>
-          {props.i18n.t("ui.mermaid.code")}
-        </Button>
-        <div data-slot="mermaid-toolbar-spacer" />
-        <Button variant="ghost" onClick={() => void copy()}>
-          {props.i18n.t(state.copied ? "ui.message.copied" : "ui.message.copy")}
-        </Button>
-        <Show when={props.onExpand}>
-          <Button variant="ghost" onClick={() => props.onExpand?.()}>
-            {props.i18n.t("ui.mermaid.expand")}
+      <div data-slot="mermaid-toolbar">
+        <div data-slot="mermaid-view-switch" role="group" aria-label={props.i18n.t("ui.mermaid.view")}>
+          <Button
+            size="small"
+            variant="ghost-muted"
+            aria-pressed={!sourceView()}
+            onClick={() => setState("code", false)}
+          >
+            {props.i18n.t("ui.mermaid.diagram")}
           </Button>
-        </Show>
+          <Button size="small" variant="ghost-muted" aria-pressed={sourceView()} onClick={() => setState("code", true)}>
+            {props.i18n.t("ui.mermaid.code")}
+          </Button>
+        </div>
+        <div data-slot="mermaid-actions">
+          <Tooltip value={props.i18n.t(state.copied ? "ui.mermaid.copied" : "ui.mermaid.copy")}>
+            <IconButton
+              variant="ghost-muted"
+              aria-label={props.i18n.t(state.copied ? "ui.mermaid.copied" : "ui.mermaid.copy")}
+              icon={<Icon name={state.copied ? "check" : "copy"} />}
+              onClick={() => void copy()}
+            />
+          </Tooltip>
+          <Show when={props.onExpand}>
+            <Tooltip value={props.i18n.t("ui.mermaid.expand")}>
+              <IconButton
+                variant="ghost-muted"
+                aria-label={props.i18n.t("ui.mermaid.expand")}
+                icon={<Icon name="expand" />}
+                onClick={() => props.onExpand?.()}
+              />
+            </Tooltip>
+          </Show>
+        </div>
       </div>
       <Show when={state.copyError}>
         <p role="alert">{props.i18n.t("ui.mermaid.copyError")}</p>
@@ -318,104 +344,110 @@ function MermaidViewport(props: { svg: string; i18n: UiI18n; expanded?: boolean 
   }
 
   return (
-    <>
-      <div data-slot="mermaid-navigation" role="group" aria-label={props.i18n.t("ui.mermaid.navigation")}>
-        <Button
-          variant="ghost"
-          aria-label={props.i18n.t("ui.mermaid.zoomOut")}
-          disabled={state.zoom <= 0.25}
-          onClick={() => zoom(1 / 1.25)}
-        >
-          −
-        </Button>
-        <output aria-label={props.i18n.t("ui.mermaid.zoom")}>{Math.round(state.zoom * 100)}%</output>
-        <Button
-          variant="ghost"
-          aria-label={props.i18n.t("ui.mermaid.zoomIn")}
-          disabled={state.zoom >= 8}
-          onClick={() => zoom(1.25)}
-        >
-          +
-        </Button>
-        <Button variant="ghost" onClick={fit}>
-          {props.i18n.t("ui.mermaid.fit")}
-        </Button>
-      </div>
-      <div
-        ref={viewport}
-        data-slot="mermaid-viewport"
-        style={{
-          height: props.expanded
-            ? undefined
-            : `${Math.min(420, Math.max(160, ((state.width - 32) * state.diagramHeight) / state.diagramWidth + 32))}px`,
-        }}
-        tabIndex={0}
-        role="region"
-        aria-label={props.i18n.t("ui.mermaid.diagram")}
-        aria-describedby={hint}
-        onPointerDown={(event) => {
-          if (event.button !== 0) return
-          viewport.focus({ preventScroll: true })
-          viewport.setPointerCapture(event.pointerId)
-          pointers.set(event.pointerId, { x: event.clientX, y: event.clientY })
-
-          if (event.pointerType === "mouse") event.preventDefault()
-        }}
-        onPointerMove={move}
-        onPointerUp={(event) => {
-          pointers.delete(event.pointerId)
-
-          if (viewport.hasPointerCapture(event.pointerId)) viewport.releasePointerCapture(event.pointerId)
-        }}
-        onPointerCancel={(event) => pointers.delete(event.pointerId)}
-        onLostPointerCapture={(event) => pointers.delete(event.pointerId)}
-        onKeyDown={(event) => {
-          if (event.ctrlKey || event.metaKey || event.altKey) return
-
-          switch (event.key) {
-            case "+":
-            case "=":
-              zoom(1.25)
-              break
-            case "-":
-              zoom(1 / 1.25)
-              break
-            case "0":
-              fit()
-              break
-            case "ArrowLeft":
-              setState("x", (x) => x + 32)
-              break
-            case "ArrowRight":
-              setState("x", (x) => x - 32)
-              break
-            case "ArrowUp":
-              setState("y", (y) => y + 32)
-              break
-            case "ArrowDown":
-              setState("y", (y) => y - 32)
-              break
-            default:
-              return
-          }
-
-          event.preventDefault()
-          event.stopPropagation()
-        }}
-      >
+    <div data-slot="mermaid-stage">
+      <div data-slot="mermaid-frame">
         <div
-          ref={canvas}
-          data-slot="mermaid-canvas"
+          ref={viewport}
+          data-slot="mermaid-viewport"
           style={{
-            width: `${size().width}px`,
-            height: `${size().height}px`,
-            transform: `translate(-50%, -50%) translate(${state.x}px, ${state.y}px) scale(${state.zoom})`,
+            height: props.expanded
+              ? undefined
+              : `${Math.min(420, Math.max(160, ((state.width - 32) * state.diagramHeight) / state.diagramWidth + 32))}px`,
           }}
-        />
+          tabIndex={0}
+          role="region"
+          aria-label={props.i18n.t("ui.mermaid.diagram")}
+          aria-describedby={hint}
+          onPointerDown={(event) => {
+            if (event.button !== 0) return
+            viewport.focus({ preventScroll: true })
+            viewport.setPointerCapture(event.pointerId)
+            pointers.set(event.pointerId, { x: event.clientX, y: event.clientY })
+
+            if (event.pointerType === "mouse") event.preventDefault()
+          }}
+          onPointerMove={move}
+          onPointerUp={(event) => {
+            pointers.delete(event.pointerId)
+
+            if (viewport.hasPointerCapture(event.pointerId)) viewport.releasePointerCapture(event.pointerId)
+          }}
+          onPointerCancel={(event) => pointers.delete(event.pointerId)}
+          onLostPointerCapture={(event) => pointers.delete(event.pointerId)}
+          onKeyDown={(event) => {
+            if (event.ctrlKey || event.metaKey || event.altKey) return
+
+            switch (event.key) {
+              case "+":
+              case "=":
+                zoom(1.25)
+                break
+              case "-":
+                zoom(1 / 1.25)
+                break
+              case "0":
+                fit()
+                break
+              case "ArrowLeft":
+                setState("x", (x) => x + 32)
+                break
+              case "ArrowRight":
+                setState("x", (x) => x - 32)
+                break
+              case "ArrowUp":
+                setState("y", (y) => y + 32)
+                break
+              case "ArrowDown":
+                setState("y", (y) => y - 32)
+                break
+              default:
+                return
+            }
+
+            event.preventDefault()
+            event.stopPropagation()
+          }}
+        >
+          <div
+            ref={canvas}
+            data-slot="mermaid-canvas"
+            style={{
+              width: `${size().width}px`,
+              height: `${size().height}px`,
+              transform: `translate(-50%, -50%) translate(${state.x}px, ${state.y}px) scale(${state.zoom})`,
+            }}
+          />
+        </div>
       </div>
-      <p id={hint} data-slot="mermaid-hint">
-        {props.i18n.t("ui.mermaid.hint")}
-      </p>
-    </>
+      <div data-slot="mermaid-footer">
+        <p id={hint} data-slot="mermaid-hint">
+          {props.i18n.t("ui.mermaid.hint")}
+        </p>
+        <div data-slot="mermaid-navigation" role="group" aria-label={props.i18n.t("ui.mermaid.navigation")}>
+          <Button
+            size="small"
+            variant="ghost-muted"
+            aria-label={props.i18n.t("ui.mermaid.zoomOut")}
+            disabled={state.zoom <= 0.25}
+            onClick={() => zoom(1 / 1.25)}
+          >
+            −
+          </Button>
+          <output aria-label={props.i18n.t("ui.mermaid.zoom")}>{Math.round(state.zoom * 100)}%</output>
+          <Button
+            size="small"
+            variant="ghost-muted"
+            aria-label={props.i18n.t("ui.mermaid.zoomIn")}
+            disabled={state.zoom >= 8}
+            onClick={() => zoom(1.25)}
+          >
+            +
+          </Button>
+          <Button size="small" variant="ghost-muted" onClick={fit}>
+            {props.i18n.t("ui.mermaid.fit")}
+          </Button>
+        </div>
+      </div>
+    </div>
   )
 }

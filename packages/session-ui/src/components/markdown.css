@@ -290,18 +290,13 @@
     display: flex;
     flex-direction: column;
     margin: 12px 0 24px;
-    border: 0.5px solid var(--v2-border-border-base);
-    border-radius: 6px;
-    overflow: hidden;
 
     > [data-slot="mermaid-viewer-host"] {
       order: -1;
     }
 
     > pre {
-      margin: 0;
-      border: none;
-      border-radius: 0;
+      margin: 4px 0 0;
     }
   }
 

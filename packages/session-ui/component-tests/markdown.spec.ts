@@ -470,8 +470,8 @@ story("toggles and copies Mermaid source with invalid-code fallback", async ({ p
   await expect(markdown.locator("pre code")).toBeVisible()
   await expect(markdown.locator("pre code")).toHaveText("flowchart LR\n A[Start] --> B[End]")
   await expect(markdown.locator('[data-slot="mermaid-canvas"] > svg')).toBeHidden()
-  await markdown.getByRole("button", { name: "Copy", exact: true }).click()
-  await expect(markdown.getByRole("button", { name: "Copied", exact: true })).toBeVisible()
+  await markdown.getByRole("button", { name: "Copy code", exact: true }).click()
+  await expect(markdown.getByRole("button", { name: "Code copied", exact: true })).toBeVisible()
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("flowchart LR\n A[Start] --> B[End]")
   await markdown.getByRole("button", { name: "Diagram", exact: true }).click()
   await expect(markdown.locator("pre code")).toBeHidden()
@@ -486,7 +486,7 @@ story("toggles and copies Mermaid source with invalid-code fallback", async ({ p
   await expect(markdown.locator('[data-slot="mermaid-canvas"] > svg')).toHaveCount(0)
   await expect(markdown.locator("pre code")).toBeVisible()
   await expect(markdown.locator("pre code")).toHaveText("not a diagram")
-  await expect(markdown.getByRole("button", { name: "Copy", exact: true })).toBeVisible()
+  await expect(markdown.getByRole("button", { name: "Copy code", exact: true })).toBeVisible()
 })
 
 story("navigates Mermaid independently and expands it with keyboard-accessible controls", async ({ page }) => {
@@ -502,8 +502,8 @@ story("navigates Mermaid independently and expands it with keyboard-accessible c
   const second = diagrams.nth(1)
   const viewport = first.getByRole("region", { name: "Diagram", exact: true })
   const canvas = first.locator('[data-slot="mermaid-canvas"]')
-  await expect(canvas.locator("svg")).toContainText("Start")
-  await expect(second.locator("svg")).toContainText("Hello")
+  await expect(canvas.locator("> svg")).toContainText("Start")
+  await expect(second.locator('[data-slot="mermaid-canvas"] > svg')).toContainText("Hello")
   await expect(viewport).toHaveAccessibleDescription(/Drag to pan/)
   await page.evaluate(() => document.fonts.ready.then(() => undefined))
 
@@ -562,9 +562,11 @@ story("navigates Mermaid independently and expands it with keyboard-accessible c
   const expand = first.getByRole("button", { name: "Expand", exact: true })
   await expand.click()
   const dialog = page.getByRole("dialog", { name: "Mermaid diagram", exact: true })
-  await expect(dialog.locator("svg")).toContainText("Start")
+  await expect(dialog.locator('[data-slot="mermaid-canvas"] > svg')).toContainText("Start")
   await expect(dialog.getByLabel("Zoom level")).toHaveText("100%")
-  expect(await dialog.locator("svg").getAttribute("id")).not.toBe(await canvas.locator("svg").getAttribute("id"))
+  expect(await dialog.locator('[data-slot="mermaid-canvas"] > svg').getAttribute("id")).not.toBe(
+    await canvas.locator("> svg").getAttribute("id"),
+  )
   await dialog.getByRole("button", { name: "Code", exact: true }).click()
   await expect(dialog.locator("pre code")).toHaveText("flowchart LR\n A[Start] --> B[End]")
   await dialog.getByRole("button", { name: "Diagram", exact: true }).click()
@@ -577,7 +579,7 @@ story("navigates Mermaid independently and expands it with keyboard-accessible c
   await expect(expand).toBeFocused()
   await expect(first.getByLabel("Zoom level")).toHaveText("125%")
   await expand.click()
-  await expect(dialog.locator("svg")).toContainText("Start")
+  await expect(dialog.locator('[data-slot="mermaid-canvas"] > svg')).toContainText("Start")
   // Removing the owning block must also close its expanded viewer.
   await harness.getByLabel("Markdown text").evaluate((element: HTMLTextAreaElement) => {
     element.value = "No diagrams remain."
@@ -594,7 +596,7 @@ story("updates same-length Mermaid input and preserves navigation while streamin
   }, fixture)
   const harness = page.getByTestId("markdown-fixture")
   const diagram = harness.locator('[data-component="markdown-mermaid"]')
-  const svg = diagram.locator("svg")
+  const svg = diagram.locator('[data-slot="mermaid-canvas"] > svg')
   await expect(svg).toContainText("First")
   await diagram.getByRole("button", { name: "Zoom in", exact: true }).click()
   await harness.getByLabel("Markdown text").fill("```mermaid\nflowchart LR\n A[Other] --> B[End]\n")
@@ -633,7 +635,7 @@ story.describe("Mermaid touch navigation", () => {
     }, fixture)
     expect(await page.evaluate(() => matchMedia("(hover: none)").matches)).toBe(true)
     const diagram = page.getByTestId("markdown-fixture").locator('[data-component="markdown-mermaid"]')
-    await expect(diagram.locator("svg")).toContainText("Start")
+    await expect(diagram.locator('[data-slot="mermaid-canvas"] > svg')).toContainText("Start")
     const viewport = diagram.getByRole("region", { name: "Diagram", exact: true })
     await viewport.scrollIntoViewIfNeeded()
     const box = (await viewport.boundingBox())!
