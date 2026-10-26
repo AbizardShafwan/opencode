@@ -27,6 +27,7 @@ import { type SessionSummary, useData } from "../context"
 import { useFileComponent } from "@opencode/ui/context/file"
 import { type UiI18n, useI18n } from "@opencode/ui/context/i18n"
 import { BasicTool, GenericTool } from "../components/basic-tool"
+import { ToolStatusLabel, ToolStatusMark } from "../components/tool-status"
 import { FileIcon } from "@opencode/ui/file-icon"
 import { Icon } from "@opencode/ui/icon"
 import { ToolErrorCard } from "../components/tool-error-card"
@@ -58,6 +59,7 @@ import {
   currentToolOutput,
   executeToolFailed,
   readImagePath,
+  shellResultFailed,
 } from "../message/current-tool-state"
 import { AssistantReasoningContent, writeClipboard } from "../message/message-content"
 import { followShellOutput } from "./shell-output"
@@ -603,6 +605,7 @@ export function CurrentContextToolGroup(props: {
       data-timeline-part-ids={props.parts.map((part) => part.id).join(",")}
     >
       <BasicTool
+        hideStatus
         icon="glasses"
         status={pending() ? "running" : "completed"}
         compact
@@ -690,6 +693,10 @@ export function CurrentContextToolGroup(props: {
                   {(group) => {
                     const tool = createMemo(() => group()[0]!)
                     const trigger = createMemo(() => currentContextToolTrigger(tool(), i18n))
+                    const status = () =>
+                      group().some((item) => item.state.status === "running" || item.state.status === "streaming")
+                        ? "running"
+                        : "completed"
 
                     const skills = createMemo(() =>
                       group().flatMap((item) => {
@@ -737,6 +744,7 @@ export function CurrentContextToolGroup(props: {
                                         output={currentToolOutput(tool())}
                                         error={currentToolError(tool())}
                                         status={tool().state.status}
+                                        time={tool().time}
                                         defaultOpen={props.toolDefaultOpen?.(tool()) ?? false}
                                         open={props.toolOpen?.(tool().id) ?? props.toolDefaultOpen?.(tool())}
                                         onOpenChange={(open) => props.onToolOpenChange?.(tool().id, open)}
@@ -764,6 +772,7 @@ export function CurrentContextToolGroup(props: {
                               >
                                 <div
                                   data-component="tool-loaded-item"
+                                  data-tool="skill"
                                   data-timeline-part-ids={group()
                                     .map((item) => item.id)
                                     .join(",")}
@@ -771,8 +780,12 @@ export function CurrentContextToolGroup(props: {
                                     name: skills().join(", "),
                                   })}
                                 >
+                                  <ToolStatusMark status={status()} />
                                   <span data-slot="tool-loaded-label" aria-hidden="true">
                                     {loaded().split(marker)[0]?.trim()}
+                                  </span>
+                                  <span data-slot="norse-skill-label" aria-hidden="true">
+                                    {i18n.t("ui.tool.skill")}
                                   </span>
                                   <span data-slot="tool-loaded-value" aria-hidden="true">
                                     <For each={skills()}>
@@ -795,11 +808,13 @@ export function CurrentContextToolGroup(props: {
                                       </span>
                                     )}
                                   </Show>
+                                  <ToolStatusLabel status={status()} />
                                 </div>
                               </Show>
                             }
                           >
                             <div data-component="tool-trigger">
+                              <ToolStatusMark status={tool().state.status} />
                               <div data-slot="basic-tool-tool-trigger-content">
                                 <div data-slot="basic-tool-tool-info">
                                   <div data-slot="basic-tool-tool-info-structured">
@@ -830,6 +845,7 @@ export function CurrentContextToolGroup(props: {
                                   </div>
                                 </div>
                               </div>
+                              <ToolStatusLabel status={tool().state.status} />
                             </div>
                           </Show>
                         </Show>
@@ -904,6 +920,7 @@ export function CurrentReadToolGroup(props: {
       }}
     >
       <div data-component="tool-trigger">
+        <ToolStatusMark status={pending() ? "running" : "completed"} />
         <div data-slot="basic-tool-tool-trigger-content">
           <div data-slot="basic-tool-tool-info">
             <div data-slot="basic-tool-tool-info-structured">
@@ -931,6 +948,7 @@ export function CurrentReadToolGroup(props: {
             </div>
           </div>
         </div>
+        <ToolStatusLabel status={pending() ? "running" : "completed"} />
         <Show when={expandable()}>
           <span data-slot="read-tool-group-arrow" aria-hidden="true">
             <Icon name="fill-triangle-down" size="small" />
@@ -1129,6 +1147,7 @@ export interface ToolProps {
   sessionID?: string
   output?: string
   status?: string
+  time?: SessionMessageAssistantTool["time"]
   hideDetails?: boolean
   defaultOpen?: boolean
   open?: boolean
@@ -1373,7 +1392,7 @@ export function ToolDisplay(
 
   return (
     <Show when={!hideQuestion()}>
-      <div data-component="tool-part-wrapper" data-timeline-part-id={props.id}>
+      <div data-component="tool-part-wrapper" data-tool={props.tool} data-timeline-part-id={props.id}>
         <Switch>
           <Match when={error()}>
             {(error) => {
@@ -1393,6 +1412,12 @@ export function ToolDisplay(
                 <ToolErrorCard
                   tool={props.tool}
                   error={error()}
+                  agent={
+                    isSubagent(props.tool)
+                      ? (taskAgent(toolInput(props.input).agent, data.store.agent).name ??
+                        i18n.t("ui.tool.agent.default"))
+                      : undefined
+                  }
                   title={
                     props.tool === "websearch"
                       ? webSearchProviderLabel(toolMetadata(props.metadata).provider, i18n)
@@ -1832,6 +1857,7 @@ ToolRegistry.register({
                   />
                 </span>
               </Show>
+              <span data-slot="task-tool-kind">{i18n.t("ui.tool.norse.subagent")}</span>
               <span data-component="task-tool-title">{title()}</span>
               <Show when={subtitle()}>
                 <span data-slot="basic-tool-tool-subtitle">{subtitle()}</span>
@@ -1854,6 +1880,19 @@ ToolRegistry.register({
           <BasicTool
             icon="task"
             status={props.status}
+            displayStatus={
+              running() ||
+              (background() && metadata().status === "running" && !data.store.session_status[childSessionId() ?? ""])
+                ? "running"
+                : background()
+                  ? "idle"
+                  : props.status
+            }
+            statusDetail={
+              <Show when={!background() && !(running() && props.status === "completed") && props.time}>
+                {(time) => <SubagentDuration time={time()} running={running()} />}
+              </Show>
+            }
             trigger={trigger()}
             hideDetails
             triggerAsLink
@@ -1868,13 +1907,57 @@ ToolRegistry.register({
           data-component="task-tool-delegating"
           class="flex h-9 w-fit max-w-full items-center gap-2 rounded-[8px] bg-v2-background-bg-layer-02 p-2.5 text-[13px] font-[530] leading-text-compact tracking-[-0.04px]"
         >
+          <ToolStatusMark status="streaming" />
           <Icon name="subagent" size="normal" class="shrink-0 text-v2-icon-icon-faint" />
           <TextShimmer text={i18n.t("ui.tool.agent.delegating")} class="min-w-0 truncate" />
+          <ToolStatusLabel status="streaming" label={i18n.t("ui.tool.status.delegating")} />
         </div>
       </Show>
     )
   },
 })
+
+function SubagentDuration(props: { time: SessionMessageAssistantTool["time"]; running: boolean }) {
+  const i18n = useI18n()
+  const [state, setState] = createStore({ visible: false, now: Date.now() })
+  let element: HTMLSpanElement | undefined
+
+  // The duration is CSS-hidden outside Norse. Observe visibility so hidden or offscreen
+  // child rows have no ticking clock, including during theme previews and switches.
+  onMount(() => {
+    const observer = new IntersectionObserver((entries) =>
+      setState(
+        "visible",
+        entries.some((entry) => entry.isIntersecting),
+      ),
+    )
+    if (element) observer.observe(element)
+    onCleanup(() => observer.disconnect())
+  })
+
+  createEffect(() => {
+    if (!props.running || !state.visible) return
+    setState("now", Date.now())
+    const timer = setInterval(() => setState("now", Date.now()), 1000)
+    onCleanup(() => clearInterval(timer))
+  })
+
+  const duration = () => {
+    const end = props.running ? state.now : props.time.completed
+    if (end === undefined) return
+    return i18n.t("ui.message.duration.seconds", {
+      count: new Intl.NumberFormat(i18n.locale()).format(
+        Math.max(0, Math.floor((end - (props.time.ran ?? props.time.created)) / 1000)),
+      ),
+    })
+  }
+
+  return (
+    <span ref={element}>
+      <Show when={duration()}>{(value) => <> · {value()}</>}</Show>
+    </span>
+  )
+}
 
 function ConsoleOutput(props: { copy: string; children: JSX.Element; variant?: "shell" }) {
   const i18n = useI18n()
@@ -1930,6 +2013,7 @@ ToolRegistry.register({
       <BasicTool
         {...props}
         icon="console"
+        displayStatus={pending() ? "running" : props.status}
         rail={false}
         hasContent
         compact
@@ -2012,15 +2096,23 @@ ToolRegistry.register({
         {...props}
         icon="console"
         rail={false}
+        displayStatus={
+          pending()
+            ? "running"
+            : shellResultFailed(props.metadata) || metadata().status === "killed" || metadata().status === "timeout"
+              ? "error"
+              : props.status
+        }
         hasContent
         compact
         allowOpenWhilePending
         trigger={(open) => (
           <div data-slot="basic-tool-tool-info-structured">
-            <div data-slot="basic-tool-tool-info-main">
+            <div data-slot="basic-tool-tool-info-main" data-shell-command={command() ? "true" : undefined}>
               <span data-slot="basic-tool-tool-title">
                 <TextShimmer text={i18n.t("ui.tool.shell")} active={pending()} />
               </span>
+              <Show when={command()}>{(command) => <span data-slot="norse-shell-command">{command()}</span>}</Show>
               <Show when={!open()}>
                 <Show
                   when={command()}
@@ -2418,9 +2510,17 @@ ToolRegistry.register({
     return (
       <Show when={name()} fallback={<TextShimmer text={i18n.t("ui.tool.skill")} active={running()} />}>
         {(name) => (
-          <div data-component="tool-loaded-item" aria-label={i18n.t("ui.tool.loadedSkill", { name: name() })}>
+          <div
+            data-component="tool-loaded-item"
+            data-tool="skill"
+            aria-label={i18n.t("ui.tool.loadedSkill", { name: name() })}
+          >
+            <ToolStatusMark status={props.status} />
             <span data-slot="tool-loaded-label" aria-hidden="true">
               {parts()[0].trim()}
+            </span>
+            <span data-slot="norse-skill-label" aria-hidden="true">
+              {i18n.t("ui.tool.skill")}
             </span>
             <span data-slot="tool-loaded-value" aria-hidden="true">
               <TextShimmer as="span" text={name()} active={running()} />
@@ -2432,6 +2532,7 @@ ToolRegistry.register({
                 </span>
               )}
             </Show>
+            <ToolStatusLabel status={props.status} />
           </div>
         )}
       </Show>

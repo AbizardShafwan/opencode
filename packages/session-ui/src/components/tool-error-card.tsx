@@ -6,11 +6,13 @@ import { Icon } from "@opencode/ui/icon"
 import { IconButton } from "@opencode/ui/icon-button"
 import { Tooltip } from "@opencode/ui/tooltip"
 import { useI18n } from "@opencode/ui/context/i18n"
+import { ToolStatusLabel, ToolStatusMark } from "./tool-status"
 
 export interface ToolErrorCardProps extends Omit<ComponentProps<typeof Card>, "children" | "variant"> {
   tool: string
   error: string
   title?: string
+  agent?: string
   defaultOpen?: boolean
   open?: boolean
   onOpenChange?: (open: boolean) => void
@@ -46,6 +48,7 @@ export function ToolErrorCard(props: ToolErrorCardProps) {
     "tool",
     "error",
     "title",
+    "agent",
     "defaultOpen",
     "open",
     "onOpenChange",
@@ -141,9 +144,16 @@ export function ToolErrorCard(props: ToolErrorCardProps) {
 
   return (
     <Card {...rest} data-kind="tool-error-card" data-open={open() ? "true" : "false"} variant="error">
-      <Collapsible class="tool-collapsible" data-open={open() ? "true" : "false"} open={open()} onOpenChange={setOpen}>
+      <Collapsible
+        class="tool-collapsible"
+        data-status="error"
+        data-open={open() ? "true" : "false"}
+        open={open()}
+        onOpenChange={setOpen}
+      >
         <Collapsible.Trigger>
           <div data-component="tool-trigger">
+            <ToolStatusMark status="error" />
             <div data-slot="basic-tool-tool-trigger-content">
               <span data-slot="basic-tool-tool-indicator" data-component="tool-error-card-icon">
                 <Icon name="outline-hexagonal-warning" />
@@ -151,7 +161,16 @@ export function ToolErrorCard(props: ToolErrorCardProps) {
               <div data-slot="basic-tool-tool-info">
                 <div data-slot="basic-tool-tool-info-structured">
                   <div data-slot="basic-tool-tool-info-main">
-                    <span data-slot="basic-tool-tool-title">{name()}</span>
+                    <span data-slot="basic-tool-tool-title" data-agent={split.agent ? "true" : undefined}>
+                      <span data-slot="tool-error-title">{name()}</span>
+                      <Show when={split.agent}>
+                        {(agent) => (
+                          <span data-slot="task-error-title">
+                            {i18n.t("ui.tool.norse.subagent")} {agent()}
+                          </span>
+                        )}
+                      </Show>
+                    </span>
                     <Show when={split.subtitle && (split.href || !(open() && state.clipped))}>
                       <Show
                         when={split.href}
@@ -181,6 +200,7 @@ export function ToolErrorCard(props: ToolErrorCardProps) {
                 </div>
               </div>
             </div>
+            <ToolStatusLabel status="error" />
             <Collapsible.Arrow />
           </div>
         </Collapsible.Trigger>

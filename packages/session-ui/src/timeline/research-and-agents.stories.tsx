@@ -1,5 +1,9 @@
 import type { JsonValue, SessionMessageAssistant, SessionMessageAssistantTool } from "@opencode/client/promise"
-import { createMemo } from "solid-js"
+import { createMemo, onCleanup, onMount } from "solid-js"
+import { useTheme } from "@opencode/ui/theme"
+import { DataProvider } from "../context/data"
+import { AssistantReasoningContent } from "../message/message-content"
+import { ToolDisplay } from "../tools/tool-renderer"
 import { createStore } from "solid-js/store"
 import type { SessionDocument } from "../document"
 import { CurrentSessionProviders, CurrentSessionTimelineStory } from "../storybook/current-session-story"
@@ -74,6 +78,95 @@ export const DelegateFocusedTasks = {
     />
   ),
 }
+
+function NorseToolPresentationStory() {
+  const theme = useTheme()
+  const previous = theme.themeId()
+  const [state, setState] = createStore({ completed: false, navigated: "", background: false, failed: false })
+  const started = Date.now() - 7_000
+  onMount(() => theme.setTheme("norse"))
+  onCleanup(() => theme.setTheme(previous))
+
+  return (
+    <section class="mx-auto flex w-full max-w-[900px] flex-col gap-4 p-6">
+      <header class="flex flex-wrap gap-3">
+        <button onClick={() => theme.setTheme(theme.themeId() === "norse" ? "oc-2" : "norse")}>Switch design</button>
+        <button onClick={() => setState("completed", true)}>Complete work</button>
+        <button onClick={() => setState("background", true)}>Move agent to background</button>
+        <button onClick={() => setState("failed", true)}>Fail work</button>
+      </header>
+      <DataProvider
+        directory="/work/memyr"
+        data={{
+          agent: [{ name: "scout" }],
+          session: [],
+          session_status: { child_scout: { type: state.completed ? "idle" : "busy" } },
+          session_diff: {},
+        }}
+        onSessionHref={(id) => `#${id}`}
+        onNavigateToSession={(id) => setState("navigated", id)}
+      >
+        <AssistantReasoningContent
+          id="norse_thinking"
+          content={{
+            type: "reasoning",
+            text: "Only measured usage belongs in the context indicator.",
+            time: { created: started, ...(state.completed ? { completed: started + 12_000 } : {}) },
+          }}
+          streaming={!state.completed}
+          defaultOpen
+        />
+        <ToolDisplay
+          id="norse_grep"
+          tool="grep"
+          status="completed"
+          input={{ pattern: "ContextUsage|cache_read", path: "crates/" }}
+          metadata={{}}
+          output={"6 matches\n\nmemyr-provider/src/lib.rs:495 cache_read_tokens"}
+          defaultOpen
+        />
+        <ToolDisplay
+          id="norse_shell"
+          tool="shell"
+          status={state.completed || state.failed ? "completed" : "running"}
+          input={{ command: "cargo clippy --workspace --all-targets -- -D warnings", description: "Check workspace" }}
+          metadata={{ ...(state.failed ? { exit: 1 } : state.completed ? { exit: 0 } : {}) }}
+          output={state.failed ? "Checks failed" : state.completed ? "All checks passed" : "Checking memyr…"}
+          defaultOpen
+        />
+        <ToolDisplay
+          id="norse_agent"
+          tool="subagent"
+          status={state.failed ? "error" : state.completed || state.background ? "completed" : "running"}
+          error={state.failed ? "The child session failed" : undefined}
+          time={{
+            created: started,
+            ran: started,
+            ...(state.completed || state.background ? { completed: started + 12_000 } : {}),
+          }}
+          input={{
+            agent: "scout",
+            description: "Map token and cache fields across the provider and session implementations",
+          }}
+          metadata={{ sessionID: "child_scout", ...(state.background ? { background: true, status: "running" } : {}) }}
+        />
+        <ToolDisplay id="norse_skill" tool="skill" status="completed" input={{ name: "changelog" }} metadata={{}} />
+        <ToolDisplay id="norse_delegating" tool="subagent" status="streaming" input={{}} metadata={{}} />
+        <ToolDisplay
+          id="norse_error"
+          tool="shell"
+          status="error"
+          input={{ command: "cargo test" }}
+          metadata={{}}
+          error="Process exited with code 1"
+        />
+      </DataProvider>
+      <output>Opened session: {state.navigated || "none"}</output>
+    </section>
+  )
+}
+
+export const NorseToolPresentation = { render: () => <NorseToolPresentationStory /> }
 
 function CodebaseExplorationStory() {
   const [state, setState] = createStore({ read: false, glob: false })

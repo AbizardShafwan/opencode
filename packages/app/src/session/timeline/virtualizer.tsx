@@ -10,6 +10,8 @@ import { isScrollKeyTarget, scrollKey, scrollKeyOwner, ScrollView } from "@openc
 import { Predicate } from "effect"
 import { Timeline, TimelineRow } from "@opencode/session-ui/timeline/projection"
 import { useLanguage } from "@/runtime/i18n/language"
+import { useTheme } from "@opencode/ui/theme/context"
+import { isNorseTheme } from "@/theme/norse"
 import {
   batch,
   createEffect,
@@ -92,6 +94,8 @@ type ViewProps = {
 
 export function createTimelineVirtualizer(input: Input) {
   const language = useLanguage()
+  const theme = useTheme()
+  const norse = () => isNorseTheme(theme.themeId())
   const active = () => input.active?.() !== false
   const isDesktop = createMediaQuery("(min-width: 768px)")
   const topOffset = () => (input.showHeader() ? 64 : isDesktop() ? 0 : 16)
@@ -885,6 +889,9 @@ export function createTimelineVirtualizer(input: Input) {
             </svg>
           </button>
         </div>
+        <Show when={norse() && input.showHeader()}>
+          <div class="pointer-events-none absolute inset-x-0 top-0 z-30">{props.header}</div>
+        </Show>
         <ScrollView
           data-slot="session-timeline-scroll"
           viewportRef={bindListRoot}
@@ -899,7 +906,10 @@ export function createTimelineVirtualizer(input: Input) {
           style={{ "--sticky-accordion-top": input.showHeader() ? "48px" : "0px" }}
         >
           <Show when={input.showHeader()} fallback={<div aria-hidden="true" class="h-4 md:hidden" />}>
-            {props.header}
+            <Show when={norse()} fallback={props.header}>
+              {/* Keep the title's measured space while clipping only the scrolling transcript below it. */}
+              <div aria-hidden="true" class="h-16" />
+            </Show>
           </Show>
           <div
             data-timeline-virtual-content

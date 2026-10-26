@@ -1,3 +1,13 @@
+[data-slot="tool-status-mark"],
+[data-slot="tool-status-label"],
+[data-slot="norse-reasoning-title"],
+[data-slot="norse-shell-command"],
+[data-slot="norse-skill-label"],
+[data-slot="task-error-title"],
+[data-slot="task-tool-kind"] {
+  display: none;
+}
+
 [data-component="tool-trigger"] {
   content-visibility: auto;
   width: 100%;

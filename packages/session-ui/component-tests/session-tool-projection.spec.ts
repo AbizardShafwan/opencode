@@ -1,5 +1,96 @@
 import { expect, story } from "../../storybook/playwright/story"
 
+story(
+  "Norse tool presentation preserves disclosure, status and child navigation across design switches",
+  async ({ mount, page }) => {
+    const root = await mount("current-session-research-agents--norse-tool-presentation", { globals: { theme: "dark" } })
+    const thinking = root.locator('[data-timeline-part-id="norse_thinking"]')
+    const agent = root.locator('[data-timeline-part-id="norse_agent"]')
+    const shell = root.locator('[data-timeline-part-id="norse_shell"]')
+    const failed = root.locator('[data-timeline-part-id="norse_error"]')
+    const body = thinking.getByText("Only measured usage belongs in the context indicator.", { exact: true })
+
+    await expect(thinking.getByRole("button")).toHaveAccessibleName(/Muninn broods/)
+    await expect
+      .poll(() =>
+        thinking
+          .locator('[data-slot="tool-status-mark"]')
+          .evaluate((element) => getComputedStyle(element, "::before").content),
+      )
+      .toBe('"᛭"')
+    await expect(body).toBeVisible()
+    await thinking.getByRole("button").click()
+    await expect(body).toBeHidden()
+    await expect(agent.getByRole("link")).toHaveAccessibleName(/subagent scout.*running/)
+    await expect(agent.locator('[data-slot="tool-status-mark"]')).toHaveCSS("color", "rgb(207, 159, 82)")
+    await expect
+      .poll(() =>
+        agent
+          .locator('[data-slot="tool-status-mark"]')
+          .evaluate((element) => getComputedStyle(element, "::before").content),
+      )
+      .toBe('"ᛇ"')
+    await expect(agent.locator('[data-slot="collapsible-content"]')).toHaveCount(0)
+    await agent.getByRole("link").focus()
+    await page.keyboard.press("Enter")
+    await expect(root.getByText("Opened session: child_scout", { exact: true })).toBeVisible()
+    await expect(shell.locator('[data-slot="tool-status-label"]')).toHaveText("running")
+    await expect(failed.locator('[data-slot="tool-status-label"]')).toHaveText("failed")
+    await failed.getByRole("button").click()
+    await expect(failed.getByText("Process exited with code 1", { exact: true })).toBeVisible()
+
+    await root.getByRole("button", { name: "Complete work", exact: true }).click()
+    await expect(agent.getByRole("link")).toHaveAccessibleName(/subagent scout.*done/)
+    await expect(agent.locator('[data-slot="tool-status-mark"]')).toHaveCSS("color", "rgb(134, 198, 143)")
+    await expect
+      .poll(() =>
+        agent
+          .locator('[data-slot="tool-status-mark"]')
+          .evaluate((element) => getComputedStyle(element, "::before").content),
+      )
+      .toBe('"ᛟ"')
+    await expect(thinking.getByRole("button")).toHaveAccessibleName(/Muninn brooded/)
+    await expect(body).toBeHidden()
+    await expect(shell.locator('[data-slot="tool-status-label"]')).toHaveText("done")
+
+    await page.setViewportSize({ width: 390, height: 844 })
+    await page.evaluate(() => document.fonts.ready.then(() => undefined))
+    const status = agent.locator('[data-slot="tool-status-label"]')
+    await expect(status).toBeInViewport()
+    const boxes = await agent.evaluate((element) => ({ width: element.clientWidth, scroll: element.scrollWidth }))
+    expect(boxes.scroll).toBeLessThanOrEqual(boxes.width)
+
+    await root.getByRole("button", { name: "Switch design", exact: true }).click()
+    await expect(status).toBeHidden()
+    await expect(thinking.getByRole("button")).toHaveAccessibleName(/Thought/)
+    await expect(agent.getByRole("link")).not.toHaveAccessibleName(/subagent scout/)
+    await root.getByRole("button", { name: "Switch design", exact: true }).click()
+    await expect(status).toBeVisible()
+    await expect(body).toBeHidden()
+  },
+)
+
+story("Norse statuses distinguish background admission and failed execution", async ({ mount }) => {
+  const root = await mount("current-session-research-agents--norse-tool-presentation", { globals: { theme: "dark" } })
+  const agent = root.locator('[data-timeline-part-id="norse_agent"]')
+  const status = agent.locator('[data-slot="tool-status-label"]')
+  await expect(status).toHaveText(/running · \d+s/)
+  await root.getByRole("button", { name: "Move agent to background", exact: true }).click()
+  await expect(status).toHaveText("running")
+  await root.getByRole("button", { name: "Complete work", exact: true }).click()
+  await expect(status).toHaveText("idle")
+  await root.getByRole("button", { name: "Fail work", exact: true }).click()
+  await expect(root.locator('[data-timeline-part-id="norse_shell"] [data-slot="tool-status-label"]')).toHaveText(
+    "failed",
+  )
+  await expect(status).toHaveText("failed")
+  await expect(agent.getByRole("button")).toHaveAccessibleName(/subagent scout.*failed/)
+  await agent.getByRole("button").click()
+  await expect(agent.getByText("The child session failed", { exact: true })).toBeVisible()
+  await agent.getByRole("link").click()
+  await expect(root.getByText("Opened session: child_scout", { exact: true })).toBeVisible()
+})
+
 // Moved from packages/app/e2e/regression/session-timeline-projection.spec.ts
 story("renders every admitted tool family and hides timeline-only exclusions", async ({ mount }) => {
   const timeline = await mount("current-session-research-agents--agent-research", { args: { scenario: "workflow" } })

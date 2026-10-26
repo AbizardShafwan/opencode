@@ -17,6 +17,7 @@ import { createStore } from "solid-js/store"
 import { Collapsible } from "@opencode/ui/collapsible"
 import type { IconProps } from "@opencode/ui/icon"
 import { TextShimmer } from "@opencode/ui/text-shimmer"
+import { ToolStatusLabel, ToolStatusMark } from "./tool-status"
 
 export type TriggerTitle = {
   title: string
@@ -43,6 +44,11 @@ export interface BasicToolProps {
   /** Declare known content without constructing lazy JSX to test its presence. */
   hasContent?: boolean
   status?: string
+  /** Display status can outlive a background tool's completed admission. */
+  displayStatus?: string
+  statusDetail?: JSX.Element
+  /** Summary rows and reasoning already describe their state in the title. */
+  hideStatus?: boolean
   hideDetails?: boolean
   defaultOpen?: boolean
   open?: boolean
@@ -231,6 +237,7 @@ export function BasicTool(props: BasicToolProps) {
       data-clickable={props.clickable ? "true" : undefined}
       data-hide-details={props.hideDetails ? "true" : undefined}
     >
+      <ToolStatusMark status={props.displayStatus ?? props.status} />
       <div data-slot="basic-tool-tool-trigger-content">
         <div data-slot="basic-tool-tool-info">
           <Switch>
@@ -290,6 +297,9 @@ export function BasicTool(props: BasicToolProps) {
           </Switch>
         </div>
       </div>
+      <Show when={!props.hideStatus}>
+        <ToolStatusLabel status={props.displayStatus ?? props.status}>{props.statusDetail}</ToolStatusLabel>
+      </Show>
       <Show when={hasChildren() && !props.hideDetails && !props.locked && (!pending() || props.allowOpenWhilePending)}>
         <Collapsible.Arrow />
       </Show>
@@ -303,6 +313,7 @@ export function BasicTool(props: BasicToolProps) {
       class="tool-collapsible"
       data-compact={props.compact ? "true" : undefined}
       data-rail={props.rail === false ? "false" : undefined}
+      data-status={props.displayStatus ?? props.status}
     >
       <Show
         when={!props.locked && (props.triggerAsLink || props.triggerHref)}

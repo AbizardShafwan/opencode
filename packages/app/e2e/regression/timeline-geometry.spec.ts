@@ -1,6 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test"
 import { timelinePresets } from "@opencode/session-ui/timeline/detail"
 import { createTwoFilesPatch } from "diff"
+import { seed } from "../utils/app"
 import {
   assistantMessage,
   historyMessages,
@@ -40,6 +41,99 @@ const contextTools = [
 const contextSelector = `[data-timeline-part-ids="${contextTools.map((tool) => tool.id).join(",")}"]`
 
 const output = (tool: string) => `Completed ${tool}.\n${"detail line\n".repeat(8)}`
+
+test("Norse clips scrolling tools below the session title without clipping the title controls", async ({ page }) => {
+  await seed(page, { theme: { id: "norse", scheme: "dark" } })
+  await setupTimeline(page, {
+    messages: [
+      userMessage(),
+      assistantMessage([
+        ...Array.from({ length: 24 }, (_, index) =>
+          toolPart(`norse_clip_${index}`, "shell", "completed", {
+            command: `echo CLIPPED_TOOL_${index} must not remain readable behind the glass header`,
+          }),
+        ),
+        textPart("clip_tail", "Inspection complete.\n\n".repeat(20)),
+      ]),
+    ],
+  })
+  const header = page.getByRole("button", { name: "Used 24 Shell", exact: true })
+  await header.click()
+  await expect(page.locator('[data-slot="context-tool-group-item"]')).toHaveCount(24)
+  await page.evaluate(() => document.fonts.ready.then(() => undefined))
+  const scroller = page.locator('[data-slot="session-timeline-scroll"] > [data-scrollable]')
+  await scroller.hover()
+  await page.mouse.wheel(0, -100)
+  await expect
+    .poll(() =>
+      page
+        .getByRole("button", { name: "Jump to latest", exact: true })
+        .evaluate((node) => node.checkVisibility({ checkOpacity: true })),
+    )
+    .toBe(true)
+  // Place a real tool inside the title's 48px strip. It must be clipped, not merely covered by the title.
+  const tool = page.locator('[data-component="tool-part-wrapper"][data-timeline-part-id="norse_clip_8"]')
+  await tool.evaluate((node) => {
+    const viewport = node.closest<HTMLElement>('[data-scrollable]')!
+    viewport.scrollTop += node.getBoundingClientRect().top - viewport.getBoundingClientRect().top - 16
+  })
+  await expect
+    .poll(async () => {
+      const bounds = await tool.boundingBox()
+      const viewport = await scroller.boundingBox()
+      if (!bounds || !viewport) throw new Error("Missing tool viewport")
+      return Math.round(bounds.y - viewport.y)
+    })
+    .toBe(16)
+  await page.evaluate(() => document.getAnimations().forEach((animation) => animation.pause()))
+  const bounds = await header.boundingBox()
+  const viewport = await scroller.boundingBox()
+  if (!bounds || !viewport) throw new Error("Missing sticky header viewport")
+  const clip = { x: bounds.x, y: viewport.y, width: bounds.width, height: 48 }
+  const visible = await page.screenshot({ clip })
+  const content = page.locator('[data-timeline-virtual-content]')
+  await content.evaluate((node) => (node.style.visibility = "hidden"))
+  const hidden = await page.screenshot({ clip })
+  await content.evaluate((node) => node.style.removeProperty("visibility"))
+  expect(visible.equals(hidden), "Scrolled tools must contribute no pixels above the glass").toBe(true)
+
+  // Put text behind the glass itself. A computed blur is insufficient when an ancestor mask blocks sampling.
+  await tool.evaluate((node) => {
+    const viewport = node.closest<HTMLElement>('[data-scrollable]')!
+    viewport.scrollTop += node.getBoundingClientRect().top - viewport.getBoundingClientRect().top - 52
+  })
+  const glass = { x: bounds.x + 180, y: viewport.y + 48, width: 300, height: 36 }
+  const throughGlass = await page.screenshot({ clip: glass })
+  await tool.evaluate((node) => (node.style.visibility = "hidden"))
+  const emptyGlass = await page.screenshot({ clip: glass })
+  await tool.evaluate((node) => node.style.removeProperty("visibility"))
+  const contrast = await page.evaluate(
+    async (sources) => {
+      const pixels = await Promise.all(
+        sources.map(async (source) => {
+          const image = new Image()
+          image.src = source
+          await image.decode()
+          const canvas = document.createElement("canvas")
+          canvas.width = image.naturalWidth
+          canvas.height = image.naturalHeight
+          const context = canvas.getContext("2d")!
+          context.drawImage(image, 0, 0)
+          return context.getImageData(0, 0, canvas.width, canvas.height).data
+        }),
+      )
+      return pixels[0].reduce((max, channel, index) => Math.max(max, Math.abs(channel - pixels[1][index])), 0)
+    },
+    [throughGlass, emptyGlass].map((image) => `data:image/png;base64,${image.toString("base64")}`),
+  )
+  expect(contrast, "Glass should diffuse the glyphs into low-contrast color, not leave readable text").toBeLessThan(12)
+
+  const title = page.getByRole("heading", { name: "Timeline visual stability", exact: true })
+  await title.click()
+  await expect(page.locator('input[data-slot="session-title-child"]')).toBeFocused()
+  await page.locator('input[data-slot="session-title-child"]').press("Escape")
+  await expect(title).toBeVisible()
+})
 
 test("small upward wheel offers recovery and resumes following streamed output", async ({ page }) => {
   const id = "prt_small_scroll"

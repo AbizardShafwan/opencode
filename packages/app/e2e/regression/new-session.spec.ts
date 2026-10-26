@@ -51,6 +51,92 @@ test("the new session screen does not show session details", async ({ page }) =>
   await expect(page.getByRole("button", { name: "Session details", exact: true })).toHaveCount(0)
 })
 
+test("Norse centers the welcome and composer together and keeps expanded drafts reachable", async ({ page }) => {
+  await openDraft(page, { name: "NorseLanding", seed: { theme: { id: "norse", scheme: "dark" } } })
+  const panel = page.locator('[data-component="new-session"]')
+  const content = page.locator('[data-slot="new-session-content"] > div')
+  const greeting = page.getByRole("heading", { name: "Velkominn, seeker.", exact: true })
+  const subtitle = page.getByText("Ask, and the well remembers.", { exact: true })
+  await expect(greeting).toBeVisible()
+  await page.evaluate(() => document.fonts.ready.then(() => undefined))
+
+  for (const viewport of [
+    { width: 1600, height: 1000 },
+    { width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(viewport)
+    await expect
+      .poll(async () => {
+        const outer = await panel.boundingBox()
+        const inner = await content.boundingBox()
+
+        if (!outer || !inner) throw new Error("Missing landing bounds")
+        return Math.abs(inner.y + inner.height / 2 - (outer.y + outer.height / 2))
+      })
+      .toBeLessThan(2)
+    await expect
+      .poll(async () => {
+        const title = await greeting.boundingBox()
+        const description = await subtitle.boundingBox()
+
+        if (!title || !description) throw new Error("Missing welcome text")
+        return description.y - title.y - title.height
+      })
+      .toBeGreaterThanOrEqual(15)
+  }
+
+  await page.setViewportSize({ width: 390, height: 400 })
+  await page.getByRole("button", { name: "Expand editor", exact: true }).click()
+  await expect(page.locator('[data-component="composer"]')).toHaveAttribute("data-expanded", "true")
+  await greeting.scrollIntoViewIfNeeded()
+  await expect(greeting).toBeInViewport()
+  const project = page.getByRole("button", { name: "N NorseLanding", exact: true })
+  await project.scrollIntoViewIfNeeded()
+  await expect(project).toBeInViewport()
+  await project.click()
+  await expect(page.getByRole("menu")).toBeVisible()
+})
+
+test("Norse ambient gradients remain visible through the app root", async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 1000 })
+  await page.emulateMedia({ reducedMotion: "no-preference" })
+  await openDraft(page, { name: "NorseAmbient", seed: { theme: { id: "norse", scheme: "dark" } } })
+  const backdrop = page.locator('[data-slot="norse-backdrop"]')
+  await expect(backdrop).toBeVisible()
+  await backdrop.evaluate((element) => {
+    element.getAnimations({ subtree: true }).forEach((animation) => {
+      animation.pause()
+      animation.currentTime = 0
+    })
+  })
+  const screenshot = await page.screenshot()
+  const pixels = await page.evaluate(async (source) => {
+    const image = new Image()
+    image.src = source
+    await image.decode()
+    const canvas = document.createElement("canvas")
+    canvas.width = image.naturalWidth
+    canvas.height = image.naturalHeight
+    const context = canvas.getContext("2d")!
+    context.drawImage(image, 0, 0)
+    return [
+      [800, 100],
+      [300, 800],
+      [1400, 500],
+    ].map(([x, y]) => Array.from(context.getImageData(x, y, 1, 1).data))
+  }, `data:image/png;base64,${screenshot.toString("base64")}`)
+  // Background-only samples from the supplied mock at the same viewport and aurora phase.
+  // One channel level allows raster rounding without hiding an opaque layer over the ambient light.
+  const reference = [
+    [49, 56, 92, 255],
+    [53, 46, 42, 255],
+    [45, 54, 92, 255],
+  ]
+  pixels.forEach((pixel, index) => {
+    pixel.forEach((channel, color) => expect(Math.abs(channel - reference[index][color])).toBeLessThanOrEqual(1))
+  })
+})
+
 test("the dark new session panel exposes no lighter background at its rounded corners", async ({ page }) => {
   await page.setViewportSize({ width: 935, height: 522 })
   await openDraft(page, { name: "PanelCorner", seed: { theme: { id: "oc-2", scheme: "dark" } } })

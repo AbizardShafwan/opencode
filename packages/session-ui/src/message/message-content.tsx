@@ -817,6 +817,7 @@ export function AssistantReasoningContent(props: {
       <BasicTool
         icon="mcp"
         status={props.streaming ? "running" : "completed"}
+        hideStatus
         compact
         hasContent
         allowOpenWhilePending
@@ -835,6 +836,9 @@ export function AssistantReasoningContent(props: {
                   text={i18n.t(props.streaming ? "ui.sessionTurn.status.thinking" : "ui.message.thought")}
                   active={props.streaming}
                 />
+                <span data-slot="norse-reasoning-title">
+                  {i18n.t(props.streaming ? "ui.message.norse.thinking" : "ui.message.norse.thought")}
+                </span>
               </span>
               <Show
                 when={props.streaming && !open()}

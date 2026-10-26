@@ -4,6 +4,72 @@ import { openDraft, openSession } from "../utils/workspace"
 
 test.use({ permissions: ["clipboard-read", "clipboard-write"] })
 
+test("Norse agent modes share one segmented control and keep selection keyboard accessible", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await openSession(page, {
+    name: "NorseComposer",
+    agents: [
+      { id: "build", name: "Build" },
+      { id: "plan", name: "Plan" },
+    ],
+    seed: { theme: { id: "norse", scheme: "dark" }, settings: { general: { showCustomAgents: true } } },
+  })
+
+  const composer = page.locator('[data-component="composer"]')
+  const modes = composer.getByRole("group", { name: "Choose agent", exact: true })
+  const plan = modes.getByRole("button", { name: "plan", exact: true })
+  const build = modes.getByRole("button", { name: "build", exact: true })
+  await expect(build).toHaveAttribute("aria-pressed", "true")
+  await expect(plan).toHaveAttribute("aria-pressed", "false")
+  // The general composer-button skin must not turn the inactive segment into a separate button.
+  await expect(plan).toHaveCSS("border-top-width", "0px")
+  await expect(plan).toHaveCSS("background-color", "rgba(0, 0, 0, 0)")
+  await expect(build).not.toHaveCSS("background-color", "rgba(0, 0, 0, 0)")
+  await plan.focus()
+  await expect(plan).toBeFocused()
+  await expect(plan).toHaveCSS("outline-style", "solid")
+  await plan.press("Enter")
+  await expect(plan).toHaveAttribute("aria-pressed", "true")
+  await expect(build).toHaveAttribute("aria-pressed", "false")
+  await expect(composer).toHaveAttribute("data-plan", "true")
+  await expect(build).toHaveCSS("border-top-width", "0px")
+  await expect(build).toHaveCSS("background-color", "rgba(0, 0, 0, 0)")
+  await expect(plan).not.toHaveCSS("background-color", "rgba(0, 0, 0, 0)")
+  await build.click()
+  await expect(build).toHaveAttribute("aria-pressed", "true")
+  await expect(composer).not.toHaveAttribute("data-plan", "true")
+})
+
+test("Norse composer has a thin moving border and respects reduced motion", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" })
+  await openDraft(page, {
+    name: "NorseBorder",
+    seed: { theme: { id: "norse", scheme: "dark" } },
+  })
+  const composer = page.locator('[data-component="composer"]')
+  await expect(composer).toHaveCSS("animation-name", "norse-gold-border")
+  const positions = await composer.evaluate((element) => {
+    const animation = element
+      .getAnimations()
+      .find((item) => item instanceof CSSAnimation && item.animationName === "norse-gold-border")
+
+    if (!animation) throw new Error("Missing composer border animation")
+    animation.pause()
+    const positions = [0, 5500].map((time) => {
+      animation.currentTime = time
+      return getComputedStyle(element).backgroundPosition
+    })
+    animation.play()
+    return positions
+  })
+  // An !important background shorthand can leave the animation running without moving any pixels.
+  expect(positions[0]).not.toBe(positions[1])
+  await expect(composer).toHaveCSS("border-top-width", "2px")
+  await page.emulateMedia({ reducedMotion: "reduce" })
+  await expect(composer).toHaveCSS("animation-name", "none")
+  await expect(composer).toHaveCSS("border-top-width", "2px")
+})
+
 test("the free usage limit opens the Go dialog once, leaves a readable notice, and restores the prompt", async ({
   page,
   context,

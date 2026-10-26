@@ -62,6 +62,7 @@ export interface MockServerConfig {
   // Without it, writes answer 501 MockUnsupported.
   onFileWrite?: (input: { path: string; directory: string; body: string }) => void
   configEntries?: unknown[]
+  agents?: { id: string; name: string }[]
   directory: string
   project: unknown
   // Replaces the `/api/project` inventory, which defaults to `[project]`.
@@ -854,16 +855,13 @@ function mockHandlers(
         agent: (ctx) =>
           Effect.succeed({
             location: location(config, requestDirectory(config, ctx.request)),
-            data: [
-              {
-                id: "build",
-                name: "Build",
-                mode: "primary",
-                hidden: false,
-                request: { settings: {}, headers: {}, body: {} },
-                permissions: [],
-              },
-            ],
+            data: (config.agents ?? [{ id: "build", name: "Build" }]).map((agent) => ({
+              ...agent,
+              mode: "primary",
+              hidden: false,
+              request: { settings: {}, headers: {}, body: {} },
+              permissions: [],
+            })),
           }),
         provider: () =>
           Effect.succeed({ location: location(config), data: currentProviders(resolve(config.provider)) }),

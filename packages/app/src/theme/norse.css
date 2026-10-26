@@ -21,6 +21,9 @@ html[data-theme="norse"] {
   --norse-border: #3a4152;
   --norse-ok: #86c68f;
   --norse-err: #cc7a7a;
+  --norse-tool-active: var(--norse-gold);
+  --norse-tool-success: var(--norse-ok);
+  --norse-tool-error: var(--norse-err);
   --norse-link: #9db2ff;
   --norse-rail-bg: rgba(26, 26, 32, 0.96);
   --norse-prompt-bg: rgba(24, 35, 63, 0.96);
@@ -49,6 +52,9 @@ html[data-theme="norse"][data-color-scheme="light"] {
   --norse-border: #aeb9ca;
   --norse-ok: #3f7a4f;
   --norse-err: #a94747;
+  --norse-tool-active: color-mix(in srgb, var(--norse-gold) 70%, var(--norse-text));
+  --norse-tool-success: color-mix(in srgb, var(--norse-ok) 75%, var(--norse-text));
+  --norse-tool-error: color-mix(in srgb, var(--norse-err) 75%, var(--norse-text));
   --norse-link: #2d4bc2;
   --norse-rail-bg: rgba(226, 231, 240, 0.97);
   --norse-prompt-bg: rgba(232, 236, 244, 0.97);
@@ -82,6 +88,8 @@ html[data-theme="norse"] :focus-visible {
   outline-offset: 2px;
 }
 
+/* The radial light is on body; both app layers must let it reach the viewport. */
+html[data-theme="norse"] #root,
 html[data-theme="norse"] [data-component="app-shell"] {
   background: transparent;
 }
@@ -89,7 +97,7 @@ html[data-theme="norse"] [data-component="app-shell"] {
 /* ── Aurora and runes ────────────────────────────────────────────────── */
 
 html[data-theme="norse"] [data-slot="norse-backdrop"] {
-  position: absolute;
+  position: fixed;
   inset: 0;
   z-index: 0;
   overflow: hidden;
@@ -756,7 +764,7 @@ html[data-theme="norse"] [data-component="norse-welcome"] {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 16px;
   text-align: center;
 }
 
@@ -779,7 +787,7 @@ html[data-theme="norse"][data-color-scheme="light"] [data-slot="norse-welcome-gr
 }
 
 html[data-theme="norse"] [data-slot="norse-welcome-subtitle"] {
-  margin: -10px 0 0;
+  margin: 0;
   max-width: 600px;
   color: var(--norse-muted);
   font-size: 15px;
@@ -851,7 +859,11 @@ html[data-theme="norse"] [data-component="new-session"] {
 }
 
 html[data-theme="norse"] [data-slot="new-session-content"] {
-  top: 22%;
+  inset: 0;
+  /* Center the whole group, but start at the top when an expanded draft outgrows the viewport. */
+  align-items: safe center;
+  overflow-y: auto;
+  padding-block: 52px;
   z-index: 1;
 }
 
@@ -868,7 +880,7 @@ html[data-theme="norse"] [data-component="new-session-wordmark"] {
 html[data-theme="norse"] [data-slot="new-session-content"] > div > div.mt-8 {
   width: 100%;
   gap: 18px !important;
-  margin-top: 30px !important;
+  margin-top: 26px !important;
 }
 
 html[data-theme="norse"] [data-slot="new-session-content"] [data-component="composer"] {
@@ -895,29 +907,36 @@ html[data-theme="norse"] [data-component="session-composer-dock"] > div {
 }
 
 html[data-theme="norse"] [data-component="composer"] {
+  --norse-composer-accent: var(--norse-gold);
+  --norse-composer-highlight: var(--norse-royal);
   border: 2px solid transparent !important;
   border-radius: 18px !important;
-  background:
-    linear-gradient(var(--norse-prompt-bg), var(--norse-prompt-bg)) padding-box,
+  /* Keep background-position out of !important declarations so the border sweep can animate. */
+  background-color: transparent !important;
+  background-image:
+    linear-gradient(var(--norse-prompt-bg), var(--norse-prompt-bg)),
     linear-gradient(
-        90deg,
-        rgba(207, 159, 82, 0.22),
-        rgba(207, 159, 82, 0.7),
-        rgba(97, 131, 255, 0.7),
-        rgba(207, 159, 82, 0.7),
-        rgba(207, 159, 82, 0.22)
-      )
-      border-box !important;
-  background-size: auto, 320% 100% !important;
+      90deg,
+      color-mix(in srgb, var(--norse-composer-accent) 22%, transparent),
+      color-mix(in srgb, var(--norse-composer-accent) 70%, transparent),
+      color-mix(in srgb, var(--norse-composer-highlight) 70%, transparent),
+      color-mix(in srgb, var(--norse-composer-accent) 70%, transparent),
+      color-mix(in srgb, var(--norse-composer-accent) 22%, transparent)
+    ) !important;
+  background-origin: padding-box, border-box !important;
+  background-clip: padding-box, border-box !important;
+  background-size:
+    auto,
+    320% 100% !important;
   box-shadow:
-    0 0 40px color-mix(in srgb, var(--norse-gold) 15%, transparent),
+    0 0 40px color-mix(in srgb, var(--norse-composer-accent) 15%, transparent),
     0 24px 70px rgba(0, 0, 0, 0.32) !important;
   animation: norse-gold-border 11s linear infinite;
 }
 
 html[data-theme="norse"][data-color-scheme="light"] [data-component="composer"] {
   box-shadow:
-    0 0 40px color-mix(in srgb, var(--norse-gold) 10%, transparent),
+    0 0 40px color-mix(in srgb, var(--norse-composer-accent) 10%, transparent),
     0 20px 50px rgba(27, 34, 51, 0.12) !important;
 }
 
@@ -1028,12 +1047,6 @@ html[data-theme="norse"] [data-session-title] > div {
   padding: 0 !important;
 }
 
-html[data-theme="norse"] [data-session-title] + div {
-  background: linear-gradient(to bottom, var(--norse-page), transparent) !important;
-  height: 28px;
-  margin-top: -24px;
-}
-
 html[data-theme="norse"] [data-session-title] :is(button, [role="button"]) {
   color: var(--norse-muted);
 }
@@ -1043,8 +1056,26 @@ html[data-theme="norse"] [data-session-title] :is(button, [role="button"]):hover
   background: var(--norse-royal-soft);
 }
 
-html[data-theme="norse"] [data-slot="session-timeline-scroll"] {
-  mask-image: linear-gradient(to bottom, #000 calc(100% - 46px), transparent);
+/* Keep the soft bottom edge on its own layer: masking the scrollview prevents nested glass from blurring. */
+html[data-theme="norse"] [data-slot="session-timeline-scroll"]::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0;
+  height: 46px;
+  z-index: 22;
+  pointer-events: none;
+  backdrop-filter: blur(6px);
+  mask-image: linear-gradient(to bottom, transparent, #000);
+}
+
+/* Only clip once the title is outside: theme selection can precede asynchronous stylesheet loading. */
+html[data-theme="norse"]
+  [data-slot="session-timeline-scroll"]
+  > [data-scrollable]:not(:has(> [data-session-title])) {
+  position: absolute;
+  inset: 0;
+  /* Unlike clip-path, a rectangular clip does not create a backdrop root that defeats the glass blur. */
+  clip: rect(var(--sticky-accordion-top, 0px), auto, auto, 0);
 }
 
 html[data-theme="norse"] [data-timeline-virtual-content] {
@@ -1133,8 +1164,16 @@ html[data-theme="norse"] [data-slot="user-message-body"] {
 }
 
 html[data-theme="norse"] [data-slot="user-message-text"],
-html[data-theme="norse"] body [data-workspace-session] [data-component="user-message"]:not([data-pending]) [data-slot="user-message-text"],
-html[data-theme="norse"] body [data-local-session] [data-component="user-message"]:not([data-pending]) [data-slot="user-message-text"] {
+html[data-theme="norse"]
+  body
+  [data-workspace-session]
+  [data-component="user-message"]:not([data-pending])
+  [data-slot="user-message-text"],
+html[data-theme="norse"]
+  body
+  [data-local-session]
+  [data-component="user-message"]:not([data-pending])
+  [data-slot="user-message-text"] {
   border: 1px solid var(--norse-royal-line);
   border-radius: 16px 16px 5px 16px;
   background: linear-gradient(155deg, rgba(40, 56, 94, 0.95), rgba(23, 34, 60, 0.95));
@@ -1248,51 +1287,10 @@ html[data-theme="norse"] [data-slot="text-part-copy-wrapper"] {
 
 /* Reasoning and tool rows read as rune + line, not cards. */
 html[data-theme="norse"] [data-component="reasoning-part"] {
-  max-width: 84%;
-  margin: 16px 0 16px 42px;
+  max-width: 100%;
+  margin: 14px 0;
   border: 0;
   padding: 0;
-}
-
-html[data-theme="norse"] [data-component="reasoning-part"] [data-component="collapsible"] {
-  border: 0;
-  background: transparent;
-}
-
-html[data-theme="norse"] [data-component="reasoning-part"] [data-component="tool-trigger"] {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-  min-height: 30px;
-  border: 0;
-  background: transparent;
-  padding: 2px 0;
-  color: var(--norse-muted);
-}
-
-html[data-theme="norse"] [data-component="reasoning-part"] [data-component="tool-trigger"]::before {
-  content: "᛭";
-  flex: 0 0 16px;
-  color: var(--norse-gold);
-  font-family: var(--norse-rune);
-  font-size: 15px;
-  text-align: center;
-}
-
-html[data-theme="norse"] [data-component="reasoning-part"] [data-slot="basic-tool-tool-title"] {
-  color: var(--norse-gold);
-  font-style: italic;
-  font-weight: 500;
-}
-
-html[data-theme="norse"] [data-component="reasoning-part"] [data-component="markdown"] {
-  border-inline-start: 1px solid color-mix(in srgb, var(--norse-gold) 38%, transparent);
-  margin-inline-start: 7px;
-  padding: 6px 0 6px 20px;
-  color: var(--norse-muted);
-  font-size: 13.5px;
-  font-style: italic;
-  line-height: 1.62;
 }
 
 html[data-theme="norse"] [data-component="collapsible"].tool-collapsible {
@@ -1303,33 +1301,158 @@ html[data-theme="norse"] [data-component="collapsible"].tool-collapsible {
 
 html[data-theme="norse"] [data-component="collapsible"].tool-collapsible > [data-slot="collapsible-trigger"] {
   display: flex;
+  height: auto;
   min-height: 32px;
   align-items: center;
-  gap: 11px;
   border: 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--norse-border) 46%, transparent);
   border-radius: 0;
   background: transparent;
   box-shadow: none;
   padding: 7px 0;
   color: var(--norse-muted);
+  text-align: start;
 }
 
-html[data-theme="norse"] [data-component="collapsible"].tool-collapsible > [data-slot="collapsible-trigger"]:hover {
-  background: color-mix(in srgb, var(--norse-royal) 5%, transparent);
+/* Sticky summaries must mask scrolling rows and retain the heights used by nested file offsets. */
+html[data-theme="norse"]
+  :is(
+    [data-component="collapsed-tool-group"],
+    [data-component="edit-tool"],
+    [data-component="write-tool"],
+    [data-component="apply-patch-tool"]
+  )
+  > [data-component="collapsible"].tool-collapsible
+  > [data-slot="collapsible-trigger"]:is([aria-expanded="true"], [data-locked]) {
+  min-height: 0;
+  padding-block: 0 var(--tool-content-gap);
+  background: var(--v2-background-bg-base);
 }
 
-html[data-theme="norse"] [data-component="collapsible"].tool-collapsible > [data-slot="collapsible-trigger"]::before {
-  content: "ᛟ";
+html[data-theme="norse"]
+  [data-component="collapsed-tool-group"]
+  > [data-component="collapsible"].tool-collapsible
+  > [data-slot="collapsible-trigger"][aria-expanded="true"] {
+  height: calc(28px + var(--tool-content-gap));
+  padding-block: 0;
+  padding-inline: 8px;
+  border-radius: 8px;
+  box-shadow: inset 0 0 0 1px var(--norse-gold-line);
+  outline-offset: -2px;
+}
+
+html[data-theme="norse"]
+  [data-component="collapsed-tool-group"]
+  > [data-component="collapsible"].tool-collapsible
+  > [data-slot="collapsible-trigger"]
+  > [data-component="tool-trigger"]
+  > [data-slot="tool-status-mark"] {
+  align-self: center;
+}
+
+@supports (backdrop-filter: blur(24px)) {
+  html[data-theme="norse"]
+    [data-component="collapsed-tool-group"]
+    > [data-component="collapsible"].tool-collapsible
+    > [data-slot="collapsible-trigger"][aria-expanded="true"] {
+    background-color: color-mix(in srgb, var(--norse-card) 60%, transparent);
+    background-image: linear-gradient(110deg, var(--norse-royal-soft), var(--norse-gold-soft));
+    backdrop-filter: blur(24px) saturate(1.2);
+  }
+}
+
+html[data-theme="norse"]
+  :is([data-component="edit-tool"], [data-component="write-tool"], [data-component="apply-patch-tool"])
+  > [data-component="collapsible"].tool-collapsible
+  > [data-slot="collapsible-trigger"]:is([aria-expanded="true"], [data-locked]) {
+  height: var(--sticky-accordion-offset);
+}
+
+html[data-theme="norse"] [data-component="tool-trigger"],
+html[data-theme="norse"]
+  [data-component="collapsible"].tool-collapsible
+  > [data-slot="collapsible-trigger"]
+  [data-component="tool-trigger"] {
+  min-width: 0;
+  gap: 8px;
+  line-height: var(--line-height-compact);
+}
+
+html[data-theme="norse"] [data-component="tool-trigger"] > [data-slot="basic-tool-tool-trigger-content"] {
+  flex: 1 1 0%;
+  min-width: 0;
+  max-width: none;
+}
+
+html[data-theme="norse"] [data-slot="basic-tool-tool-info"],
+html[data-theme="norse"] [data-slot="basic-tool-tool-info-structured"],
+html[data-theme="norse"] [data-slot="basic-tool-tool-info-main"] {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+html[data-theme="norse"] [data-component="context-tool-group-trigger"] [data-slot="basic-tool-tool-title"] {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+html[data-theme="norse"] [data-slot="tool-status-mark"] {
+  display: inline-flex;
   flex: 0 0 16px;
-  color: var(--norse-gold);
+  align-self: baseline;
+  justify-content: center;
+  margin-inline-end: 3px;
+  color: var(--norse-muted);
   font-family: var(--norse-rune);
-  font-size: 14px;
-  text-align: center;
+  font-size: 15px;
+  line-height: var(--line-height-base);
+  user-select: none;
 }
 
-html[data-theme="norse"] [data-component="collapsible"].tool-collapsible [data-component="tool-trigger"]::before {
-  display: none;
+html[data-theme="norse"] [data-slot="tool-status-mark"]::before {
+  content: "ᛟ";
+}
+
+html[data-theme="norse"] [data-slot="tool-status-label"] {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: baseline;
+  gap: 4px;
+  margin-inline-start: auto;
+  padding-inline-start: 4px;
+  color: var(--norse-muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  line-height: var(--line-height-compact);
+  white-space: nowrap;
+}
+
+html[data-theme="norse"] [data-slot="tool-status-mark"][data-status="streaming"],
+html[data-theme="norse"] [data-slot="tool-status-mark"][data-status="running"],
+html[data-theme="norse"] [data-slot="tool-status-label"][data-status="streaming"],
+html[data-theme="norse"] [data-slot="tool-status-label"][data-status="running"] {
+  color: var(--norse-tool-active);
+}
+
+html[data-theme="norse"] [data-slot="tool-status-mark"][data-status="streaming"],
+html[data-theme="norse"] [data-slot="tool-status-mark"][data-status="running"] {
+  animation: norse-pulse 1.4s ease-in-out infinite;
+}
+
+html[data-theme="norse"] [data-slot="tool-status-mark"][data-status="streaming"]::before,
+html[data-theme="norse"] [data-slot="tool-status-mark"][data-status="running"]::before {
+  content: "ᛇ";
+}
+
+html[data-theme="norse"] [data-slot="tool-status-mark"][data-status="completed"],
+html[data-theme="norse"] [data-slot="tool-status-label"][data-status="completed"] {
+  color: var(--norse-tool-success);
+}
+
+html[data-theme="norse"] [data-slot="tool-status-mark"][data-status="error"],
+html[data-theme="norse"] [data-slot="tool-status-label"][data-status="error"] {
+  color: var(--norse-tool-error);
 }
 
 html[data-theme="norse"] [data-component="collapsible"].tool-collapsible > [data-slot="collapsible-content"] {
@@ -1352,14 +1475,282 @@ html[data-theme="norse"] [data-slot="basic-tool-tool-arg"],
 html[data-theme="norse"] [data-slot="basic-tool-tool-action"] {
   color: var(--norse-muted);
   font-size: 12px;
+  line-height: var(--line-height-compact);
+}
+
+html[data-theme="norse"] [data-slot="basic-tool-tool-arg"] {
+  font-family: var(--norse-mono);
+}
+
+html[data-theme="norse"] [data-slot="basic-tool-tool-subtitle"] {
+  font-family: var(--norse-mono);
+}
+
+html[data-theme="norse"] [data-component="bash-output"] {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+html[data-theme="norse"] [data-component="bash-output"] [data-slot="bash-command"],
+html[data-theme="norse"] [data-component="bash-output"] [data-slot="bash-result"] {
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+}
+
+html[data-theme="norse"] [data-slot="norse-shell-command"] {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--norse-text);
+  font-weight: 700;
+}
+
+html[data-theme="norse"] [data-slot="norse-shell-command"]::before {
+  content: "$ ";
+  color: var(--norse-muted);
+  font-weight: 400;
+}
+
+html[data-theme="norse"] [data-shell-command="true"] > [data-slot="basic-tool-tool-title"],
+html[data-theme="norse"] [data-shell-command="true"] > [data-component="shell-submessage"] {
+  display: none;
+}
+
+html[data-theme="norse"] [data-component="reasoning-part"] [data-slot="basic-tool-tool-title"] {
+  color: var(--norse-tool-active);
+  font-style: italic;
+  font-weight: 500;
+}
+
+html[data-theme="norse"]
+  [data-component="reasoning-part"]
+  [data-slot="basic-tool-tool-title"]
+  > [data-component="text-shimmer"] {
+  display: none;
+}
+
+html[data-theme="norse"] [data-slot="norse-reasoning-title"] {
+  display: inline;
+}
+
+html[data-theme="norse"] [data-component="reasoning-part"] [data-slot="tool-status-mark"],
+html[data-theme="norse"] [data-component="reasoning-part"] [data-slot="tool-status-label"] {
+  color: var(--norse-tool-active);
+}
+
+html[data-theme="norse"] [data-component="reasoning-part"] [data-slot="tool-status-label"] {
+  display: none;
+}
+
+html[data-theme="norse"]
+  [data-component="tool-part-wrapper"]:is([data-tool="grep"], [data-tool="glob"], [data-tool="list"])
+  [data-component="tool-output"] {
+  font-family: var(--norse-mono);
+  font-size: 12px;
+  line-height: 1.75;
+  color: var(--norse-muted);
+}
+
+html[data-theme="norse"]
+  [data-component="tool-part-wrapper"]:is([data-tool="grep"], [data-tool="glob"], [data-tool="list"])
+  [data-component="tool-output"]
+  [data-component="markdown"] {
+  font: inherit;
+  color: inherit;
+}
+
+html[data-theme="norse"]
+  [data-component="tool-part-wrapper"]:is([data-tool="grep"], [data-tool="glob"], [data-tool="list"])
+  [data-component="tool-output"]
+  p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+html[data-theme="norse"] [data-component="reasoning-part"] [data-slot="tool-status-mark"]::before {
+  content: "᛭";
+}
+
+html[data-theme="norse"]
+  [data-component="reasoning-part"]
+  [data-component="collapsible"].tool-collapsible
+  > [data-slot="collapsible-content"] {
+  border-inline-start-color: var(--norse-gold-line);
+  border-radius: 0 10px 10px 0;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--norse-gold) 6%, transparent), transparent);
+  padding: 8px 14px 8px 22px;
+}
+
+html[data-theme="norse"] [data-component="reasoning-part"] [data-component="markdown"] {
+  color: var(--norse-muted);
+  font-size: 13.5px;
+  font-style: italic;
+  line-height: 1.62;
+}
+
+html[data-theme="norse"] [data-component="task-tool-card"],
+html[data-theme="norse"] [data-component="task-tool-card"] [data-component="task-tool-surface"],
+html[data-theme="norse"] [data-component="task-tool-card"]:hover [data-component="task-tool-surface"],
+html[data-theme="norse"] [data-component="task-tool-card"]:focus-visible [data-component="task-tool-surface"] {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+html[data-theme="norse"] [data-component="task-tool-card"] [data-component="task-tool-icon"],
+html[data-theme="norse"] [data-component="task-tool-card"] [data-component="task-tool-spinner"],
+html[data-theme="norse"] [data-component="task-tool-card"] [data-component="task-tool-action"],
+html[data-theme="norse"] [data-component="task-tool-delegating"] > [data-slot="icon-svg"] {
+  display: none;
+}
+
+html[data-theme="norse"] [data-slot="task-tool-kind"] {
+  display: inline;
+  flex: 0 0 auto;
+  color: var(--norse-text);
+  font-weight: 700;
+}
+
+html[data-theme="norse"] [data-component="task-tool-card"] [data-component="task-tool-title"] {
+  height: auto;
+  flex: 0 0 auto;
+  max-width: 40%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-transform: none;
+  color: var(--norse-text);
+  font-weight: 700;
+  line-height: var(--line-height-compact);
+}
+
+html[data-theme="norse"] [data-component="task-tool-card"] [data-slot="basic-tool-tool-subtitle"] {
+  flex: 0 1 auto;
+  color: var(--norse-muted);
+  font-size: 12px;
+  line-height: var(--line-height-compact);
+  font-family: var(--font-family-sans);
+}
+
+html[data-theme="norse"] [data-component="task-tool-delegating"] {
+  width: 100%;
+  height: auto;
+  min-height: 32px;
+  gap: 8px;
+  padding: 7px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--norse-text);
+  line-height: var(--line-height-compact);
+}
+
+html[data-theme="norse"] [data-component="read-tool-group"],
+html[data-theme="norse"] [data-component="tool-loaded-item"],
+html[data-theme="norse"] [data-slot="context-tool-group-item"] > [data-component="tool-trigger"] {
+  min-height: 32px;
+  gap: 8px;
+  padding-block: 7px;
+  border-radius: 0;
+  background: transparent;
+}
+
+html[data-theme="norse"] [data-component="tool-loaded-item"][data-tool="skill"] > [data-slot="tool-loaded-label"],
+html[data-theme="norse"] [data-component="tool-loaded-item"][data-tool="skill"] > [data-slot="tool-loaded-kind"] {
+  display: none;
+}
+
+html[data-theme="norse"] [data-slot="norse-skill-label"] {
+  display: inline;
+  color: var(--norse-tool-active);
+  font-weight: 700;
+  text-transform: lowercase;
+}
+
+html[data-theme="norse"] [data-component="tool-loaded-item"][data-tool="skill"] > [data-slot="tool-loaded-value"] {
+  color: var(--norse-text);
+  font-weight: 700;
+}
+
+html[data-theme="norse"]
+  [data-component="collapsible"].tool-collapsible
+  > [data-slot="collapsible-trigger"]:focus-visible,
+html[data-theme="norse"] [data-component="read-tool-group"]:focus-visible {
+  outline: 2px solid var(--norse-royal);
+  outline-offset: 2px;
+}
+
+html[data-theme="norse"] [data-component="card"][data-kind="tool-error-card"] {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+html[data-theme="norse"] [data-kind="tool-error-card"] [data-component="tool-error-card-icon"] {
+  display: none;
+}
+
+html[data-theme="norse"] [data-slot="basic-tool-tool-title"][data-agent] [data-slot="tool-error-title"] {
+  display: none;
+}
+
+html[data-theme="norse"] [data-slot="task-error-title"] {
+  display: inline;
+}
+
+html[data-theme="norse"]
+  [data-kind="tool-error-card"]
+  > [data-component="collapsible"].tool-collapsible
+  > [data-slot="collapsible-trigger"] {
+  height: auto;
+}
+
+html[data-theme="norse"]
+  [data-kind="tool-error-card"]
+  > [data-component="collapsible"].tool-collapsible
+  > [data-slot="collapsible-content"] {
+  border-inline-start: 1px solid var(--norse-err);
+  margin-inline-start: 6px;
+  padding-inline-start: 22px;
+}
+
+html[data-theme="norse"] [data-kind="tool-error-card"] [data-slot="tool-error-card-content"] {
+  padding-inline-start: 0;
 }
 
 html[data-theme="norse"] [data-component="session-working"] {
-  color: var(--norse-gold);
-  font-size: 12px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  animation: norse-pulse 1.4s ease-in-out infinite;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--norse-tool-active);
+  font-size: 13px;
+  font-style: italic;
+  line-height: var(--line-height-compact);
+}
+
+html[data-theme="norse"] [data-component="session-working"]::before {
+  content: "ᛟ" / "";
+  flex: none;
+  font-family: var(--norse-rune);
+  font-size: 18px;
+  font-style: normal;
+  animation: norse-pulse 1.8s ease-in-out infinite;
+}
+
+html[data-theme="norse"] [data-component="session-working"] [data-component="text-shimmer"] {
+  --text-shimmer-base-color: var(--norse-tool-active);
+  --text-shimmer-peak-color: color-mix(in srgb, var(--norse-tool-active) 35%, var(--norse-text));
+  --text-shimmer-duration: 1800ms;
 }
 
 html[data-theme="norse"] [data-component="session-compaction-message"] {
@@ -1766,14 +2157,6 @@ html[data-theme="norse"] [data-slot="mobile-panel"] {
     font-size: clamp(32px, 10vw, 46px);
   }
 
-  html[data-theme="norse"] [data-slot="new-session-content"] {
-    top: 14%;
-  }
-
-  html[data-theme="norse"] [data-slot="new-session-content"] > div > div.mt-8 {
-    margin-top: 22px !important;
-  }
-
   html[data-theme="norse"] [data-timeline-virtual-content] {
     padding-inline: 16px;
   }
@@ -1912,8 +2295,16 @@ html[data-theme="norse"] [data-slot="home-panel"] .home-session-group-header::af
 
 /* Light user bubble keeps the royal tint without inheriting the dark bubble. */
 html[data-theme="norse"][data-color-scheme="light"] [data-component="user-message"] [data-slot="user-message-text"],
-html[data-theme="norse"][data-color-scheme="light"] body [data-workspace-session] [data-component="user-message"]:not([data-pending]) [data-slot="user-message-text"],
-html[data-theme="norse"][data-color-scheme="light"] body [data-local-session] [data-component="user-message"]:not([data-pending]) [data-slot="user-message-text"] {
+html[data-theme="norse"][data-color-scheme="light"]
+  body
+  [data-workspace-session]
+  [data-component="user-message"]:not([data-pending])
+  [data-slot="user-message-text"],
+html[data-theme="norse"][data-color-scheme="light"]
+  body
+  [data-local-session]
+  [data-component="user-message"]:not([data-pending])
+  [data-slot="user-message-text"] {
   border-color: rgba(61, 97, 232, 0.28) !important;
   background: linear-gradient(155deg, #d3ddf4, #e2e8f4) !important;
   color: #1b2233 !important;
@@ -1935,7 +2326,7 @@ html[data-theme="norse"] [data-session-title] .h-12 {
 html[data-theme="norse"] [data-session-title] + div {
   height: 16px;
   margin-top: -16px;
-  background: linear-gradient(to bottom, var(--norse-page), transparent) !important;
+  background: none !important;
 }
 
 html[data-theme="norse"] [data-session-title] [data-slot="session-title-child"] {
@@ -1962,7 +2353,10 @@ html[data-theme="norse"] [data-session-title] button:has([data-component="progre
   color: var(--norse-text) !important;
 }
 
-html[data-theme="norse"] [data-session-title] button:has([data-component="progress-circle"]) [data-component="progress-circle"] {
+html[data-theme="norse"]
+  [data-session-title]
+  button:has([data-component="progress-circle"])
+  [data-component="progress-circle"] {
   color: var(--norse-gold) !important;
 }
 
@@ -1986,14 +2380,6 @@ html[data-theme="norse"] [data-component="composer"] [data-action="composer-mode
   font-size: 14px;
   line-height: 1;
   margin-inline-end: 2px;
-}
-
-/* Keep keyboard focus visible on the shell after removing the editor's clipped ring. */
-html[data-theme="norse"] [data-component="composer"]:has([data-component="composer-editor"]:focus) {
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--norse-gold) 72%, transparent),
-    0 0 38px color-mix(in srgb, var(--norse-gold) 18%, transparent),
-    0 24px 70px rgba(0, 0, 0, 0.32) !important;
 }
 
 /* Composer accessory: real measured context usage, placed where the reference puts it. */
@@ -2048,7 +2434,8 @@ html[data-theme="norse"] [data-component="norse-agent-control"] {
   padding: 3px;
 }
 
-html[data-theme="norse"] [data-component="norse-agent-control"] button {
+/* Match the composer control specificity so segments do not inherit the standalone button skin. */
+html[data-theme="norse"] [data-component="composer"] [data-component="norse-agent-control"] button {
   display: flex;
   height: 100%;
   align-items: center;
@@ -2064,17 +2451,24 @@ html[data-theme="norse"] [data-component="norse-agent-control"] button {
   cursor: pointer;
 }
 
-html[data-theme="norse"] [data-component="norse-agent-control"] button:hover {
+html[data-theme="norse"] [data-component="composer"] [data-component="norse-agent-control"] button:hover {
+  background: transparent;
   color: var(--norse-text);
 }
 
-html[data-theme="norse"] [data-component="norse-agent-control"] button[aria-pressed="true"][data-agent="plan"] {
+html[data-theme="norse"]
+  [data-component="composer"]
+  [data-component="norse-agent-control"]
+  button[aria-pressed="true"][data-agent="plan"] {
   background: color-mix(in srgb, var(--norse-royal) 18%, transparent);
   color: var(--norse-text);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--norse-royal) 40%, transparent);
 }
 
-html[data-theme="norse"] [data-component="norse-agent-control"] button[aria-pressed="true"][data-agent="build"] {
+html[data-theme="norse"]
+  [data-component="composer"]
+  [data-component="norse-agent-control"]
+  button[aria-pressed="true"][data-agent="build"] {
   background: color-mix(in srgb, var(--norse-gold) 18%, transparent);
   color: var(--norse-text);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--norse-gold) 42%, transparent);
@@ -2123,17 +2517,8 @@ html[data-theme="norse"] [data-slot="composer-plan-strip"] b {
 }
 
 html[data-theme="norse"] [data-component="composer"][data-plan="true"] {
-  background:
-    linear-gradient(var(--norse-prompt-bg), var(--norse-prompt-bg)) padding-box,
-    linear-gradient(
-        90deg,
-        rgba(97, 131, 255, 0.22),
-        rgba(97, 131, 255, 0.72),
-        rgba(157, 178, 255, 0.72),
-        rgba(97, 131, 255, 0.72),
-        rgba(97, 131, 255, 0.22)
-      )
-      border-box !important;
+  --norse-composer-accent: var(--norse-royal);
+  --norse-composer-highlight: color-mix(in srgb, var(--norse-royal) 62%, white);
 }
 
 html[data-theme="norse"] [data-component="composer"][data-plan="true"] [data-action="composer-submit"] {
@@ -2187,8 +2572,6 @@ html[data-theme="norse"] [data-component="norse-agent-control"] button {
   text-transform: capitalize;
 }
 
-
-
 /* The model picker search is already the focused control; avoid a second blue frame. */
 html[data-theme="norse"]
   [data-component="menu-v2-content"]:has([data-slot="model-selector-scroll"])
@@ -2206,7 +2589,6 @@ html[data-theme="norse"]
     pointer-events: auto;
   }
 }
-
 
 /* Widen the transcript while keeping it bounded and readable. */
 html[data-theme="norse"] [data-timeline-virtual-content] {
