@@ -1,5 +1,4 @@
 import { Dialog } from "@kobalte/core/dialog"
-import { Button } from "@opencode/ui/button"
 import { useDialog } from "@opencode/ui/context/dialog"
 import { useI18n, type UiI18n } from "@opencode/ui/context/i18n"
 import { Icon } from "@opencode/ui/icon"
@@ -198,17 +197,12 @@ function MermaidViewer(props: {
     <section data-component="markdown-mermaid" data-expanded={props.expanded || undefined}>
       <div data-slot="mermaid-toolbar">
         <div data-slot="mermaid-view-switch" role="group" aria-label={props.i18n.t("ui.mermaid.view")}>
-          <Button
-            size="small"
-            variant="ghost-muted"
-            aria-pressed={!sourceView()}
-            onClick={() => setState("code", false)}
-          >
+          <button type="button" aria-pressed={!sourceView()} onClick={() => setState("code", false)}>
             {props.i18n.t("ui.mermaid.diagram")}
-          </Button>
-          <Button size="small" variant="ghost-muted" aria-pressed={sourceView()} onClick={() => setState("code", true)}>
+          </button>
+          <button type="button" aria-pressed={sourceView()} onClick={() => setState("code", true)}>
             {props.i18n.t("ui.mermaid.code")}
-          </Button>
+          </button>
         </div>
         <div data-slot="mermaid-actions">
           <Tooltip value={props.i18n.t(state.copied ? "ui.mermaid.copied" : "ui.mermaid.copy")}>
@@ -424,28 +418,26 @@ function MermaidViewport(props: { svg: string; i18n: UiI18n; expanded?: boolean 
           {props.i18n.t("ui.mermaid.hint")}
         </p>
         <div data-slot="mermaid-navigation" role="group" aria-label={props.i18n.t("ui.mermaid.navigation")}>
-          <Button
-            size="small"
-            variant="ghost-muted"
+          <button
+            type="button"
             aria-label={props.i18n.t("ui.mermaid.zoomOut")}
             disabled={state.zoom <= 0.25}
             onClick={() => zoom(1 / 1.25)}
           >
             −
-          </Button>
+          </button>
           <output aria-label={props.i18n.t("ui.mermaid.zoom")}>{Math.round(state.zoom * 100)}%</output>
-          <Button
-            size="small"
-            variant="ghost-muted"
+          <button
+            type="button"
             aria-label={props.i18n.t("ui.mermaid.zoomIn")}
             disabled={state.zoom >= 8}
             onClick={() => zoom(1.25)}
           >
             +
-          </Button>
-          <Button size="small" variant="ghost-muted" onClick={fit}>
+          </button>
+          <button type="button" onClick={fit}>
             {props.i18n.t("ui.mermaid.fit")}
-          </Button>
+          </button>
         </div>
       </div>
     </div>
