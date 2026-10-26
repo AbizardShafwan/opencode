@@ -18,7 +18,7 @@ function ContextTooltipRow(props: { name: JSX.Element; value: JSX.Element }) {
 
 export function SessionContextUsage(props: {
   session: MountedSession
-  variant?: "button" | "indicator"
+  variant?: "button" | "composer" | "indicator"
   placement?: ComponentProps<typeof Tooltip>["placement"]
 }) {
   const ctx = useExtension()
@@ -61,6 +61,7 @@ export function SessionContextUsage(props: {
     return {
       total,
       usage: model?.limit.context ? Math.round((total / model.limit.context) * 100) : null,
+      limit: model?.limit.context,
     }
   })
 
@@ -69,6 +70,16 @@ export function SessionContextUsage(props: {
       .format(context()?.total ?? 0)
       .toLocaleLowerCase(i18n.locale()),
   )
+
+  const limit = createMemo(() => {
+    const value = context()?.limit
+
+    if (!value) return
+
+    return new Intl.NumberFormat(i18n.locale(), { notation: "compact", maximumFractionDigits: 0 })
+      .format(value)
+      .toLocaleLowerCase(i18n.locale())
+  })
 
   // A root session's cost includes its subagent sessions, as in the TUI.
   const spent = createMemo(() => (props.session.id ? props.session.server.data.session.cost(props.session.id) : 0))
@@ -144,11 +155,27 @@ export function SessionContextUsage(props: {
               <span class="flex items-center gap-2 whitespace-nowrap group-active:text-v2-text-text-muted">
                 {compactCircle()}
                 <span>{tokens()}</span>
-                <Show when={showCost()}>
-                  <span aria-hidden="true" class="flex w-1.5 shrink-0 items-center justify-center">
-                    ·
-                  </span>
-                  <span>{cost()}</span>
+                <Show
+                  when={variant() === "composer"}
+                  fallback={
+                    <Show when={showCost()}>
+                      <span aria-hidden="true" class="flex w-1.5 shrink-0 items-center justify-center">
+                        ·
+                      </span>
+                      <span>{cost()}</span>
+                    </Show>
+                  }
+                >
+                  <Show when={limit()}>
+                    {(value) => (
+                      <>
+                        <span aria-hidden="true" class="flex w-1.5 shrink-0 items-center justify-center">
+                          /
+                        </span>
+                        <span>{value()}</span>
+                      </>
+                    )}
+                  </Show>
                 </Show>
               </span>
             </Button>

@@ -10,6 +10,8 @@ import { selectionFromLines, type SelectedLineRange, useFile } from "@/workspace
 import { useComments } from "@/composer/comments"
 import { useCommand } from "@/shell/commands/command"
 import { useLanguage } from "@/runtime/i18n/language"
+import { useTheme } from "@opencode/ui/theme/context"
+import { isNorseTheme } from "@/theme/norse"
 import { useExtensionHost } from "@/runtime/extension/host"
 import { useExtensionAttachment } from "@/runtime/extension/host-apis"
 import { usePlatform } from "@/runtime/platform/platform"
@@ -38,6 +40,7 @@ const sendFailedTitle = {
 } as const
 
 export function createComposerModel(adapter: ComposerAdapter, options?: { queue?: ComposerQueue }): ComposerModel {
+  const theme = useTheme()
   const sdk = useWorkspaceLocation()
   const data = useData()
   const server = useServer()
@@ -101,6 +104,12 @@ export function createComposerModel(adapter: ComposerAdapter, options?: { queue?
 
     if (adapter.working() || (options?.queue?.count() ?? 0) > 0)
       return language.t("ui.promptInput.placeholder.followUp", { slash: "/", at: "@" })
+
+    if (isNorseTheme(theme.themeId())) {
+      if (adapter.controls().agents.current === "plan") return language.t("norse.plan.placeholder")
+      if (adapter.kind === "active-session") return language.t("norse.session.prompt.placeholder")
+      return language.t("norse.home.prompt.placeholder")
+    }
 
     return language.t("ui.promptInput.placeholder.normal", { slash: "/", at: "@" })
   }

@@ -16,6 +16,10 @@ import { useData } from "@/runtime/server/current"
 import { useServerSDK } from "@/runtime/server/client"
 import { showToast } from "@/shell/notifications/toast"
 import { useLocal } from "@/providers/models/selection"
+import type { MountedSession } from "@opencode/gui-extensions/sdk"
+import { useTheme } from "@opencode/ui/theme/context"
+import { ExtensionSlot } from "@/runtime/extension/render"
+import { isNorseTheme } from "@/theme/norse"
 import { usePlatform } from "@/runtime/platform/platform"
 import { useWorkspaceLocation } from "@/workspaces/location"
 import { requireServerKey, sessionHref } from "@/shell/routes/session"
@@ -328,10 +332,12 @@ export type ActiveSessionRegionModel = ReturnType<typeof createActiveSessionRegi
 
 export function ActiveSessionComposerRegion(props: {
   session: SessionModel
+  view: MountedSession
   model: SessionComposerController
   suggestionBoundary: () => HTMLElement | undefined
 }) {
   const location = useWorkspaceLocation()
+  const theme = useTheme()
 
   // Only the server's LocationNotFoundError for the session's own Location replaces the composer.
   const missing = createMemo(() => {
@@ -359,6 +365,14 @@ export function ActiveSessionComposerRegion(props: {
                   borderUnderlay
                   readOnly={props.model.queue.undoing()}
                   suggestionBoundary={props.suggestionBoundary}
+                  contextControl={
+                    isNorseTheme(theme.themeId()) ? (
+                      <ExtensionSlot
+                        at="session.composer"
+                        input={{ session: props.view, active: true }}
+                      />
+                    ) : undefined
+                  }
                 />
               </div>
             </div>

@@ -1,0 +1,2229 @@
+/*
+ * Norse is the "Mimir rail" redesign: royal blue and gold on a near-black page,
+ * a seamless hover/pin rail, aurora and floating runes, a landing prompt, and a
+ * rune-led chat transcript. Every rule is scoped to the Norse theme so the
+ * original Memyr interface remains untouched.
+ */
+
+html[data-theme="norse"] {
+  --norse-royal: #6183ff;
+  --norse-royal-soft: rgba(97, 131, 255, 0.16);
+  --norse-royal-line: rgba(97, 131, 255, 0.34);
+  --norse-gold: #cf9f52;
+  --norse-gold-soft: rgba(207, 159, 82, 0.12);
+  --norse-gold-line: rgba(207, 159, 82, 0.32);
+  --norse-page: #191922;
+  --norse-card: #1e1e24;
+  --norse-card-deep: #18181e;
+  --norse-text: #dbe3f0;
+  --norse-muted: #7d88a2;
+  --norse-dim: #525c76;
+  --norse-border: #3a4152;
+  --norse-ok: #86c68f;
+  --norse-err: #cc7a7a;
+  --norse-link: #9db2ff;
+  --norse-rail-bg: rgba(26, 26, 32, 0.96);
+  --norse-prompt-bg: rgba(24, 35, 63, 0.96);
+  --norse-prompt-line: rgba(40, 48, 74, 0.85);
+  --norse-rail-width: 64px;
+  --norse-rail-open: 296px;
+  --norse-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --norse-rune: "Norse Runic", "Noto Sans Runic", "Segoe UI Historic", sans-serif;
+  --norse-mono: "JetBrains Mono", "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  color-scheme: dark;
+}
+
+html[data-theme="norse"][data-color-scheme="light"] {
+  --norse-royal: #3d61e8;
+  --norse-royal-soft: rgba(61, 97, 232, 0.12);
+  --norse-royal-line: rgba(61, 97, 232, 0.28);
+  --norse-gold: #a8751f;
+  --norse-gold-soft: rgba(168, 117, 31, 0.1);
+  --norse-gold-line: rgba(168, 117, 31, 0.26);
+  --norse-page: #d7dde8;
+  --norse-card: #e2e7f0;
+  --norse-card-deep: #d9dfe9;
+  --norse-text: #1b2233;
+  --norse-muted: #5a6478;
+  --norse-dim: #748095;
+  --norse-border: #aeb9ca;
+  --norse-ok: #3f7a4f;
+  --norse-err: #a94747;
+  --norse-link: #2d4bc2;
+  --norse-rail-bg: rgba(226, 231, 240, 0.97);
+  --norse-prompt-bg: rgba(232, 236, 244, 0.97);
+  --norse-prompt-line: rgba(174, 185, 202, 0.9);
+  color-scheme: light;
+}
+
+html[data-theme="norse"] body {
+  color: var(--norse-text);
+  background:
+    radial-gradient(circle at 52% 4%, color-mix(in srgb, var(--norse-royal) 30%, transparent), transparent 40%),
+    radial-gradient(circle at 16% 96%, color-mix(in srgb, var(--norse-gold) 15%, transparent), transparent 40%),
+    radial-gradient(circle at 88% 40%, color-mix(in srgb, var(--norse-royal) 10%, transparent), transparent 44%),
+    var(--norse-page);
+}
+
+html[data-theme="norse"][data-color-scheme="light"] body {
+  background:
+    radial-gradient(circle at 52% 0%, color-mix(in srgb, var(--norse-royal) 9%, transparent), transparent 42%),
+    radial-gradient(circle at 12% 100%, color-mix(in srgb, var(--norse-gold) 7%, transparent), transparent 42%),
+    var(--norse-page);
+}
+
+html[data-theme="norse"] ::selection {
+  color: var(--norse-text);
+  background: color-mix(in srgb, var(--norse-royal) 42%, transparent);
+}
+
+html[data-theme="norse"] :focus-visible {
+  outline: 2px solid var(--norse-royal);
+  outline-offset: 2px;
+}
+
+html[data-theme="norse"] [data-component="app-shell"] {
+  background: transparent;
+}
+
+/* ── Aurora and runes ────────────────────────────────────────────────── */
+
+html[data-theme="norse"] [data-slot="norse-backdrop"] {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+}
+
+html[data-theme="norse"] [data-slot="norse-aurora"] {
+  position: absolute;
+  inset: -18%;
+  background:
+    conic-gradient(
+      from 20deg at 52% 40%,
+      transparent,
+      color-mix(in srgb, var(--norse-royal) 24%, transparent),
+      transparent,
+      color-mix(in srgb, var(--norse-gold) 15%, transparent),
+      transparent
+    ),
+    repeating-linear-gradient(
+      115deg,
+      transparent 0 74px,
+      color-mix(in srgb, var(--norse-gold) 6%, transparent) 76px 78px,
+      transparent 80px 150px
+    );
+  filter: blur(18px);
+  opacity: 0.85;
+  animation: norse-aurora-drift 18s ease-in-out infinite alternate;
+}
+
+html[data-theme="norse"][data-color-scheme="light"] [data-slot="norse-aurora"] {
+  opacity: 0.2;
+}
+
+html[data-theme="norse"] [data-slot="norse-runes"] {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  opacity: 0.16;
+}
+
+html[data-theme="norse"][data-color-scheme="light"] [data-slot="norse-runes"] {
+  opacity: 0.08;
+}
+
+html[data-theme="norse"] [data-slot="norse-runes"] span {
+  position: absolute;
+  color: var(--norse-gold);
+  font-family: var(--norse-rune);
+  font-size: clamp(26px, 4vw, 64px);
+  line-height: 1;
+  text-shadow: 0 0 26px color-mix(in srgb, var(--norse-gold) 35%, transparent);
+  animation: norse-rune-float 20s linear infinite;
+}
+
+html[data-theme="norse"] [data-slot="norse-runes"] span:nth-child(1) {
+  left: 13%;
+  top: 82%;
+  animation-duration: 22s;
+}
+html[data-theme="norse"] [data-slot="norse-runes"] span:nth-child(2) {
+  left: 26%;
+  top: 14%;
+  animation-duration: 26s;
+  animation-delay: -5s;
+}
+html[data-theme="norse"] [data-slot="norse-runes"] span:nth-child(3) {
+  left: 73%;
+  top: 18%;
+  animation-duration: 24s;
+  animation-delay: -9s;
+}
+html[data-theme="norse"] [data-slot="norse-runes"] span:nth-child(4) {
+  left: 87%;
+  top: 70%;
+  animation-duration: 30s;
+  animation-delay: -2s;
+}
+html[data-theme="norse"] [data-slot="norse-runes"] span:nth-child(5) {
+  left: 52%;
+  top: 92%;
+  animation-duration: 28s;
+  animation-delay: -14s;
+}
+
+@keyframes norse-aurora-drift {
+  from {
+    transform: translate3d(-2%, -1%, 0) rotate(-1deg);
+  }
+  to {
+    transform: translate3d(2%, 1%, 0) rotate(1deg);
+  }
+}
+
+@keyframes norse-rune-float {
+  from {
+    transform: translateY(24vh) rotate(0deg);
+    opacity: 0;
+  }
+  18% {
+    opacity: 0.7;
+  }
+  78% {
+    opacity: 0.45;
+  }
+  to {
+    transform: translateY(-120vh) rotate(50deg);
+    opacity: 0;
+  }
+}
+
+/* ── Shell and content ───────────────────────────────────────────────── */
+
+html[data-theme="norse"] [data-slot="shell-content"] {
+  position: relative;
+  z-index: 1;
+}
+
+html[data-theme="norse"] main {
+  background: transparent;
+}
+
+html[data-theme="norse"] [data-slot="home-panel"],
+html[data-theme="norse"] [data-component="new-session"],
+html[data-theme="norse"] [data-component="session-panel-frame"] {
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+html[data-theme="norse"] [data-slot="home-panel"],
+html[data-theme="norse"] [data-component="new-session"] {
+  margin: 0 !important;
+}
+
+html[data-theme="norse"] [data-slot="session-chat-panel"],
+html[data-theme="norse"] [data-slot="session-side-panel-gap"] {
+  background: transparent;
+}
+
+@media (min-width: 768px) {
+  html[data-theme="norse"] [data-slot="titlebar-v2"] {
+    display: none;
+  }
+}
+
+/* ── The seamless rail ───────────────────────────────────────────────── */
+
+html[data-theme="norse"] [data-component="norse-rail"] {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  z-index: 5;
+  display: flex;
+  width: var(--norse-rail-width);
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+  padding: 14px 12px;
+  background: transparent;
+  border-inline-end: 1px solid transparent;
+  transition:
+    width 320ms var(--norse-ease),
+    background 320ms ease,
+    border-color 320ms ease,
+    box-shadow 320ms ease,
+    backdrop-filter 320ms ease;
+}
+
+html[data-theme="norse"] [data-component="norse-rail"]:hover,
+html[data-theme="norse"] [data-component="norse-rail"]:focus-within,
+html[data-theme="norse"] [data-component="norse-rail"][data-pinned="true"],
+html[data-theme="norse"] [data-component="norse-rail"][data-project-menu="true"] {
+  width: var(--norse-rail-open);
+  overflow: visible;
+  background: var(--norse-rail-bg);
+  border-inline-end-color: var(--norse-gold-line);
+  box-shadow: 24px 0 90px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(20px);
+}
+
+html[data-theme="norse"][data-color-scheme="light"] [data-component="norse-rail"]:hover,
+html[data-theme="norse"][data-color-scheme="light"] [data-component="norse-rail"]:focus-within,
+html[data-theme="norse"][data-color-scheme="light"] [data-component="norse-rail"][data-pinned="true"],
+html[data-theme="norse"][data-color-scheme="light"] [data-component="norse-rail"][data-project-menu="true"] {
+  box-shadow: 24px 0 90px rgba(27, 34, 51, 0.14);
+}
+
+html[data-theme="norse"] [data-component="norse-rail"] .norse-rail-reveal {
+  min-width: 266px;
+  opacity: 0;
+  transition: opacity 180ms ease;
+  white-space: nowrap;
+}
+
+html[data-theme="norse"] [data-component="norse-rail"]:hover .norse-rail-reveal,
+html[data-theme="norse"] [data-component="norse-rail"]:focus-within .norse-rail-reveal,
+html[data-theme="norse"] [data-component="norse-rail"][data-pinned="true"] .norse-rail-reveal {
+  opacity: 1;
+  transition-delay: 80ms;
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-head"] {
+  display: flex;
+  height: 44px;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-brand"] {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  place-items: center;
+  border: 1px solid var(--norse-royal-line);
+  border-radius: 12px;
+  background:
+    radial-gradient(circle at 50% 118%, color-mix(in srgb, var(--norse-gold) 22%, transparent), transparent 60%),
+    color-mix(in srgb, var(--norse-royal) 12%, transparent);
+  box-shadow:
+    0 0 18px color-mix(in srgb, var(--norse-royal) 28%, transparent),
+    inset 0 0 12px color-mix(in srgb, var(--norse-royal) 14%, transparent);
+  color: var(--norse-gold);
+  font-family: var(--norse-rune);
+  font-size: 23px;
+  line-height: 1;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-brand"] span {
+  background: linear-gradient(135deg, var(--norse-royal), #9db2ff 55%, var(--norse-gold));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--norse-royal) 35%, transparent));
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-project"] {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  padding: 6px 8px;
+  color: var(--norse-text);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  transition: background 140ms ease;
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-project"]:hover {
+  background: color-mix(in srgb, var(--norse-royal) 8%, transparent);
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-project-name"] {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-project"] [data-component="icon"] {
+  flex: none;
+  color: var(--norse-dim);
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-pin"] {
+  display: grid;
+  min-width: 30px !important;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  margin-inline-start: auto;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--norse-dim) 50%, transparent);
+  border-radius: 9px;
+  background: transparent;
+  color: var(--norse-muted);
+  cursor: pointer;
+  transition:
+    color 180ms ease,
+    border-color 180ms ease,
+    background 180ms ease;
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-pin"]:hover {
+  color: var(--norse-text);
+  border-color: var(--norse-royal-line);
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-pin"][aria-pressed="true"] {
+  color: var(--norse-gold);
+  border-color: var(--norse-gold-line);
+  background: var(--norse-gold-soft);
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-new"],
+html[data-theme="norse"] [data-slot="norse-rail-settings"] {
+  display: flex;
+  width: 100%;
+  height: 40px;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--norse-muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    color 160ms ease,
+    background 160ms ease,
+    border-color 160ms ease;
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-new"] {
+  color: var(--norse-text);
+  border-color: color-mix(in srgb, var(--norse-dim) 30%, transparent);
+  margin-bottom: 6px;
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-new"]:hover,
+html[data-theme="norse"] [data-slot="norse-rail-settings"]:hover {
+  background: color-mix(in srgb, var(--norse-royal) 10%, transparent);
+  border-color: var(--norse-royal-line);
+  color: var(--norse-text);
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-new-icon"],
+html[data-theme="norse"] [data-slot="norse-rail-settings"] > span:first-child {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  place-items: center;
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-new-icon"] {
+  color: var(--norse-gold);
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-settings"][data-active="true"] {
+  color: var(--norse-gold);
+  background: color-mix(in srgb, var(--norse-royal) 8%, transparent);
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-settings"] {
+  margin-top: auto;
+  height: 34px;
+  gap: 8px;
+  padding-inline: 6px;
+  color: var(--norse-dim);
+  font-size: 12px;
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-settings"] > span:first-child {
+  width: 16px;
+  height: 16px;
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-settings"] > .norse-rail-reveal {
+  min-width: 0;
+  text-align: start;
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-sessions"] {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  margin: 6px 0;
+  overflow: hidden;
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-sessions-head"] {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin: 2px 2px 10px;
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-sessions-head"] span:first-child {
+  color: var(--norse-gold);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-sessions-head"] span:last-child {
+  color: var(--norse-dim);
+  font-size: 11px;
+}
+
+/* The rail hosts the original tab strip; keep its interaction states and status slots intact. */
+html[data-theme="norse"] [data-component="norse-rail"] [data-slot="vertical-tabs-sidebar"] {
+  min-height: 0;
+  flex: 1;
+}
+
+html[data-theme="norse"] [data-component="norse-rail"] :is([data-titlebar-tab], [data-titlebar-tab-action]) {
+  --tab-base: var(--norse-rail-bg);
+  border-radius: 9px;
+  color: var(--norse-muted);
+}
+
+html[data-theme="norse"] [data-component="norse-rail"] [data-titlebar-tab][data-state="pressed"] {
+  --tab-overlay: var(--norse-royal-soft);
+  color: var(--norse-text);
+  box-shadow: inset 2px 0 var(--norse-gold);
+}
+
+html[data-theme="norse"] [data-component="norse-rail"] [data-slot="tab-project"] {
+  color: var(--norse-dim);
+}
+
+html[data-theme="norse"] [data-component="norse-rail"] [data-slot="channel-indicator"][data-diagnostics] {
+  height: 32px;
+  gap: 8px;
+  padding-inline: 6px;
+  color: var(--norse-muted);
+  font-size: 13px;
+  line-height: var(--line-height-compact);
+}
+
+html[data-theme="norse"] [data-component="norse-rail"] [data-slot="channel-indicator"][aria-pressed="true"] {
+  color: var(--norse-gold);
+  background: var(--norse-gold-soft);
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-search"] {
+  position: relative;
+  display: flex;
+  height: 34px;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  border: 1px solid color-mix(in srgb, var(--norse-dim) 45%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--norse-card) 70%, transparent);
+  padding: 0 10px;
+  color: var(--norse-muted);
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-search"]:focus-within {
+  border-color: color-mix(in srgb, var(--norse-royal) 55%, transparent);
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-search"] input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--norse-text);
+  font-size: 13px;
+  outline: none;
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-search"] input::placeholder {
+  color: var(--norse-muted);
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-scroll"] {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-inline-end: 2px;
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-row"] {
+  display: flex;
+  align-items: center;
+  border-radius: 10px;
+  color: var(--norse-muted);
+  transition:
+    background 120ms ease,
+    color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-row"]:hover {
+  background: color-mix(in srgb, var(--norse-royal) 10%, transparent);
+  color: var(--norse-text);
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-row"][data-active="true"] {
+  background: color-mix(in srgb, var(--norse-royal) 14%, transparent);
+  box-shadow: inset 0 0 0 1px var(--norse-royal-line);
+  color: var(--norse-text);
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-row-main"] {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 9px;
+  border: 0;
+  background: transparent;
+  padding: 8px 9px;
+  color: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-row-dot"] {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--norse-royal) 55%, transparent);
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-row"][data-active="true"] [data-slot="norse-rail-row-dot"] {
+  background: var(--norse-gold);
+  box-shadow: 0 0 8px var(--norse-gold);
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-row-title"] {
+  overflow: hidden;
+  flex: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-row-close"] {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--norse-dim);
+  cursor: pointer;
+  opacity: 0;
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-row"]:hover [data-slot="norse-rail-row-close"],
+html[data-theme="norse"] [data-slot="norse-rail-row-close"]:focus-visible {
+  opacity: 1;
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-row-close"]:hover {
+  background: color-mix(in srgb, var(--norse-royal) 12%, transparent);
+  color: var(--norse-text);
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-empty"] {
+  display: grid;
+  gap: 3px;
+  padding: 18px 8px;
+  text-align: center;
+  color: var(--norse-dim);
+  font-size: 12px;
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-empty"] strong {
+  color: var(--norse-muted);
+  font-weight: 500;
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-project-menu"] {
+  position: fixed;
+  top: 60px;
+  left: 14px;
+  z-index: 22;
+  width: 300px;
+  border: 1px solid var(--norse-gold-line);
+  border-radius: 14px;
+  background: var(--norse-rail-bg);
+  padding: 8px;
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(20px);
+}
+
+html[data-theme="norse"][data-color-scheme="light"] [data-slot="norse-rail-project-menu"] {
+  box-shadow: 0 30px 90px rgba(27, 34, 51, 0.18);
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-project-current"] {
+  display: grid;
+  gap: 3px;
+  border-bottom: 1px solid var(--norse-border);
+  margin-bottom: 6px;
+  padding: 10px 11px 12px;
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-project-current"] strong {
+  font-size: 15px;
+  font-weight: 800;
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-project-current"] span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--norse-muted);
+  font-family: var(--norse-mono);
+  font-size: 11.5px;
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-project-item"] {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 11px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  padding: 9px 11px;
+  color: var(--norse-text);
+  text-align: start;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-project-item"]:hover,
+html[data-theme="norse"] [data-slot="norse-rail-project-item"][data-active="true"] {
+  background: color-mix(in srgb, var(--norse-royal) 12%, transparent);
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-project-item"] [data-component="icon"] {
+  flex: none;
+  color: var(--norse-muted);
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-project-item"] > span {
+  display: grid;
+  min-width: 0;
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-project-item"] small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--norse-dim);
+  font-family: var(--norse-mono);
+  font-size: 11px;
+  margin-top: 1px;
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-project-rule"] {
+  height: 1px;
+  margin: 6px 8px;
+  background: var(--norse-border);
+}
+
+/* ── Norse welcome ───────────────────────────────────────────────────── */
+
+html[data-theme="norse"] [data-component="norse-welcome"] {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+}
+
+html[data-theme="norse"] [data-slot="norse-welcome-greeting"] {
+  margin: 0;
+  background: linear-gradient(110deg, var(--norse-royal), var(--norse-text) 42%, var(--norse-gold));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-size: clamp(34px, 5vw, 72px);
+  font-weight: 700;
+  line-height: 0.98;
+  letter-spacing: -0.055em;
+  text-align: center;
+  text-wrap: balance;
+}
+
+html[data-theme="norse"][data-color-scheme="light"] [data-slot="norse-welcome-greeting"] {
+  background-image: linear-gradient(110deg, var(--norse-royal), #1b2233 46%, var(--norse-gold));
+}
+
+html[data-theme="norse"] [data-slot="norse-welcome-subtitle"] {
+  margin: -10px 0 0;
+  max-width: 600px;
+  color: var(--norse-muted);
+  font-size: 15px;
+  line-height: 1.55;
+  text-align: center;
+  text-wrap: balance;
+}
+
+html[data-theme="norse"] [data-slot="home-panel"] section {
+  min-width: 0;
+}
+
+html[data-theme="norse"] [data-slot="home-panel"] .sticky.bg-v2-background-bg-base {
+  background-color: color-mix(in srgb, var(--norse-page) 88%, transparent) !important;
+  backdrop-filter: blur(10px);
+}
+
+html[data-theme="norse"] [data-slot="home-panel"] [data-component="home-session-search"] {
+  border: 0;
+  background: transparent;
+}
+
+html[data-theme="norse"] [data-slot="home-panel"] [data-component="home-session-search"] label {
+  border: 1px solid color-mix(in srgb, var(--norse-dim) 45%, transparent) !important;
+  border-radius: 10px !important;
+  background: color-mix(in srgb, var(--norse-card) 70%, transparent) !important;
+  color: var(--norse-muted);
+}
+
+html[data-theme="norse"] [data-slot="home-panel"] [data-component="home-session-search"] label:focus-within {
+  border-color: color-mix(in srgb, var(--norse-royal) 55%, transparent) !important;
+}
+
+html[data-theme="norse"] [data-component="home-session-row"] {
+  position: relative;
+  border-radius: 10px;
+  color: var(--norse-text);
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+
+html[data-theme="norse"] [data-component="home-session-row"]:hover {
+  background: color-mix(in srgb, var(--norse-royal) 10%, transparent);
+}
+
+html[data-theme="norse"] [data-component="home-session-title"] {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+html[data-theme="norse"] [data-component="home-project-name"],
+html[data-theme="norse"] [data-component="home-session-project-name"] {
+  color: var(--norse-dim);
+  font-size: 11px;
+}
+
+html[data-theme="norse"] [data-slot="home-panel"] [data-action="home-new-session"] {
+  border: 1px solid var(--norse-gold-line);
+  border-radius: 9px;
+  background: var(--norse-gold-soft);
+  color: var(--norse-gold);
+}
+
+/* ── New session ─────────────────────────────────────────────────────── */
+
+html[data-theme="norse"] [data-component="new-session"] {
+  overflow: visible;
+}
+
+html[data-theme="norse"] [data-slot="new-session-content"] {
+  top: 22%;
+  z-index: 1;
+}
+
+html[data-theme="norse"] [data-slot="new-session-content"] > div {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+html[data-theme="norse"] [data-component="new-session-wordmark"] {
+  display: none;
+}
+
+html[data-theme="norse"] [data-slot="new-session-content"] > div > div.mt-8 {
+  width: 100%;
+  gap: 18px !important;
+  margin-top: 30px !important;
+}
+
+html[data-theme="norse"] [data-slot="new-session-content"] [data-component="composer"] {
+  width: min(680px, 100%);
+  margin-inline: auto;
+}
+
+html[data-theme="norse"] [data-slot="new-session-content"] [data-component="composer"] + div {
+  color: var(--norse-dim);
+}
+
+/* ── Composer: the animated gold-and-royal prompt shell ──────────────── */
+
+html[data-theme="norse"] [data-component="session-composer-dock"] {
+  border-top: 0;
+  background: transparent;
+  padding-bottom: 18px;
+}
+
+html[data-theme="norse"] [data-component="session-composer-dock"] > div {
+  max-width: 820px;
+  margin-inline: auto;
+  padding-inline: 20px;
+}
+
+html[data-theme="norse"] [data-component="composer"] {
+  border: 2px solid transparent !important;
+  border-radius: 18px !important;
+  background:
+    linear-gradient(var(--norse-prompt-bg), var(--norse-prompt-bg)) padding-box,
+    linear-gradient(
+        90deg,
+        rgba(207, 159, 82, 0.22),
+        rgba(207, 159, 82, 0.7),
+        rgba(97, 131, 255, 0.7),
+        rgba(207, 159, 82, 0.7),
+        rgba(207, 159, 82, 0.22)
+      )
+      border-box !important;
+  background-size: auto, 320% 100% !important;
+  box-shadow:
+    0 0 40px color-mix(in srgb, var(--norse-gold) 15%, transparent),
+    0 24px 70px rgba(0, 0, 0, 0.32) !important;
+  animation: norse-gold-border 11s linear infinite;
+}
+
+html[data-theme="norse"][data-color-scheme="light"] [data-component="composer"] {
+  box-shadow:
+    0 0 40px color-mix(in srgb, var(--norse-gold) 10%, transparent),
+    0 20px 50px rgba(27, 34, 51, 0.12) !important;
+}
+
+html[data-theme="norse"] [data-component="composer-editor"] {
+  padding: 15px 14px 4px;
+  color: var(--norse-text);
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 440;
+  line-height: 1.55;
+}
+
+html[data-theme="norse"] [data-component="composer-editor"] [data-slot="composer-placeholder"] {
+  color: var(--norse-muted);
+}
+
+html[data-theme="norse"] [data-component="composer"] > div > div:last-child {
+  height: 44px;
+  padding-inline: 8px;
+}
+
+html[data-theme="norse"] [data-component="composer"] [data-action="composer-attach"] {
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--norse-royal-line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--norse-royal) 8%, transparent);
+  color: var(--norse-royal);
+}
+
+html[data-theme="norse"] [data-component="composer"] [data-action="composer-attach"]:hover {
+  background: var(--norse-royal-soft);
+  border-color: color-mix(in srgb, var(--norse-royal) 50%, transparent);
+}
+
+html[data-theme="norse"] [data-component="composer"] [data-slot="composer-controls"] {
+  border-inline-start: 0;
+  padding-inline-start: 6px;
+}
+
+html[data-theme="norse"] [data-component="composer"] [data-slot="composer-controls"] button {
+  height: 34px;
+  border: 1px solid var(--norse-royal-line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--norse-royal) 8%, transparent);
+  color: var(--norse-text);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+html[data-theme="norse"] [data-component="composer"] [data-slot="composer-controls"] button:hover {
+  background: var(--norse-royal-soft);
+  border-color: color-mix(in srgb, var(--norse-royal) 55%, transparent);
+}
+
+html[data-theme="norse"] [data-component="composer"] [data-slot="composer-controls"] button [data-component="icon"] {
+  color: var(--norse-gold);
+}
+
+html[data-theme="norse"] [data-component="composer"] [data-action="composer-submit"] {
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  min-height: 36px;
+  padding: 0;
+  border-radius: 11px !important;
+  background: var(--norse-gold) !important;
+  color: #241a08 !important;
+  box-shadow: none !important;
+}
+
+html[data-theme="norse"] [data-component="composer"] [data-action="composer-submit"]:hover:not(:disabled) {
+  filter: brightness(1.08);
+  background: var(--norse-gold) !important;
+}
+
+html[data-theme="norse"] [data-component="composer"] [data-action="composer-submit"]:disabled {
+  opacity: 0.42;
+}
+
+html[data-theme="norse"] [data-component="composer-suggestions"] {
+  border: 1px solid var(--norse-gold-line);
+  border-radius: 14px;
+  background: var(--norse-card-deep);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5);
+}
+
+@keyframes norse-gold-border {
+  to {
+    background-position:
+      0 0,
+      320% 0;
+  }
+}
+
+/* ── Session ─────────────────────────────────────────────────────────── */
+
+html[data-theme="norse"] [data-component="session-panel-frame"] {
+  height: 100%;
+}
+
+html[data-theme="norse"] [data-session-title] {
+  padding: 12px 24px 0;
+}
+
+html[data-theme="norse"] [data-session-title] > div {
+  background: transparent !important;
+  padding: 0 !important;
+}
+
+html[data-theme="norse"] [data-session-title] + div {
+  background: linear-gradient(to bottom, var(--norse-page), transparent) !important;
+  height: 28px;
+  margin-top: -24px;
+}
+
+html[data-theme="norse"] [data-session-title] :is(button, [role="button"]) {
+  color: var(--norse-muted);
+}
+
+html[data-theme="norse"] [data-session-title] :is(button, [role="button"]):hover {
+  color: var(--norse-text);
+  background: var(--norse-royal-soft);
+}
+
+html[data-theme="norse"] [data-slot="session-timeline-scroll"] {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 46px), transparent);
+}
+
+html[data-theme="norse"] [data-timeline-virtual-content] {
+  width: min(820px, 100%) !important;
+  margin-inline: auto !important;
+  padding-inline: 24px;
+}
+
+html[data-theme="norse"] [data-timeline-row] {
+  scroll-margin-top: 64px;
+}
+
+/* Keep the speaker transition inside the virtualizer's measured row, not a collapsing margin. */
+html[data-theme="norse"] [data-timeline-row="UserMessage"] {
+  padding-block-end: 24px;
+}
+
+html[data-theme="norse"] [data-component="markdown"] {
+  color: var(--norse-text);
+  font-family: inherit;
+  font-size: 14.5px;
+  line-height: 1.68;
+  letter-spacing: 0;
+}
+
+html[data-theme="norse"] [data-component="markdown"] :is(h1, h2, h3, h4) {
+  color: #fff;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+html[data-theme="norse"][data-color-scheme="light"] [data-component="markdown"] :is(h1, h2, h3, h4) {
+  color: var(--norse-text);
+}
+
+html[data-theme="norse"] [data-component="markdown"] a {
+  color: var(--norse-link);
+  text-underline-offset: 3px;
+}
+
+html[data-theme="norse"] [data-component="markdown"] :not(pre) > code {
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--norse-royal) 10%, transparent);
+  color: var(--norse-link);
+  font-family: var(--norse-mono);
+  font-size: 12.5px;
+  padding: 1px 5px;
+}
+
+html[data-theme="norse"] [data-component="markdown"] pre {
+  border: 1px solid var(--norse-border);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--norse-card-deep) 80%, transparent);
+  font-family: var(--norse-mono);
+  font-size: 12px;
+}
+
+html[data-theme="norse"] [data-component="markdown"] blockquote {
+  border-inline-start: 2px solid var(--norse-gold);
+  color: var(--norse-muted);
+  font-style: italic;
+}
+
+html[data-theme="norse"] [data-component="markdown"] :is(ul, ol) {
+  padding-inline-start: 18px;
+}
+
+html[data-theme="norse"] [data-component="markdown"] li::marker {
+  color: var(--norse-gold);
+}
+
+/* User message: seeker bubble on the right. */
+html[data-theme="norse"] [data-component="user-message"] {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  margin: 22px 0 26px;
+}
+
+html[data-theme="norse"] [data-slot="user-message-body"] {
+  display: flex;
+  max-width: 82%;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 11px;
+}
+
+html[data-theme="norse"] [data-slot="user-message-text"],
+html[data-theme="norse"] body [data-workspace-session] [data-component="user-message"]:not([data-pending]) [data-slot="user-message-text"],
+html[data-theme="norse"] body [data-local-session] [data-component="user-message"]:not([data-pending]) [data-slot="user-message-text"] {
+  border: 1px solid var(--norse-royal-line);
+  border-radius: 16px 16px 5px 16px;
+  background: linear-gradient(155deg, rgba(40, 56, 94, 0.95), rgba(23, 34, 60, 0.95));
+  color: var(--norse-text);
+  padding: 12px 16px;
+  font-size: 14.5px;
+  line-height: 1.56;
+  box-shadow:
+    0 12px 36px color-mix(in srgb, var(--norse-royal) 16%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+html[data-theme="norse"][data-color-scheme="light"] [data-slot="user-message-text"] {
+  background: linear-gradient(155deg, rgba(220, 228, 248, 0.98), rgba(235, 240, 252, 0.98));
+  color: var(--norse-text);
+}
+
+html[data-theme="norse"] [data-slot="user-message-body"]::after {
+  content: "ᚱ";
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  place-items: center;
+  border: 1px solid var(--norse-gold-line);
+  border-radius: 9px;
+  background: var(--norse-gold-soft);
+  color: var(--norse-gold);
+  font-family: var(--norse-rune);
+  font-size: 16px;
+  box-shadow: 0 0 14px color-mix(in srgb, var(--norse-gold) 15%, transparent);
+}
+
+html[data-theme="norse"] [data-slot="user-message-copy-wrapper"] {
+  display: flex;
+  justify-content: flex-end;
+  padding-inline-end: 41px;
+}
+
+html[data-theme="norse"] [data-slot="user-message-meta"],
+html[data-theme="norse"] [data-slot="user-message-meta-tail"],
+html[data-theme="norse"] [data-slot="user-message-meta-sep"] {
+  color: var(--norse-dim);
+  font-size: 11px;
+}
+
+/* Assistant reply: Muninn bubble on the left. */
+html[data-theme="norse"] [data-component="text-part"] {
+  position: relative;
+  max-width: 84%;
+  margin: 22px 0 22px 42px;
+}
+
+html[data-theme="norse"] [data-component="text-part"]::before {
+  content: "ᛗ";
+  position: absolute;
+  inset-inline-start: -42px;
+  top: 0;
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid var(--norse-royal-line);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--norse-royal) 14%, transparent);
+  color: var(--norse-link);
+  font-family: var(--norse-rune);
+  font-size: 16px;
+  box-shadow: 0 0 14px color-mix(in srgb, var(--norse-royal) 18%, transparent);
+}
+
+html[data-theme="norse"] [data-slot="text-part-body"] {
+  border: 1px solid color-mix(in srgb, var(--norse-border) 70%, transparent);
+  border-inline-start: 2px solid color-mix(in srgb, var(--norse-gold) 78%, transparent);
+  border-radius: 5px 16px 16px 16px;
+  background: linear-gradient(160deg, rgba(34, 36, 45, 0.94), rgba(26, 28, 36, 0.92));
+  padding: 13px 17px;
+  box-shadow:
+    0 12px 34px rgba(0, 0, 0, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+html[data-theme="norse"][data-color-scheme="light"] [data-slot="text-part-body"] {
+  background: linear-gradient(160deg, rgba(232, 236, 244, 0.97), rgba(222, 228, 239, 0.97));
+  box-shadow:
+    0 12px 34px rgba(27, 34, 51, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+html[data-theme="norse"] [data-component="text-part"] [data-slot="reply-attribution"] {
+  margin-bottom: 7px;
+  color: var(--norse-gold);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+
+html[data-theme="norse"] [data-component="text-part"] [data-slot="reply-attribution"]::before {
+  display: none;
+}
+
+html[data-theme="norse"] [data-component="text-part"] [data-slot="text-part-meta"] {
+  margin-top: 6px;
+  color: var(--norse-dim);
+  font-size: 11px;
+}
+
+html[data-theme="norse"] [data-slot="text-part-copy-wrapper"] {
+  opacity: 0.55;
+}
+
+/* Reasoning and tool rows read as rune + line, not cards. */
+html[data-theme="norse"] [data-component="reasoning-part"] {
+  max-width: 84%;
+  margin: 16px 0 16px 42px;
+  border: 0;
+  padding: 0;
+}
+
+html[data-theme="norse"] [data-component="reasoning-part"] [data-component="collapsible"] {
+  border: 0;
+  background: transparent;
+}
+
+html[data-theme="norse"] [data-component="reasoning-part"] [data-component="tool-trigger"] {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-height: 30px;
+  border: 0;
+  background: transparent;
+  padding: 2px 0;
+  color: var(--norse-muted);
+}
+
+html[data-theme="norse"] [data-component="reasoning-part"] [data-component="tool-trigger"]::before {
+  content: "᛭";
+  flex: 0 0 16px;
+  color: var(--norse-gold);
+  font-family: var(--norse-rune);
+  font-size: 15px;
+  text-align: center;
+}
+
+html[data-theme="norse"] [data-component="reasoning-part"] [data-slot="basic-tool-tool-title"] {
+  color: var(--norse-gold);
+  font-style: italic;
+  font-weight: 500;
+}
+
+html[data-theme="norse"] [data-component="reasoning-part"] [data-component="markdown"] {
+  border-inline-start: 1px solid color-mix(in srgb, var(--norse-gold) 38%, transparent);
+  margin-inline-start: 7px;
+  padding: 6px 0 6px 20px;
+  color: var(--norse-muted);
+  font-size: 13.5px;
+  font-style: italic;
+  line-height: 1.62;
+}
+
+html[data-theme="norse"] [data-component="collapsible"].tool-collapsible {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+html[data-theme="norse"] [data-component="collapsible"].tool-collapsible > [data-slot="collapsible-trigger"] {
+  display: flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 11px;
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--norse-border) 46%, transparent);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 7px 0;
+  color: var(--norse-muted);
+}
+
+html[data-theme="norse"] [data-component="collapsible"].tool-collapsible > [data-slot="collapsible-trigger"]:hover {
+  background: color-mix(in srgb, var(--norse-royal) 5%, transparent);
+}
+
+html[data-theme="norse"] [data-component="collapsible"].tool-collapsible > [data-slot="collapsible-trigger"]::before {
+  content: "ᛟ";
+  flex: 0 0 16px;
+  color: var(--norse-gold);
+  font-family: var(--norse-rune);
+  font-size: 14px;
+  text-align: center;
+}
+
+html[data-theme="norse"] [data-component="collapsible"].tool-collapsible [data-component="tool-trigger"]::before {
+  display: none;
+}
+
+html[data-theme="norse"] [data-component="collapsible"].tool-collapsible > [data-slot="collapsible-content"] {
+  border-inline-start: 1px solid color-mix(in srgb, var(--norse-border) 55%, transparent);
+  margin: 7px 0 0 6px;
+  padding: 2px 0 2px 22px;
+}
+
+html[data-theme="norse"] [data-slot="basic-tool-tool-title"] {
+  color: #fff;
+  font-weight: 600;
+}
+
+html[data-theme="norse"][data-color-scheme="light"] [data-slot="basic-tool-tool-title"] {
+  color: var(--norse-text);
+}
+
+html[data-theme="norse"] [data-slot="basic-tool-tool-subtitle"],
+html[data-theme="norse"] [data-slot="basic-tool-tool-arg"],
+html[data-theme="norse"] [data-slot="basic-tool-tool-action"] {
+  color: var(--norse-muted);
+  font-size: 12px;
+}
+
+html[data-theme="norse"] [data-component="session-working"] {
+  color: var(--norse-gold);
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  animation: norse-pulse 1.4s ease-in-out infinite;
+}
+
+html[data-theme="norse"] [data-component="session-compaction-message"] {
+  border-block: 1px solid var(--norse-border);
+  color: var(--norse-muted);
+}
+
+@keyframes norse-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* ── Side panels and terminal ────────────────────────────────────────── */
+
+html[data-theme="norse"] [data-component="side-region"],
+html[data-theme="norse"] [data-component="terminal-panel"],
+html[data-theme="norse"] [data-component="side-terminal-panel"] {
+  border: 1px solid color-mix(in srgb, var(--norse-border) 75%, transparent);
+  border-radius: 14px !important;
+  background: color-mix(in srgb, var(--norse-card-deep) 94%, transparent);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.35);
+}
+
+html[data-theme="norse"] [data-slot="session-usage-content"] > .grid {
+  border-top: 1px solid var(--norse-border);
+}
+
+html[data-theme="norse"] [data-slot="session-usage-content"] > .grid > div {
+  border-bottom: 1px solid var(--norse-border);
+}
+
+html[data-theme="norse"] [data-slot="session-usage-content"] > .grid > div > div:first-child {
+  color: var(--norse-gold);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+html[data-theme="norse"] [data-slot="session-usage-content"] > .grid > div > div:last-child {
+  color: var(--norse-text);
+}
+
+html[data-theme="norse"] [data-component="terminal"] {
+  background: var(--norse-card-deep);
+}
+
+/* ── Settings: the Mimir settings sheet ──────────────────────────────── */
+
+html[data-theme="norse"] .settings-screen {
+  width: calc(100% - 48px);
+  max-width: 1000px;
+  height: min(92vh, 900px);
+  margin: 4vh auto 0;
+  border: 1px solid color-mix(in srgb, var(--norse-gold) 24%, transparent);
+  border-radius: 20px !important;
+  background: color-mix(in srgb, var(--norse-card-deep) 98%, transparent) !important;
+  box-shadow: 0 50px 140px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+
+html[data-theme="norse"][data-color-scheme="light"] .settings-screen {
+  box-shadow: 0 50px 140px rgba(27, 34, 51, 0.18);
+}
+
+html[data-theme="norse"] .settings-screen > .settings {
+  width: 100%;
+  max-width: none;
+}
+
+html[data-theme="norse"] .settings-nav {
+  width: 210px;
+  flex: 0 0 210px;
+  border-inline-end: 1px solid color-mix(in srgb, var(--norse-border) 55%, transparent);
+  padding: 12px;
+  gap: 2px;
+}
+
+html[data-theme="norse"] .settings-tab-header {
+  padding: 20px 26px 0;
+  background: transparent;
+}
+
+html[data-theme="norse"] .settings-tab-header::before {
+  display: none;
+}
+
+html[data-theme="norse"] .settings-tab-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--norse-text);
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+html[data-theme="norse"] .settings-tab-title::before {
+  content: "ᛗ";
+  color: var(--norse-gold);
+  font-family: var(--norse-rune);
+  font-size: 18px;
+}
+
+html[data-theme="norse"] .settings-tab-body {
+  padding: 18px 26px 34px;
+}
+
+html[data-theme="norse"] .settings-section-title {
+  color: var(--norse-gold);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+html[data-theme="norse"] [data-component="settings-list"] {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+html[data-theme="norse"] [data-component="settings-row"] {
+  border-bottom: 1px solid color-mix(in srgb, var(--norse-border) 40%, transparent);
+  padding-block: 14px;
+}
+
+html[data-theme="norse"] [data-component="settings-row"]:last-child {
+  border-bottom: 0;
+}
+
+html[data-theme="norse"] [data-slot="settings-row-title"] {
+  color: var(--norse-text);
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+html[data-theme="norse"] [data-slot="settings-row-description"] {
+  color: var(--norse-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+html[data-theme="norse"] .settings-nav-groups [data-slot="tabs-v2-trigger-wrapper"] {
+  border: 0;
+  border-radius: 9px;
+  color: var(--norse-muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+html[data-theme="norse"] .settings-nav-groups [data-slot="tabs-v2-trigger-wrapper"]:hover {
+  background: color-mix(in srgb, var(--norse-royal) 7%, transparent);
+  color: var(--norse-text);
+}
+
+html[data-theme="norse"] .settings-nav-groups [data-slot="tabs-v2-trigger-wrapper"]:has([data-selected]) {
+  background: color-mix(in srgb, var(--norse-royal) 14%, transparent);
+  color: var(--norse-text);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--norse-royal) 28%, transparent);
+}
+
+html[data-theme="norse"] .settings-screen [data-component="card"],
+html[data-theme="norse"] .settings-screen [data-slot="accordion-trigger"] {
+  border-radius: 12px;
+}
+
+html[data-theme="norse"] [data-component="switch"] [data-slot="switch-control"] {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--norse-dim) 50%, transparent);
+  box-shadow: none;
+}
+
+html[data-theme="norse"] [data-component="switch"][data-checked] [data-slot="switch-control"] {
+  background: var(--norse-royal);
+}
+
+html[data-theme="norse"] [data-component="switch"] [data-slot="switch-thumb"] {
+  border-radius: 50%;
+  background: #cdd5e6;
+}
+
+html[data-theme="norse"] [data-component="switch"][data-checked] [data-slot="switch-thumb"] {
+  background: #fff;
+}
+
+html[data-theme="norse"] [data-component="switch"] [data-slot="switch-label"] {
+  color: var(--norse-muted);
+  font-size: 11px;
+  letter-spacing: 0.05em;
+}
+
+/* ── Shared controls and overlays ────────────────────────────────────── */
+
+html[data-theme="norse"] [data-component="button-v2"] {
+  border-radius: 10px;
+  font-weight: 600;
+}
+
+html[data-theme="norse"] [data-component="button-v2"][data-variant="neutral"],
+html[data-theme="norse"] [data-component="button-v2"][data-variant="ghost"],
+html[data-theme="norse"] [data-component="button-v2"][data-variant="ghost-muted"],
+html[data-theme="norse"] [data-component="button-v2"][data-variant="outline"] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--norse-dim) 50%, transparent);
+  color: var(--norse-muted);
+}
+
+html[data-theme="norse"] [data-component="button-v2"][data-variant="neutral"]:hover,
+html[data-theme="norse"] [data-component="button-v2"][data-variant="ghost"]:hover,
+html[data-theme="norse"] [data-component="button-v2"][data-variant="ghost-muted"]:hover,
+html[data-theme="norse"] [data-component="button-v2"][data-variant="outline"]:hover {
+  color: var(--norse-text);
+  box-shadow: inset 0 0 0 1px var(--norse-royal-line);
+}
+
+html[data-theme="norse"] [data-component="button-v2"][data-variant="contrast"],
+html[data-theme="norse"] [data-component="button-v2"][data-variant="submit"] {
+  border-radius: 10px !important;
+  background: var(--norse-gold);
+  color: #241a08;
+  box-shadow: none;
+}
+
+html[data-theme="norse"] [data-component="button-v2"][data-variant="contrast"]:hover,
+html[data-theme="norse"] [data-component="button-v2"][data-variant="submit"]:hover {
+  filter: brightness(1.07);
+}
+
+html[data-theme="norse"] [data-component="icon-button-v2"] {
+  border-radius: 9px;
+}
+
+html[data-theme="norse"] [data-component="text-input-v2"],
+html[data-theme="norse"] [data-component="select-v2"],
+html[data-theme="norse"] [data-component="textarea-v2"],
+html[data-theme="norse"] [data-component="input"] {
+  border: 1px solid color-mix(in srgb, var(--norse-dim) 50%, transparent) !important;
+  border-radius: 9px !important;
+  background: color-mix(in srgb, var(--norse-card) 70%, transparent) !important;
+  color: var(--norse-text);
+  box-shadow: none !important;
+}
+
+html[data-theme="norse"] [data-component="text-input-v2"]:focus-within,
+html[data-theme="norse"] [data-component="select-v2"]:focus-within,
+html[data-theme="norse"] [data-component="textarea-v2"]:focus-within,
+html[data-theme="norse"] [data-component="input"]:focus {
+  border-color: color-mix(in srgb, var(--norse-royal) 60%, transparent) !important;
+  background: color-mix(in srgb, var(--norse-card) 95%, transparent) !important;
+}
+
+html[data-theme="norse"] [data-component="select-v2"][data-appearance="inline"] {
+  border: 0 !important;
+  border-bottom: 1px solid var(--norse-royal-line) !important;
+  background: transparent !important;
+}
+
+html[data-theme="norse"] [data-component="menu-v2-content"],
+html[data-theme="norse"] [data-slot="select-v2-content"],
+html[data-theme="norse"] [data-component="context-menu-content"],
+html[data-theme="norse"] [data-component="context-menu-sub-content"],
+html[data-theme="norse"] [data-component="popover-content"],
+html[data-theme="norse"] [data-component="hover-card-content"] {
+  border: 1px solid var(--norse-gold-line) !important;
+  border-radius: 14px !important;
+  background: var(--norse-card-deep) !important;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5) !important;
+}
+
+html[data-theme="norse"][data-color-scheme="light"] [data-component="menu-v2-content"],
+html[data-theme="norse"][data-color-scheme="light"] [data-slot="select-v2-content"],
+html[data-theme="norse"][data-color-scheme="light"] [data-component="context-menu-content"],
+html[data-theme="norse"][data-color-scheme="light"] [data-component="context-menu-sub-content"],
+html[data-theme="norse"][data-color-scheme="light"] [data-component="popover-content"],
+html[data-theme="norse"][data-color-scheme="light"] [data-component="hover-card-content"] {
+  box-shadow: 0 24px 70px rgba(27, 34, 51, 0.18) !important;
+}
+
+html[data-theme="norse"] [data-component="menu-v2-item"] {
+  border-radius: 9px;
+}
+
+html[data-theme="norse"] [data-component="menu-v2-item"]:hover {
+  background: color-mix(in srgb, var(--norse-royal) 12%, transparent);
+}
+
+html[data-theme="norse"] [data-component="tooltip-v2"] {
+  border: 1px solid var(--norse-gold-line);
+  border-radius: 9px;
+  background: var(--norse-card-deep);
+  color: var(--norse-text);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.4);
+}
+
+html[data-theme="norse"] [data-component="dialog-v2"] [data-slot="dialog-container"] {
+  border: 1px solid var(--norse-gold-line);
+  border-radius: 18px;
+  background: var(--norse-card-deep);
+  box-shadow: 0 40px 120px rgba(0, 0, 0, 0.6);
+}
+
+html[data-theme="norse"] [data-component="dialog-v2"] [data-slot="dialog-title"] {
+  color: var(--norse-text);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+html[data-theme="norse"] .toast-v2 {
+  border: 1px solid var(--norse-gold-line);
+  border-radius: 14px;
+  background: var(--norse-card-deep);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5);
+}
+
+html[data-theme="norse"] [data-component="tag"] {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--norse-royal) 8%, transparent);
+  color: var(--norse-link);
+}
+
+html[data-theme="norse"] [data-component="card"] {
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--norse-card) 60%, transparent);
+}
+
+html[data-theme="norse"] [data-slot="progress-track"] {
+  background: color-mix(in srgb, var(--norse-dim) 25%, transparent);
+}
+
+html[data-theme="norse"] [data-slot="progress-fill"] {
+  background: var(--norse-gold);
+}
+
+html[data-theme="norse"] .scroll-view__thumb::after {
+  border-radius: 8px;
+  width: 8px;
+  background: color-mix(in srgb, var(--norse-royal) 22%, transparent);
+}
+
+html[data-theme="norse"] .scroll-view__thumb[data-orientation="horizontal"]::after {
+  height: 8px;
+}
+
+html[data-theme="norse"] .scroll-view__thumb:hover::after {
+  background: color-mix(in srgb, var(--norse-royal) 40%, transparent);
+}
+
+html[data-theme="norse"] [data-component="logo-mark"],
+html[data-theme="norse"] [data-component="logo-wordmark"] {
+  color: var(--norse-gold);
+}
+
+html[data-theme="norse"] [data-component="connect-server"] {
+  background:
+    radial-gradient(circle at 52% 0%, color-mix(in srgb, var(--norse-royal) 20%, transparent), transparent 48%),
+    var(--norse-page);
+}
+
+html[data-theme="norse"] [data-component="connect-server"] .server-connect-brand {
+  color: var(--norse-gold);
+}
+
+html[data-theme="norse"] [data-slot="mobile-drawer-overlay"] {
+  background: rgba(8, 8, 12, 0.66);
+  backdrop-filter: blur(5px);
+}
+
+html[data-theme="norse"] [data-slot="mobile-drawer-content"],
+html[data-theme="norse"] [data-slot="mobile-panel"] {
+  border: 1px solid var(--norse-gold-line);
+  border-radius: 16px 16px 0 0 !important;
+  background: var(--norse-card-deep) !important;
+}
+
+/* ── Mobile ──────────────────────────────────────────────────────────── */
+
+@media (max-width: 767px) {
+  html[data-theme="norse"] [data-component="norse-rail"] {
+    display: none;
+  }
+
+  html[data-theme="norse"] [data-slot="titlebar-v2"] {
+    background: color-mix(in srgb, var(--norse-page) 94%, transparent);
+    border-bottom: 1px solid var(--norse-gold-line);
+  }
+
+  html[data-theme="norse"] [data-slot="titlebar-tab-item"][data-active] {
+    background: color-mix(in srgb, var(--norse-royal) 14%, transparent) !important;
+  }
+
+  html[data-theme="norse"] [data-slot="tab-link"] {
+    font-size: 12px;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+
+  html[data-theme="norse"] [data-slot="norse-welcome-greeting"] {
+    font-size: clamp(32px, 10vw, 46px);
+  }
+
+  html[data-theme="norse"] [data-slot="new-session-content"] {
+    top: 14%;
+  }
+
+  html[data-theme="norse"] [data-slot="new-session-content"] > div > div.mt-8 {
+    margin-top: 22px !important;
+  }
+
+  html[data-theme="norse"] [data-timeline-virtual-content] {
+    padding-inline: 16px;
+  }
+
+  html[data-theme="norse"] [data-session-title] {
+    padding-inline: 16px;
+  }
+
+  html[data-theme="norse"] [data-slot="user-message-body"] {
+    max-width: 92%;
+  }
+
+  html[data-theme="norse"] [data-component="text-part"] {
+    max-width: 100%;
+    margin-inline-start: 36px;
+  }
+
+  html[data-theme="norse"] [data-component="text-part"]::before {
+    inset-inline-start: -36px;
+    width: 26px;
+    height: 26px;
+    font-size: 14px;
+  }
+
+  html[data-theme="norse"] [data-component="text-part"] [data-slot="text-part-body"] {
+    padding: 11px 14px;
+  }
+
+  html[data-theme="norse"] [data-component="session-composer-dock"] {
+    padding-bottom: max(10px, env(safe-area-inset-bottom, 0px));
+  }
+
+  html[data-theme="norse"] [data-component="session-composer-dock"] > div {
+    padding-inline: 12px;
+  }
+
+  html[data-theme="norse"] .settings-screen {
+    width: calc(100% - 16px);
+    height: calc(100% - 16px);
+    margin: 8px;
+    border-radius: 12px !important;
+  }
+
+  html[data-theme="norse"] .settings-nav {
+    width: 100%;
+    flex: none;
+    border-inline-end: 0;
+    border-bottom: 1px solid var(--norse-border);
+  }
+
+  html[data-theme="norse"] .settings-tab-header {
+    padding: 14px 16px 0;
+  }
+
+  html[data-theme="norse"] .settings-tab-body {
+    padding: 14px 16px 28px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme="norse"] *,
+  html[data-theme="norse"] *::before,
+  html[data-theme="norse"] *::after {
+    animation: none !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Keep the rail head inside the expanded rail. */
+html[data-theme="norse"] [data-slot="norse-rail-project"] {
+  min-width: 0 !important;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-project-name"] {
+  min-width: 0;
+}
+
+/* Keep sticky home headers from becoming opaque bands over the aurora. */
+html[data-theme="norse"] [data-slot="home-panel"] .sticky.bg-v2-background-bg-base {
+  background: transparent !important;
+  backdrop-filter: none !important;
+}
+
+html[data-theme="norse"] [data-slot="home-panel"] .home-session-group-header {
+  text-shadow: 0 1px 6px var(--norse-page);
+}
+
+/* User messages: keep the rune avatar beside the bubble. */
+html[data-theme="norse"] [data-component="user-message"] {
+  max-width: 100%;
+}
+
+html[data-theme="norse"] [data-slot="user-message-body"] {
+  width: 100%;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+html[data-theme="norse"] [data-slot="user-message-text"] {
+  min-width: 0;
+  max-width: calc(100% - 41px);
+}
+
+/* Virtualized content is padded; size it from the border box. */
+html[data-theme="norse"] [data-timeline-virtual-content] {
+  box-sizing: border-box;
+}
+
+@media (max-width: 767px) {
+  html[data-theme="norse"] [data-component="text-part"] {
+    max-width: calc(100% - 36px);
+  }
+
+  html[data-theme="norse"] [data-component="text-part"] [data-slot="text-part-body"] {
+    overflow-wrap: anywhere;
+  }
+
+  html[data-theme="norse"] [data-slot="user-message-body"] {
+    max-width: 100%;
+  }
+
+  html[data-theme="norse"] [data-slot="user-message-text"] {
+    max-width: calc(100% - 41px);
+  }
+}
+
+html[data-theme="norse"] [data-slot="home-panel"] .home-session-group-header::before,
+html[data-theme="norse"] [data-slot="home-panel"] .home-session-group-header::after {
+  background: transparent !important;
+}
+
+/* Light user bubble keeps the royal tint without inheriting the dark bubble. */
+html[data-theme="norse"][data-color-scheme="light"] [data-component="user-message"] [data-slot="user-message-text"],
+html[data-theme="norse"][data-color-scheme="light"] body [data-workspace-session] [data-component="user-message"]:not([data-pending]) [data-slot="user-message-text"],
+html[data-theme="norse"][data-color-scheme="light"] body [data-local-session] [data-component="user-message"]:not([data-pending]) [data-slot="user-message-text"] {
+  border-color: rgba(61, 97, 232, 0.28) !important;
+  background: linear-gradient(155deg, #d3ddf4, #e2e8f4) !important;
+  color: #1b2233 !important;
+  box-shadow:
+    0 12px 36px rgba(61, 97, 232, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7) !important;
+}
+
+/* Session chrome: keep the title, context chip, and the side-panel toggle on one centerline. */
+html[data-theme="norse"] [data-session-title] {
+  padding: 0 24px 16px;
+}
+
+html[data-theme="norse"] [data-session-title] .h-12 {
+  height: 48px;
+  gap: 10px;
+}
+
+html[data-theme="norse"] [data-session-title] + div {
+  height: 16px;
+  margin-top: -16px;
+  background: linear-gradient(to bottom, var(--norse-page), transparent) !important;
+}
+
+html[data-theme="norse"] [data-session-title] [data-slot="session-title-child"] {
+  color: var(--norse-text) !important;
+  font-size: 14px !important;
+  font-weight: 620 !important;
+  line-height: 20px !important;
+  letter-spacing: -0.01em;
+}
+
+html[data-theme="norse"] [data-session-title] button:has([data-component="progress-circle"]) {
+  height: 28px;
+  border: 1px solid color-mix(in srgb, var(--norse-border) 70%, transparent) !important;
+  border-radius: 999px !important;
+  background: color-mix(in srgb, var(--norse-card) 48%, transparent) !important;
+  color: var(--norse-muted) !important;
+  padding-inline: 9px !important;
+  box-shadow: none !important;
+}
+
+html[data-theme="norse"] [data-session-title] button:has([data-component="progress-circle"]):hover {
+  border-color: var(--norse-royal-line) !important;
+  background: var(--norse-royal-soft) !important;
+  color: var(--norse-text) !important;
+}
+
+html[data-theme="norse"] [data-session-title] button:has([data-component="progress-circle"]) [data-component="progress-circle"] {
+  color: var(--norse-gold) !important;
+}
+
+html[data-theme="norse"] [data-session-title] > div > div > div:last-child {
+  gap: 6px;
+}
+
+/* The gold prompt shell is the focus indicator; the editor's clipped focus ring left vertical blue lines. */
+html[data-theme="norse"] [data-component="composer-editor"]:focus,
+html[data-theme="norse"] [data-component="composer-editor"]:focus-visible {
+  outline: none !important;
+  outline-offset: 0 !important;
+}
+
+/* The model chip carries the Mimir rune from the reference. */
+html[data-theme="norse"] [data-component="composer"] [data-action="composer-model"]::before {
+  content: "ᛟ";
+  flex: none;
+  color: var(--norse-gold);
+  font-family: var(--norse-rune);
+  font-size: 14px;
+  line-height: 1;
+  margin-inline-end: 2px;
+}
+
+/* Keep keyboard focus visible on the shell after removing the editor's clipped ring. */
+html[data-theme="norse"] [data-component="composer"]:has([data-component="composer-editor"]:focus) {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--norse-gold) 72%, transparent),
+    0 0 38px color-mix(in srgb, var(--norse-gold) 18%, transparent),
+    0 24px 70px rgba(0, 0, 0, 0.32) !important;
+}
+
+/* Composer accessory: real measured context usage, placed where the reference puts it. */
+html[data-theme="norse"] [data-slot="composer-context"] {
+  display: flex;
+  align-items: center;
+  margin-inline-end: 6px;
+}
+
+html[data-theme="norse"] [data-slot="composer-context"] button {
+  height: 34px;
+  border: 1px solid color-mix(in srgb, var(--norse-border) 60%, transparent) !important;
+  border-radius: 10px !important;
+  background: transparent !important;
+  color: var(--norse-muted) !important;
+  padding-inline: 9px !important;
+  font-size: 12px;
+  box-shadow: none !important;
+}
+
+html[data-theme="norse"] [data-slot="composer-context"] button:hover {
+  border-color: var(--norse-royal-line) !important;
+  background: var(--norse-royal-soft) !important;
+  color: var(--norse-text) !important;
+}
+
+html[data-theme="norse"] [data-slot="composer-context"] [data-component="progress-circle"] {
+  --progress-circle-background: color-mix(in srgb, var(--norse-royal) 25%, transparent);
+  --progress-circle-background-overlay: transparent;
+  --progress-circle-progress: var(--norse-gold);
+  color: var(--norse-gold) !important;
+}
+
+html[data-theme="norse"] [data-slot="composer-context"] button span {
+  color: var(--norse-text);
+}
+
+html[data-theme="norse"] [data-component="composer"] [data-action="composer-model"] {
+  height: 34px !important;
+}
+
+/* Build/Plan segmented agent control, only when those are the complete agent list. */
+html[data-theme="norse"] [data-component="norse-agent-control"] {
+  display: flex;
+  height: 34px;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid var(--norse-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--norse-card) 52%, transparent);
+  padding: 3px;
+}
+
+html[data-theme="norse"] [data-component="norse-agent-control"] button {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--norse-muted);
+  padding: 0 11px;
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+html[data-theme="norse"] [data-component="norse-agent-control"] button:hover {
+  color: var(--norse-text);
+}
+
+html[data-theme="norse"] [data-component="norse-agent-control"] button[aria-pressed="true"][data-agent="plan"] {
+  background: color-mix(in srgb, var(--norse-royal) 18%, transparent);
+  color: var(--norse-text);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--norse-royal) 40%, transparent);
+}
+
+html[data-theme="norse"] [data-component="norse-agent-control"] button[aria-pressed="true"][data-agent="build"] {
+  background: color-mix(in srgb, var(--norse-gold) 18%, transparent);
+  color: var(--norse-text);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--norse-gold) 42%, transparent);
+}
+
+html[data-theme="norse"] [data-component="norse-agent-control"] button span {
+  color: var(--norse-muted);
+  font-family: var(--norse-rune);
+  font-size: 13px;
+}
+
+html[data-theme="norse"] [data-component="norse-agent-control"] button[aria-pressed="true"][data-agent="plan"] span {
+  color: var(--norse-royal);
+}
+
+html[data-theme="norse"] [data-component="norse-agent-control"] button[aria-pressed="true"][data-agent="build"] span {
+  color: var(--norse-gold);
+}
+
+/* Plan mode: the composer turns royal, and the real selected agent explains the mode. */
+html[data-theme="norse"] [data-slot="composer-plan-strip"] {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin: 12px 12px 0;
+  border: 1px solid color-mix(in srgb, var(--norse-royal) 22%, transparent);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--norse-royal) 8%, transparent);
+  padding: 8px 12px;
+  color: color-mix(in srgb, var(--norse-royal) 68%, var(--norse-text));
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+html[data-theme="norse"] [data-slot="composer-plan-rune"] {
+  flex: none;
+  color: var(--norse-royal);
+  font-family: var(--norse-rune);
+  font-size: 15px;
+  line-height: 1.3;
+}
+
+html[data-theme="norse"] [data-slot="composer-plan-strip"] b {
+  color: var(--norse-text);
+  font-weight: 600;
+}
+
+html[data-theme="norse"] [data-component="composer"][data-plan="true"] {
+  background:
+    linear-gradient(var(--norse-prompt-bg), var(--norse-prompt-bg)) padding-box,
+    linear-gradient(
+        90deg,
+        rgba(97, 131, 255, 0.22),
+        rgba(97, 131, 255, 0.72),
+        rgba(157, 178, 255, 0.72),
+        rgba(97, 131, 255, 0.72),
+        rgba(97, 131, 255, 0.22)
+      )
+      border-box !important;
+}
+
+html[data-theme="norse"] [data-component="composer"][data-plan="true"] [data-action="composer-submit"] {
+  background: var(--norse-royal) !important;
+  color: #0b1020 !important;
+}
+
+/* Composer expand control: the same editor, a taller viewport. */
+html[data-theme="norse"] [data-component="composer"] [data-action="composer-expand"] {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  z-index: 20;
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--norse-muted);
+  cursor: pointer;
+  transition:
+    color 140ms ease,
+    background 140ms ease;
+}
+
+html[data-theme="norse"] [data-component="composer"] [data-action="composer-expand"]:hover,
+html[data-theme="norse"] [data-component="composer"][data-expanded="true"] [data-action="composer-expand"] {
+  background: color-mix(in srgb, var(--norse-royal) 10%, transparent);
+  color: var(--norse-text);
+}
+
+html[data-theme="norse"] [data-component="composer"] [data-action="composer-expand"] [data-component="icon"] {
+  width: 16px;
+  height: 16px;
+}
+
+html[data-theme="norse"] [data-component="composer"] [data-component="composer-editor"],
+html[data-theme="norse"] [data-component="composer"] [data-slot="composer-placeholder"] {
+  padding-inline-end: 46px;
+}
+
+html[data-theme="norse"] [data-component="composer"][data-expanded="true"] [data-component="composer-scroll"],
+html[data-theme="norse"] [data-component="composer"][data-expanded="true"] [data-component="composer-editor"] {
+  min-height: 46vh !important;
+  max-height: 46vh !important;
+}
+
+html[data-theme="norse"] [data-component="norse-agent-control"] button {
+  text-transform: capitalize;
+}
+
+
+
+/* The model picker search is already the focused control; avoid a second blue frame. */
+html[data-theme="norse"]
+  [data-component="menu-v2-content"]:has([data-slot="model-selector-scroll"])
+  input:focus-visible {
+  outline: none;
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--norse-gold) 55%, transparent);
+}
+
+/* The default variant is a normal control in Norse, not a hover-revealed one. */
+@media (hover: hover) {
+  html[data-theme="norse"]
+    [data-component="composer"]:not(:hover)
+    .composer-variant-default:not(:focus-visible, [data-expanded]) {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+
+/* Widen the transcript while keeping it bounded and readable. */
+html[data-theme="norse"] [data-timeline-virtual-content] {
+  width: min(1000px, 100%) !important;
+  padding-inline: 0;
+}
+
+html[data-theme="norse"] [data-timeline-virtual-content] [data-timeline-row] {
+  max-width: 100% !important;
+}
+
+html[data-theme="norse"] [data-slot="user-message-body"] {
+  max-width: 100%;
+}
+
+@media (min-width: 768px) {
+  html[data-theme="norse"] [data-component="text-part"] {
+    max-width: calc(100% - 42px);
+  }
+}

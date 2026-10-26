@@ -21,6 +21,7 @@ import { Persist, persisted } from "@/runtime/persistence/storage"
 import { Persistence } from "@/runtime/persistence/schema"
 import type { NewSessionWorkspaceController } from "./workspace/controller"
 import { NewSessionWordmark } from "./wordmark"
+import { NorseWelcome } from "./norse-welcome"
 
 const providerTipDismissalDuration = 30 * 24 * 60 * 60 * 1000
 
@@ -63,6 +64,7 @@ export function NewSessionView(props: {
         />
         <div data-slot="new-session-content" class="absolute inset-x-0 top-[25.375%] flex justify-center px-6">
           <div class={NEW_SESSION_CONTENT_WIDTH}>
+            <NorseWelcome />
             <NewSessionWordmark />
             <div class="mt-8 flex flex-col gap-8">
               <Composer model={props.composer} />

@@ -21,6 +21,7 @@ import { createAnimatedPresence } from "@/runtime/animated-presence"
 import { resolveBlobUrl } from "@/runtime/persistence/drafts"
 import { ProviderModelIcon } from "@/providers/models/provider-group"
 import { useI18n } from "@opencode/ui/context/i18n"
+import { useTheme } from "@opencode/ui/theme/context"
 import { Button } from "@opencode/ui/button"
 import { Keybind } from "@opencode/ui/keybind"
 import { Menu } from "@opencode/ui/menu"
@@ -44,6 +45,8 @@ import type {
   ComposerSuggestion,
 } from "../types"
 import type { ComposerEditorModel, ComposerSelectControl } from "./interaction"
+import { compactAgentControl, NorseAgentControl } from "./norse-agent-control"
+import { isNorseTheme } from "@/theme/norse"
 import { isAttachment } from "../prompt-parts"
 import "../attachments/attachments.css"
 import "./editor.css"
@@ -83,6 +86,7 @@ export type ComposerEditorProps = {
   borderUnderlay?: boolean
   class?: string
   modelControl?: JSX.Element
+  contextControl?: JSX.Element
   modelControlsVisible?: boolean
   attachKeybind?: string[]
   attachShortcut?: string
@@ -93,6 +97,7 @@ export type ComposerEditorProps = {
 
 export function ComposerEditor(props: ComposerEditorProps) {
   const i18n = useI18n()
+  const theme = useTheme()
   const state = props.controller.state
   const view = props.controller.view
   let editor: HTMLDivElement | undefined
@@ -100,6 +105,11 @@ export function ComposerEditor(props: ComposerEditorProps) {
   let controlsViewport!: HTMLDivElement
   let controlsContent!: HTMLDivElement
   const [overflow, setOverflow] = createStore({ start: false, end: false })
+  const [expanded, setExpanded] = createSignal(false)
+  const norse = createMemo(() => isNorseTheme(theme.themeId()))
+  const desktop = createMediaQuery("(min-width: 768px)")
+  // The real selected agent, not a visual-only mode: choosing Plan genuinely prevents edits.
+  const plan = createMemo(() => norse() && view.agent?.current() === "plan")
 
   const updateOverflow = () => {
     const offset = Math.abs(controlsViewport.scrollLeft)
@@ -158,6 +168,26 @@ export function ComposerEditor(props: ComposerEditorProps) {
         }
       : undefined
 
+  // The reference puts the model chip before the Plan/Build control.
+  const agentControl = () => (
+    <Show when={view.agent} keyed>
+      {(control) => (
+        <Show
+          when={norse() && desktop() && compactAgentControl(control)}
+          fallback={
+            <ComposerEditorConfiguredSelect
+              title={i18n.t("ui.promptInput.chooseAgent")}
+              keybind={["Mod", "."]}
+              control={control}
+            />
+          }
+        >
+          <NorseAgentControl control={control} title={i18n.t("ui.promptInput.chooseAgent")} />
+        </Show>
+      )}
+    </Show>
+  )
+
   return (
     <div class={`relative size-full flex flex-col gap-0 ${props.class ?? ""}`}>
       <input
@@ -186,6 +216,8 @@ export function ComposerEditor(props: ComposerEditorProps) {
       <form
         data-component="composer"
         data-dock-border-underlay={props.borderUnderlay ? "true" : undefined}
+        data-plan={plan() ? "true" : undefined}
+        data-expanded={expanded() ? "true" : undefined}
         class="group/composer relative min-h-[96px] w-full overflow-clip rounded-xl bg-v2-background-bg-base"
         classList={{
           "shadow-[var(--v2-elevation-raised)]": !props.borderUnderlay,
@@ -217,97 +249,123 @@ export function ComposerEditor(props: ComposerEditorProps) {
           />
         </Show>
 
-        <ScrollView
-          data-component="composer-scroll"
-          class="min-h-[60px] max-h-[180px]"
-          viewportRef={(element) => {
-            viewport = element
-            element.tabIndex = -1
-          }}
-        >
-          <div
-            ref={(element) => {
-              editor = element
-              props.controller.setEditor(element)
+        <Show when={state.mode === "normal" && plan()}>
+          <div data-slot="composer-plan-strip">
+            <span data-slot="composer-plan-rune" aria-hidden="true">
+              ᛈ
+            </span>
+            <span>
+              <b>{i18n.t("norse.plan.strip.title")}</b> {i18n.t("norse.plan.strip.body")}
+            </span>
+          </div>
+        </Show>
+
+        <div data-slot="composer-editor-area" class="relative">
+          <ScrollView
+            data-component="composer-scroll"
+            class={norse() && expanded() ? "min-h-[46vh] max-h-[46vh]" : "min-h-[60px] max-h-[180px]"}
+            viewportRef={(element) => {
+              viewport = element
+              element.tabIndex = -1
             }}
-            data-component="composer-editor"
-            role="textbox"
-            aria-multiline="true"
-            aria-label={i18n.t("ui.promptInput.label")}
-            dir={state.mode === "normal" ? "auto" : "ltr"}
-            contenteditable={!props.disabled && !props.readOnly}
-            autocapitalize={state.mode === "normal" ? "sentences" : "off"}
-            autocorrect={state.mode === "normal" ? "on" : "off"}
-            spellcheck={state.mode === "normal"}
-            // @ts-expect-error
-            autocomplete="off"
-            class="relative z-10 block min-h-[60px] w-full whitespace-pre-wrap bg-transparent px-4 pt-4 pb-2 text-[13px] font-[440] leading-5 text-v2-text-text-base focus:outline-none [&_[data-mention=file]]:text-syntax-property [&_[data-mention=agent]]:text-syntax-type [&_[data-mention=reference]]:text-syntax-keyword"
-            classList={{ "font-mono!": state.mode === "shell", "opacity-50": props.disabled }}
-            style={{
-              "unicode-bidi": state.mode === "normal" ? "plaintext" : undefined,
-              "text-align": "start",
-            }}
-            onInput={(event) => {
-              const cursor = composerCursor(event.currentTarget)
-              const prompt = parseComposerEditor(event.currentTarget)
-              const attachments = props.controller.parts().filter(isAttachment)
-              localInput = true
-              props.controller.onInput(prompt.map((part) => part.content).join(""), [...prompt, ...attachments], cursor)
-            }}
-            onKeyDown={(event) => {
-              if (!view.draftOnly && props.controller.onKeyDown(event)) return
-              const mod = event.metaKey || event.ctrlKey
-
-              if (mod && event.key === "ArrowUp" && !event.shiftKey && !event.altKey) {
-                if (view.submit.queue?.editFirst()) event.preventDefault()
-
-                return
-              }
-
-              if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
-                event.preventDefault()
-
-                if (event.repeat) return
-                props.controller.submit(mod ? { alternate: true } : undefined)
-              }
-            }}
-            onKeyUp={updateCursor}
-            onPointerUp={updateCursor}
-            onPaste={(event) => {
-              props.controller.onPaste(event)
-              // Programmatic multiline insertion does not reliably reveal the caret.
-              requestAnimationFrame(() => {
-                const selection = window.getSelection()
-
-                if (!editor || !viewport || !selection?.isCollapsed || !selection.rangeCount) return
-
-                if (!editor.contains(selection.anchorNode)) return
-                const caret = selection.getRangeAt(0).getBoundingClientRect()
-
-                if (!caret.height) return
-                const bounds = viewport.getBoundingClientRect()
-
-                if (caret.bottom > bounds.bottom - 8) viewport.scrollTop += caret.bottom - bounds.bottom + 8
-
-                if (caret.top < bounds.top + 8) viewport.scrollTop += caret.top - bounds.top - 8
-              })
-            }}
-            onFocus={() => props.controller.dispatch({ type: "focus.editor" })}
-          />
-          <Show when={!props.controller.value()}>
+          >
             <div
+              ref={(element) => {
+                editor = element
+                props.controller.setEditor(element)
+              }}
+              data-component="composer-editor"
+              role="textbox"
+              aria-multiline="true"
+              aria-label={i18n.t("ui.promptInput.label")}
               dir={state.mode === "normal" ? "auto" : "ltr"}
-              class="pointer-events-none absolute inset-x-0 top-0 px-4 pt-4 text-[13px] font-[440] leading-5 text-v2-text-text-faint"
-              classList={{ "font-mono!": state.mode === "shell" }}
-              style={{ "unicode-bidi": state.mode === "normal" ? "plaintext" : undefined, "text-align": "start" }}
+              contenteditable={!props.disabled && !props.readOnly}
+              autocapitalize={state.mode === "normal" ? "sentences" : "off"}
+              autocorrect={state.mode === "normal" ? "on" : "off"}
+              spellcheck={state.mode === "normal"}
+              // @ts-expect-error
+              autocomplete="off"
+              class="relative z-10 block min-h-[60px] w-full whitespace-pre-wrap bg-transparent px-4 pt-4 pb-2 text-[13px] font-[440] leading-5 text-v2-text-text-base focus:outline-none [&_[data-mention=file]]:text-syntax-property [&_[data-mention=agent]]:text-syntax-type [&_[data-mention=reference]]:text-syntax-keyword"
+              classList={{ "font-mono!": state.mode === "shell", "opacity-50": props.disabled }}
+              style={{
+                "unicode-bidi": state.mode === "normal" ? "plaintext" : undefined,
+                "text-align": "start",
+              }}
+              onInput={(event) => {
+                const cursor = composerCursor(event.currentTarget)
+                const prompt = parseComposerEditor(event.currentTarget)
+                const attachments = props.controller.parts().filter(isAttachment)
+                localInput = true
+                props.controller.onInput(prompt.map((part) => part.content).join(""), [...prompt, ...attachments], cursor)
+              }}
+              onKeyDown={(event) => {
+                if (!view.draftOnly && props.controller.onKeyDown(event)) return
+                const mod = event.metaKey || event.ctrlKey
+
+                if (mod && event.key === "ArrowUp" && !event.shiftKey && !event.altKey) {
+                  if (view.submit.queue?.editFirst()) event.preventDefault()
+
+                  return
+                }
+
+                if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+                  event.preventDefault()
+
+                  if (event.repeat) return
+                  props.controller.submit(mod ? { alternate: true } : undefined)
+                }
+              }}
+              onKeyUp={updateCursor}
+              onPointerUp={updateCursor}
+              onPaste={(event) => {
+                props.controller.onPaste(event)
+                // Programmatic multiline insertion does not reliably reveal the caret.
+                requestAnimationFrame(() => {
+                  const selection = window.getSelection()
+
+                  if (!editor || !viewport || !selection?.isCollapsed || !selection.rangeCount) return
+
+                  if (!editor.contains(selection.anchorNode)) return
+                  const caret = selection.getRangeAt(0).getBoundingClientRect()
+
+                  if (!caret.height) return
+                  const bounds = viewport.getBoundingClientRect()
+
+                  if (caret.bottom > bounds.bottom - 8) viewport.scrollTop += caret.bottom - bounds.bottom + 8
+
+                  if (caret.top < bounds.top + 8) viewport.scrollTop += caret.top - bounds.top - 8
+                })
+              }}
+              onFocus={() => props.controller.dispatch({ type: "focus.editor" })}
+            />
+            <Show when={!props.controller.value()}>
+              <div
+                data-slot="composer-placeholder"
+                dir={state.mode === "normal" ? "auto" : "ltr"}
+                class="pointer-events-none absolute inset-x-0 top-0 px-4 pt-4 text-[13px] font-[440] leading-5 text-v2-text-text-faint"
+                classList={{ "font-mono!": state.mode === "shell" }}
+                style={{ "unicode-bidi": state.mode === "normal" ? "plaintext" : undefined, "text-align": "start" }}
+              >
+                {view.placeholder?.() ??
+                  (state.mode === "shell"
+                    ? i18n.t("ui.promptInput.placeholder.shell")
+                    : i18n.t("ui.promptInput.placeholder.normal", { slash: "/", at: "@" }))}
+              </div>
+            </Show>
+          </ScrollView>
+          <Show when={norse()}>
+            <button
+              type="button"
+              data-action="composer-expand"
+              aria-pressed={expanded()}
+              aria-label={i18n.t(expanded() ? "norse.composer.collapse" : "norse.composer.expand")}
+              title={i18n.t(expanded() ? "norse.composer.collapse" : "norse.composer.expand")}
+              onClick={() => setExpanded((value) => !value)}
             >
-              {view.placeholder?.() ??
-                (state.mode === "shell"
-                  ? i18n.t("ui.promptInput.placeholder.shell")
-                  : i18n.t("ui.promptInput.placeholder.normal", { slash: "/", at: "@" }))}
-            </div>
+              <Icon name={expanded() ? "collapse" : "expand"} />
+            </button>
           </Show>
-        </ScrollView>
+        </div>
 
         <div class="flex h-11 items-center px-2">
           <div
@@ -343,15 +401,7 @@ export function ComposerEditor(props: ComposerEditorProps) {
             style={buttons()}
           >
             <div ref={controlsContent} class="flex h-full w-max min-w-full items-center gap-1">
-              <Show when={view.agent} keyed>
-                {(control) => (
-                  <ComposerEditorConfiguredSelect
-                    title={i18n.t("ui.promptInput.chooseAgent")}
-                    keybind={["Mod", "."]}
-                    control={control}
-                  />
-                )}
-              </Show>
+              <Show when={!norse()}>{agentControl()}</Show>
               <Show when={props.modelControlsVisible ?? true}>
                 {props.modelControl}
                 <Show when={view.variant} keyed>
@@ -368,9 +418,13 @@ export function ComposerEditor(props: ComposerEditorProps) {
                   )}
                 </Show>
               </Show>
+              <Show when={norse()}>{agentControl()}</Show>
             </div>
           </div>
           <div data-slot="composer-actions" class="flex shrink-0 items-center">
+            <Show when={props.contextControl}>
+              <div data-slot="composer-context">{props.contextControl}</div>
+            </Show>
             <Show when={state.mode === "normal"}>
               <ComposerEditorAlternateDelivery
                 controller={props.controller}

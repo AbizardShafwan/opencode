@@ -555,6 +555,13 @@ export interface SlotMap {
     /** The timeline is the one on screen. */
     readonly active: boolean
   }
+  /** A compact accessory row inside the session composer. */
+  readonly "session.composer": {
+    /** The routed session; a new object when another session is routed. */
+    readonly session: MountedSession
+    /** The timeline is the one on screen. */
+    readonly active: boolean
+  }
   /** The actions at the end of the side region's tab strip. */
   readonly "session.panel.end": {
     /** The owning session screen; always present. */

@@ -657,6 +657,7 @@ export function createTimelineVirtualizer(input: Input) {
   // Upward input is the one intent geometry cannot recover: nudging up while still a pixel from
   // the end must stop following, even though the resulting position still looks like the end.
   const handleListWheel = (event: WheelEvent & { currentTarget: HTMLDivElement }) => {
+    if (event.deltaY < 0 && scrollKeyOwner(event.currentTarget, event.target, "up") !== event.currentTarget) return
     releaseAnchor()
     input.onUserScroll(event.target)
 
@@ -847,6 +848,8 @@ export function createTimelineVirtualizer(input: Input) {
       )
     }
 
+    const showJump = () => input.scroll().overflow && (input.scroll().jump || !input.pinned())
+
     return (
       <div
         class="relative w-full h-full min-w-0"
@@ -857,10 +860,11 @@ export function createTimelineVirtualizer(input: Input) {
           class="absolute left-1/2 -translate-x-1/2 z-[60] pointer-events-none transition-all duration-200 ease-out"
           classList={{
             "bottom-8": true,
-            "opacity-100 translate-y-0 scale-100": input.scroll().overflow && input.scroll().jump,
-            "opacity-0 translate-y-2 pointer-events-none": !input.scroll().overflow || !input.scroll().jump,
-            "scale-[0.8]": !input.scroll().overflow || !input.scroll().jump,
+            "opacity-100 translate-y-0 scale-100": showJump(),
+            "opacity-0 translate-y-2 pointer-events-none": !showJump(),
+            "scale-[0.8]": !showJump(),
           }}
+          inert={!showJump() ? true : undefined}
         >
           <button
             type="button"

@@ -1,5 +1,6 @@
 import { Component } from "solid-js"
 import { Select } from "@opencode/ui/select"
+import { Switch } from "@opencode/ui/switch"
 import { TextInput } from "@opencode/ui/text-input"
 import { useLanguage } from "@/runtime/i18n/language"
 import { ExternalLink } from "@/runtime/platform/external-link"
@@ -123,6 +124,18 @@ export const SettingsAppearance: Component = () => {
                 label={(option) => option.name}
                 onSelect={appearance.theme.select}
               />
+            </SettingsRow>
+
+            <SettingsRow
+              title={language.t("settings.general.row.norseDesign.title")}
+              description={language.t("settings.general.row.norseDesign.description")}
+            >
+              <Switch
+                checked={appearance.norse.enabled()}
+                onChange={(enabled) => appearance.norse.toggle(enabled)}
+              >
+                {language.t("settings.general.row.norseDesign.switch")}
+              </Switch>
             </SettingsRow>
 
             <FontSetting kind="ui" fonts={appearance.fonts} />

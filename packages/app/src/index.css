@@ -3,6 +3,15 @@
 @import "@opencode/ui/styles/tokens";
 @import "tw-animate-css";
 @import "./theme/kanso.css";
+@import "./theme/norse.css";
+
+@font-face {
+  font-family: "Norse Runic";
+  src: url("/assets/NotoSansRunic.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
 
 @font-face {
   font-family: "JetBrainsMono Nerd Font Mono";

@@ -1,6 +1,7 @@
 import { createMemo, createResource, onMount, type Accessor } from "solid-js"
 import type { ColorScheme } from "@opencode/ui/theme/context"
 import { useTheme } from "@opencode/ui/theme/context"
+import { isNorseTheme, NORSE_THEME_ID } from "@/theme/norse"
 import {
   monoDefault,
   monoFontFamily,
@@ -89,6 +90,14 @@ export function createAppearanceSettingsController() {
       options: themes,
       current: createMemo(() => themes().find((option) => option.id === theme.themeId())),
       select: (option: { id: string } | null) => option && theme.setTheme(option.id),
+    },
+    norse: {
+      enabled: () => isNorseTheme(theme.themeId()),
+      toggle: (enabled: boolean) => {
+        theme.setTheme(enabled ? NORSE_THEME_ID : "oc-2")
+        // The reference is a candle-lit hall; start there, then let the scheme control tune it.
+        if (enabled) theme.setColorScheme("dark")
+      },
     },
     fonts: {
       ui: createMemo(() => ({

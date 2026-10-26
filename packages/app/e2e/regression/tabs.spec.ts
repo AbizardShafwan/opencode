@@ -501,6 +501,70 @@ test("tab preview opens cold, switches immediately between tabs, and closes outs
   await expect(preview).toContainText(c.title)
 })
 
+test("Norse rail preserves global tabs across Home, sessions, and Settings", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  // Equal IDs on different servers must remain distinct tabs and navigate to their own session.
+  const sessionA = session({ id: "ses_norse_shared", directory: "C:/server-a", title: "Local Norse session" })
+  const sessionB = session({ id: "ses_norse_shared", directory: "/home/server-b", title: "Remote Norse session" })
+  await twoServers(page, { a: [sessionA], b: [sessionB] })
+  await seed(page, {
+    theme: { id: "norse", scheme: "dark" },
+    storage: { "opencode-norse-rail-pinned": true },
+    projects: {
+      local: [{ worktree: sessionA.directory, expanded: true }],
+      [REMOTE_SERVER]: [{ worktree: sessionB.directory, expanded: true }],
+    },
+  })
+  await page.goto("/")
+
+  const rail = page.locator('[data-component="norse-rail"]')
+  const titles = rail.locator("[data-titlebar-tab-title]")
+  const local = rail.locator(`[data-titlebar-tab-link][href="${sessionHref(sessionA.id)}"]`)
+  const remote = rail.locator(`[data-titlebar-tab-link][href="${sessionHref(sessionB.id, REMOTE_SERVER)}"]`)
+  await expect(rail).toBeVisible()
+  await expect(titles).toHaveText([sessionA.title, sessionB.title])
+  await expect(local).toBeVisible()
+  await expect(remote).toBeVisible()
+  await expect(page.locator('[data-slot="titlebar-tabs"]')).toHaveCount(0)
+
+  await expect(rail.locator('[data-action="vertical-tabs-home"]')).toHaveCount(0)
+
+  const diagnostics = rail.getByRole("button", { name: "Toggle debug tools", exact: true })
+
+  await expect(diagnostics).toHaveText("Toggle debug tools")
+  await diagnostics.click()
+  await expect(diagnostics).toHaveAttribute("aria-pressed", "true")
+  await expect(page.getByLabel(/^(Provider|Development) performance diagnostics$/)).toBeVisible()
+  await diagnostics.click()
+  await expect(diagnostics).toHaveAttribute("aria-pressed", "false")
+  await expect(page.getByLabel(/^(Provider|Development) performance diagnostics$/)).toHaveCount(0)
+
+  await remote.click()
+  await expectPath(page, sessionHref(sessionB.id, REMOTE_SERVER))
+  await expectSessionTitle(page, sessionB.title)
+  await expect(titles).toHaveText([sessionA.title, sessionB.title])
+  await local.click()
+  await expectPath(page, sessionHref(sessionA.id))
+  await expectSessionTitle(page, sessionA.title)
+
+  await rail.locator('[data-slot="norse-rail-brand"]').click()
+  await expectPath(page, "/")
+  await rail.getByRole("button", { name: "Settings", exact: true }).click()
+  const settings = page.getByTestId("settings-screen")
+  const appearance = settings.getByRole("tab", { name: "Appearance", exact: true })
+  await expect(rail).toBeHidden()
+  await appearance.click()
+  await expect(appearance).toHaveAttribute("aria-selected", "true")
+  await settings.getByRole("button", { name: "Back to app", exact: true }).click()
+
+  await expectPath(page, "/")
+  await expect(settings).toBeHidden()
+  await expect(rail).toBeVisible()
+  await expect(titles).toHaveText([sessionA.title, sessionB.title])
+  await expect(local).toBeVisible()
+  await expect(remote).toBeVisible()
+})
+
 test("closing the active server's last tab opens the remaining server tab", async ({ page }) => {
   const sessionA = session({ id: "ses_server_a", directory: "C:/server-a", title: "Server A session" })
   const sessionB = session({ id: "ses_server_b", directory: "/home/server-b", title: "Server B session" })

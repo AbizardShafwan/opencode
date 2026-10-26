@@ -41,6 +41,93 @@ const contextSelector = `[data-timeline-part-ids="${contextTools.map((tool) => t
 
 const output = (tool: string) => `Completed ${tool}.\n${"detail line\n".repeat(8)}`
 
+test("small upward wheel offers recovery and resumes following streamed output", async ({ page }) => {
+  const id = "prt_small_scroll"
+  const text = `${"Earlier output.\n\n".repeat(30)}Current stream end.`
+
+  const timeline = await setupTimeline(page, {
+    messages: [userMessage(), assistantMessage([textPart(id, text)], { completed: false })],
+  })
+
+  const scroller = page.locator('[data-slot="session-timeline-scroll"] > [data-scrollable]')
+  const latest = page.getByRole("button", { name: "Jump to latest", exact: true })
+
+  const distance = () =>
+    scroller.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop)
+
+  await expect(page.getByText("Current stream end.", { exact: true })).toBeInViewport()
+  await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBeGreaterThan(20)
+  await expect.poll(distance).toBeLessThanOrEqual(1)
+  await scroller.hover()
+  await page.mouse.wheel(0, -20)
+  await expect.poll(distance).toBeGreaterThan(1)
+  expect(await distance()).toBeLessThan(100)
+  // Playwright considers opacity-zero elements visible; recovery must actually be painted.
+  await expect.poll(() => latest.evaluate((element) => element.checkVisibility({ checkOpacity: true }))).toBe(true)
+  await latest.click()
+  await expect.poll(distance).toBeLessThanOrEqual(1)
+  await expect.poll(() => latest.evaluate((element) => element.checkVisibility({ checkOpacity: true }))).toBe(false)
+  // Role locators include inert descendants; verify the browser's native focus behavior instead.
+  await expect.poll(() => latest.evaluate((element) => element.parentElement?.inert)).toBe(true)
+  await scroller.focus()
+  await latest.evaluate((element) => element.focus())
+  await expect(scroller).toBeFocused()
+
+  await timeline.send(partUpdated(textPart(id, `${text}\n\n${"New output.\n\n".repeat(20)}Resumed stream end.`)))
+  await expect(page.getByText("Resumed stream end.", { exact: true })).toBeInViewport()
+  await expect.poll(distance).toBeLessThanOrEqual(1)
+  await expect.poll(() => latest.evaluate((element) => element.checkVisibility({ checkOpacity: true }))).toBe(false)
+})
+
+test("nested shell wheel preserves following until it chains at the top", async ({ page }) => {
+  const id = "prt_nested_wheel"
+  const tail = "prt_nested_wheel_tail"
+
+  const timeline = await setupTimeline(page, {
+    messages: [
+      userMessage([userText("Preceding context ".repeat(120))]),
+      assistantMessage(
+        [
+          shell(id, "completed", Array.from({ length: 60 }, (_, index) => `Output line ${index}`).join("\n")),
+          textPart(tail, "Current shell stream end."),
+        ],
+        { completed: false },
+      ),
+    ],
+    settings: { shellToolPartsExpanded: true },
+  })
+
+  const scroller = page.locator('[data-slot="session-timeline-scroll"] > [data-scrollable]')
+  const nested = page.locator(`[data-timeline-part-id="${id}"] [data-scrollable]`)
+  const latest = page.getByRole("button", { name: "Jump to latest", exact: true })
+
+  const distance = () =>
+    scroller.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop)
+
+  await expect(page.getByText("Current shell stream end.", { exact: true })).toBeInViewport()
+  await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBeGreaterThan(20)
+  await expect.poll(distance).toBeLessThanOrEqual(1)
+  await nested.evaluate((element) => (element.scrollTop = 200))
+  await expect(nested).toHaveJSProperty("scrollTop", 200)
+  await nested.hover()
+  await page.mouse.wheel(0, -20)
+  await expect.poll(() => nested.evaluate((element) => element.scrollTop)).toBeLessThan(200)
+
+  await timeline.send(
+    partUpdated(textPart(tail, "Current shell stream end.\n\nNew shell output.\n\nStill following shell output.")),
+  )
+  await expect(page.getByText("Still following shell output.", { exact: true })).toBeInViewport()
+  await expect.poll(distance).toBeLessThanOrEqual(1)
+  await expect.poll(() => latest.evaluate((element) => element.checkVisibility({ checkOpacity: true }))).toBe(false)
+
+  await nested.evaluate((element) => (element.scrollTop = 0))
+  await expect(nested).toHaveJSProperty("scrollTop", 0)
+  await nested.hover()
+  await page.mouse.wheel(0, -20)
+  await expect.poll(distance).toBeGreaterThan(1)
+  await expect.poll(() => latest.evaluate((element) => element.checkVisibility({ checkOpacity: true }))).toBe(true)
+})
+
 function contextTurn(status: "running" | "completed") {
   return [
     userMessage(),

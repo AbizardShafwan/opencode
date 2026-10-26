@@ -1,7 +1,18 @@
 import { lazy, onCleanup, Show, Suspense } from "solid-js"
+import { useTheme } from "@opencode/ui/theme/context"
 import { onIdle, Panel, Slot, usePanel, type PanelTab, type Setup } from "../sdk"
 import type definition from "./index"
 import { SessionContextUsage } from "./indicator"
+
+function HeaderContextUsage(props: { session: Parameters<typeof SessionContextUsage>[0]["session"]; placement: "bottom" }) {
+  const theme = useTheme()
+
+  return (
+    <Show when={theme.themeId() !== "norse"}>
+      <SessionContextUsage session={props.session} placement={props.placement} />
+    </Show>
+  )
+}
 
 const setup: Setup<typeof definition> = (ctx) => {
   const SessionContextTab = lazy(() => import("./tab"))
@@ -30,7 +41,13 @@ const setup: Setup<typeof definition> = (ctx) => {
   ctx.add(Slot, {
     at: "session.header",
     order: 10,
-    render: (input) => <SessionContextUsage session={input.session} placement="bottom" />,
+    render: (input) => <HeaderContextUsage session={input.session} placement="bottom" />,
+  })
+
+  ctx.add(Slot, {
+    at: "session.composer",
+    order: 10,
+    render: (input) => <SessionContextUsage session={input.session} variant="composer" placement="top" />,
   })
 
   ctx.add(

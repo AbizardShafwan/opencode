@@ -6,6 +6,8 @@ import { IconButton } from "@opencode/ui/icon-button"
 import { Icon } from "@opencode/ui/icon"
 import { Keybind } from "@opencode/ui/keybind"
 import { Tooltip } from "@opencode/ui/tooltip"
+import { useTheme } from "@opencode/ui/theme/context"
+import { isNorseTheme } from "@/theme/norse"
 
 import { LayoutRoute, useLayout } from "@/shell/state/layout"
 import { usePlatform } from "@/runtime/platform/platform"
@@ -55,6 +57,10 @@ const macTrafficLightsTopClearance = 28
 const mobileTopClearance = "max(8px, min(16px, env(safe-area-inset-top, 0px) * 1000))"
 
 export function Titlebar(props: { verticalTabs?: { mount?: HTMLElement } }) {
+  const theme = useTheme()
+
+  const norse = () => isNorseTheme(theme.themeId())
+
   const platform = usePlatform()
   const command = useCommand()
   const language = useLanguage()
@@ -722,10 +728,10 @@ export function Titlebar(props: { verticalTabs?: { mount?: HTMLElement } }) {
                                 data-tauri-drag-region
                               />
                             </Show>
-                            <Show when={!windows()}>
+                            <Show when={!windows() && !norse()}>
                               <ChannelIndicator sidebar />
                             </Show>
-                            {homeButton(true)}
+                            <Show when={!norse()}>{homeButton(true)}</Show>
                             <RecentlyClosedTabsMenu
                               vertical
                               onNewTab={openNewTab}
@@ -754,6 +760,9 @@ export function Titlebar(props: { verticalTabs?: { mount?: HTMLElement } }) {
                                 <TitlebarItems items={titlebarItems} vertical />
                               </div>
                             </Show>
+                            <Show when={norse() && !windows()}>
+                              <ChannelIndicator sidebar diagnostics />
+                            </Show>
                           </Portal>
                         )}
                       </Show>
@@ -778,7 +787,7 @@ export function Titlebar(props: { verticalTabs?: { mount?: HTMLElement } }) {
   )
 }
 
-function ChannelIndicator(props: { horizontal?: boolean; sidebar?: boolean }) {
+function ChannelIndicator(props: { horizontal?: boolean; sidebar?: boolean; diagnostics?: boolean }) {
   const language = useLanguage()
   const platform = usePlatform()
   const host = useExtensionHost()
@@ -797,16 +806,18 @@ function ChannelIndicator(props: { horizontal?: boolean; sidebar?: boolean }) {
   return (
     <Tooltip
       placement={props.sidebar ? "right" : "bottom"}
-      value={label()}
-      class={`shrink-0 [app-region:no-drag] ${props.sidebar ? "mb-4 ms-0.5 self-start" : ""} ${props.horizontal ? "me-1.5" : ""} ${props.horizontal && platform.platform === "web" ? "ps-2.5" : ""}`}
+      value={props.diagnostics && debug() ? debug()?.label : label()}
+      class={`shrink-0 [app-region:no-drag] ${props.diagnostics ? "mt-2 w-full" : props.sidebar ? "mb-4 ms-0.5 self-start" : ""} ${props.horizontal ? "me-1.5" : ""} ${props.horizontal && platform.platform === "web" ? "ps-2.5" : ""}`}
     >
       <Dynamic
         component={debug() ? "button" : "div"}
         type={debug() ? "button" : undefined}
         data-slot="channel-indicator"
+        data-diagnostics={props.diagnostics || undefined}
         class="flex h-7 shrink-0 items-center rounded-[6px] [app-region:no-drag]"
         classList={{
-          "w-6": props.sidebar,
+          "w-full": props.diagnostics,
+          "w-6": props.sidebar && !props.diagnostics,
           "w-5": !props.sidebar,
           "cursor-pointer hover:bg-v2-background-bg-layer-02 focus-visible:outline-none focus-visible:bg-v2-background-bg-layer-02":
             !!debug(),
@@ -815,13 +826,21 @@ function ChannelIndicator(props: { horizontal?: boolean; sidebar?: boolean }) {
         aria-label={debug()?.label}
         aria-pressed={debug()?.pressed}
       >
-        <img
-          src={channel === "beta" ? betaIcon : devIcon}
-          alt={debug() ? "" : label()}
-          class="shrink-0 rounded-[4px] shadow-[var(--v2-elevation-raised)]"
-          classList={{ "size-6": props.sidebar, "size-5": !props.sidebar }}
-          draggable={false}
-        />
+        <Show
+          when={props.diagnostics && debug()}
+          fallback={
+            <img
+              src={channel === "beta" ? betaIcon : devIcon}
+              alt={debug() ? "" : label()}
+              class="shrink-0 rounded-[4px] shadow-[var(--v2-elevation-raised)]"
+              classList={{ "size-6": props.sidebar, "size-5": !props.sidebar }}
+              draggable={false}
+            />
+          }
+        >
+          <Icon name="sliders" />
+          <span>{debug()?.label}</span>
+        </Show>
       </Dynamic>
     </Tooltip>
   )
