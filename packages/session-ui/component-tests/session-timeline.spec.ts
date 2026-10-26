@@ -25,7 +25,7 @@ for (const streaming of [false, true]) {
     await page.setViewportSize({ width: 390, height: 900 })
     const root = await mount("current-session-mermaid--diagrams", { args: { streaming } })
     const timeline = root.locator('[data-component="session-timeline"]')
-    const diagrams = timeline.locator('[data-component="markdown-mermaid"] > svg')
+    const diagrams = timeline.locator('[data-slot="mermaid-canvas"] > svg')
     await expect(diagrams).toHaveCount(2)
     await expect(diagrams.nth(0)).toBeVisible()
     await expect(diagrams.nth(0)).toContainText("Client")

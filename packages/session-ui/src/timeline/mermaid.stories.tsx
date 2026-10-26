@@ -12,11 +12,13 @@ export default {
 }
 
 export const Diagrams = {
-  args: { streaming: false },
-  render: (args: { streaming: boolean }) => <MermaidTimeline streaming={args.streaming} />,
+  args: { streaming: false, large: false },
+  render: (args: { streaming: boolean; large: boolean }) => (
+    <MermaidTimeline streaming={args.streaming} large={args.large} />
+  ),
 }
 
-function MermaidTimeline(props: { streaming: boolean }) {
+function MermaidTimeline(props: { streaming: boolean; large: boolean }) {
   const [completed, setCompleted] = createSignal(!props.streaming)
 
   const document = createMemo(
@@ -43,7 +45,9 @@ function MermaidTimeline(props: { streaming: boolean }) {
               type: "text",
               text: [
                 "## Request flow",
-                "```mermaid\nflowchart LR\n Client[Client] --> Server[Server]\n Server --> Model[Model]\n```",
+                props.large
+                  ? `\`\`\`mermaid\nflowchart LR\n${Array.from({ length: 16 }, (_, index) => `Stage${index}[Stage ${index}] --> Stage${index + 1}[Stage ${index + 1}]`).join("\n")}\n\`\`\``
+                  : "```mermaid\nflowchart LR\n Client[Client] --> Server[Server]\n Server --> Model[Model]\n```",
                 "## Request sequence",
                 "```mermaid\nsequenceDiagram\n Client->>Server: Send prompt\n Server->>Model: Generate response\n Model-->>Client: Response\n" +
                   (completed() ? "```" : ""),
