@@ -1604,4 +1604,46 @@ describe("ModelResolver", () => {
       expect(ModelResolver.hasPackage(model(undefined))).toBe(false)
     }),
   )
+
+  it.effect("selects Claude Code compatibility only for a Claude subscription credential", () =>
+    Effect.gen(function* () {
+      const catalog = model("@opencode/ai/providers/anthropic", {
+        providerID: Provider.ID.anthropic,
+        settings: {},
+        headers: {},
+        body: {},
+      })
+      const credential = (methodID: string) =>
+        Credential.OAuth.make({
+          type: "oauth",
+          methodID: Integration.MethodID.make(methodID),
+          access: "sk-ant-oat-access",
+          refresh: "sk-ant-oat-refresh",
+          expires: Date.now() + 60_000,
+        })
+
+      const subscription = yield* ModelResolver.fromCatalogModel(catalog, credential("claude-code"))
+      expect(subscription.route.id).toBe("anthropic-claude-code")
+      const prepared = yield* compileRequest(LLM.request({ model: subscription, prompt: "Hello" }))
+      expect(prepared.body.system?.[0]).toEqual({
+        type: "text",
+        text: "You are Claude Code, Anthropic's official CLI for Claude.",
+      })
+
+      const apiKey = yield* ModelResolver.fromCatalogModel(
+        catalog,
+        Credential.Key.make({ type: "key", key: "sk-ant-api03-test" }),
+      )
+      expect(apiKey.route.id).toBe("anthropic-messages")
+
+      const otherOAuth = yield* ModelResolver.fromCatalogModel(catalog, credential("other-method"))
+      expect(otherOAuth.route.id).toBe("anthropic-messages")
+
+      const pasted = yield* ModelResolver.fromCatalogModel(
+        catalog,
+        Credential.Key.make({ type: "key", key: "sk-ant-oat-pasted" }),
+      )
+      expect(pasted.route.id).toBe("anthropic-claude-code")
+    }),
+  )
 })

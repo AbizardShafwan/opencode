@@ -305,8 +305,21 @@ function unresolvedProviderVariables(model: RuntimeInfo, baseURL: string) {
 
 const nativeCredentialSettings = (model: RuntimeInfo, specifier: string, credential: Credential.Value | undefined) => {
   if (!credential) return {}
-  if (credential.type === "key") return { apiKey: credential.key }
-  if (credential.type === "oauth") return tokenSettings(specifier, credential.access)
+  if (credential.type === "key") {
+    // A subscription token pasted into the Anthropic key field still needs the
+    // bearer/OAuth envelope; sending it as x-api-key is rejected.
+    if (model.providerID === Provider.ID.anthropic && credential.key.startsWith("sk-ant-oat"))
+      return { authToken: credential.key, claudeCode: true }
+    return { apiKey: credential.key }
+  }
+  if (credential.type === "oauth") {
+    const settings = tokenSettings(specifier, credential.access)
+    // A Claude subscription token needs the Claude Code request envelope; other
+    // Anthropic OAuth-shaped tokens keep the provider's established behaviour.
+    if (model.providerID === Provider.ID.anthropic && credential.methodID === Integration.MethodID.make("claude-code"))
+      return { ...settings, claudeCode: true }
+    return settings
+  }
   // The saved profile reaches the package through metadata; SigV4 keeps an ambient bearer token from taking over.
   if (specifier.startsWith("@opencode/ai/providers/amazon-bedrock")) return { auth: "sigv4" }
   // The Azure plugin's request hooks replace this with an Entra ID token from the Azure CLI; it only gets the

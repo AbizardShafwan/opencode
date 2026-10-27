@@ -41,6 +41,7 @@ const RESPECTS_INLINE_HINTS = new Set([
   "alibaba-chat",
   "alibaba-messages",
   "anthropic-messages",
+  "anthropic-claude-code",
   "anthropic-compatible-messages",
   "bedrock-mantle-messages",
   "cloudflare-ai-gateway-messages",

@@ -56,6 +56,28 @@ enabled.
 }
 ```
 
+## Anthropic
+
+Connect **Anthropic** with either an API key or a Claude Pro/Max subscription. Both appear as separate accounts for the
+same provider, so you can switch between them without changing model IDs.
+
+```text
+/connect
+# Select Anthropic, then Claude Code subscription (Pro/Max).
+/models
+```
+
+The subscription method opens the Claude authorization page. On the same machine as the server, Memyr captures the
+localhost redirect automatically. For a remote server, choose **Paste redirect URL** and paste the full address the
+browser was redirected to, including its `code` and `state` parameters.
+
+Subscription requests use the Claude Code request envelope and refresh their tokens automatically. The provider sends
+the bearer token instead of an API key. When the active Anthropic account is an API key, requests use the ordinary
+Anthropic API path.
+
+Using a Claude Pro/Max subscription in Memyr is not officially supported by Anthropic, and billing or availability can
+change. Disconnecting an account removes its saved credential from Memyr; it does not revoke the token with Anthropic.
+
 ## Custom
 
 Add a provider when its API is not already in the catalog. This OpenAI-compatible example defines the credential,

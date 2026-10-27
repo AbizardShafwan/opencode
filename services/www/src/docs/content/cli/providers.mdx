@@ -48,6 +48,13 @@ more than one.
 opencode auth login openai
 ```
 
+For an Anthropic Claude Pro/Max subscription, select `claude-code`. On a machine that cannot receive the localhost
+callback, choose paste mode and provide the full redirect URL when prompted.
+
+```bash
+opencode auth login anthropic --method claude-code --answer mode=code
+```
+
 API-key entry and provider forms require an interactive terminal. OAuth methods that ask you to paste an authorization
 code also require one.
 
