@@ -68,8 +68,8 @@ for (const theme of ["original", "norse-dark", "norse-light"]) {
     await expect.poll(() => top(file)).toBe(84)
     if (theme === "original") await expect(file).toHaveCSS("background-color", /^rgb\(/)
     if (theme !== "original") {
-      await expect(file).toHaveCSS("background-color", /\/ 0\.6\)|, 0\.6\)/)
-      await expect(file).toHaveCSS("backdrop-filter", "blur(24px) saturate(1.2)")
+      await expect(file).toHaveCSS("background-color", theme === "norse-light" ? "rgb(226, 231, 240)" : "rgb(30, 30, 36)")
+      await expect(file).toHaveCSS("backdrop-filter", "none")
     }
 
     await page.setViewportSize({ width: 390, height: 844 })
