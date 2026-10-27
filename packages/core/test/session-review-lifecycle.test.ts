@@ -113,17 +113,29 @@ const runReview = Effect.fnUntraced(function* (response: TestLLM.Response, permi
   yield* Plugin.Service.use((plugins) => plugins.awaitActivation).pipe(
     Effect.provide(locations.get(parent.location)),
   )
-  yield* llm.push(TestLLM.text("parent response", "parent"), response)
+  yield* llm.push(
+    TestLLM.text("parent response", "parent"),
+    response,
+    TestLLM.text("parent review response", "parent"),
+  )
 
   yield* sessions.prompt({ sessionID: parent.id, text: "parent-only context" })
   yield* sessions.wait(parent.id)
   const before = (yield* llm.requests()).length
 
-  const notices = yield* bus
+  const running = yield* bus
     .subscribe(SessionEvent.Synthetic)
     .pipe(
       Stream.filter((event) => event.data.sessionID === parent.id),
-      Stream.take(2),
+      Stream.take(1),
+      Stream.runCollect,
+      Effect.forkScoped({ startImmediately: true }),
+    )
+  const finished = yield* bus
+    .subscribe(SessionEvent.Execution.Succeeded)
+    .pipe(
+      Stream.filter((event) => event.data.sessionID === parent.id),
+      Stream.take(1),
       Stream.runCollect,
       Effect.forkScoped({ startImmediately: true }),
     )
@@ -141,18 +153,19 @@ const runReview = Effect.fnUntraced(function* (response: TestLLM.Response, permi
     Effect.provideService(SubagentJob.Service, subagents),
   )
 
-  const events = Array.from(yield* Fiber.join(notices).pipe(Effect.timeout("5 seconds")))
+  const notices = Array.from(yield* Fiber.join(running).pipe(Effect.timeout("5 seconds")))
+  yield* Fiber.join(finished).pipe(Effect.timeout("5 seconds"))
   yield* Fiber.join(archived).pipe(Effect.timeout("5 seconds"))
-  // completeBackground follows the archived event in the same delivery fiber.
+  yield* sessions.wait(parent.id)
   yield* Effect.yieldNow
-  return { parent, child, events, before, llm, sessions, jobs }
+  return { parent, child, notices, before, llm, sessions, jobs }
 })
 
 describe("SessionReview lifecycle", () => {
-  it.live("delivers a completed review to the parent without a parent model run", () =>
+  it.live("delivers a completed review to the parent and resumes the parent", () =>
     Effect.gen(function* () {
       const result = yield* runReview(TestLLM.text(JSON.stringify(report), "review"))
-      const { parent, child, events, before, llm, sessions, jobs } = result
+      const { parent, child, notices, before, llm, sessions, jobs } = result
 
       expect(child).toMatchObject({
         parentID: parent.id,
@@ -160,47 +173,58 @@ describe("SessionReview lifecycle", () => {
         agent: Agent.ID.make("review"),
       })
       expect(child.fork).toBeUndefined()
-      expect(events.map((event) => event.data.metadata?.state)).toEqual(["running", "completed"])
-      expect(events[1]?.data.description).toBe("Review: HEAD~1 — completed")
-      expect(events[1]?.data.text).toContain("## Review report")
-      expect(events[1]?.data.text).toContain("[P1] Guard the missing value")
-      expect(events[1]?.data.text).toContain("`/repo/src/index.ts:10-12`")
+      expect(notices.map((event) => event.data.metadata?.state)).toEqual(["running"])
 
       const synthetic = (yield* sessions.context(parent.id)).filter((message) => message.type === "synthetic")
       expect(synthetic).toMatchObject([
         { metadata: { source: "subagent", childID: child.id, agent: "Review", state: "running" } },
         { metadata: { source: "subagent", childID: child.id, agent: "Review", state: "completed" } },
       ])
+      expect(synthetic[1]?.description).toBe("Review: HEAD~1 — completed")
       expect(synthetic[1]?.text).toContain("## Review report")
+      expect(synthetic[1]?.text).toContain("[P1] Guard the missing value")
+      expect(synthetic[1]?.text).toContain("`/repo/src/index.ts:10-12`")
       expect(yield* sessions.inbox(parent.id)).toEqual([])
       expect((yield* sessions.get(child.id)).time.archived).toBeDefined()
       expect(yield* jobs.pendingBackground).toEqual([])
       expect(yield* jobs.get(child.id)).toBeUndefined()
 
       const requests = yield* llm.requests()
-      expect(requests).toHaveLength(before + 1)
-      const childRequest = requests.at(-1)
+      expect(requests).toHaveLength(before + 2)
+      const childRequest = requests[before]
       expect(childRequest?.system.some((part) => part.text.includes("review-only assignment"))).toBe(true)
       const childText = userTexts(childRequest!).join("\n")
       expect(childText).toContain("## Review target")
       expect(childText).toContain("HEAD~1")
       expect(childText).not.toContain("parent-only context")
       expect(childText).not.toContain("parent response")
+
+      const parentRequest = requests[before + 1]
+      const parentText = userTexts(parentRequest!).join("\n")
+      expect(parentText).toContain("The user requested a one-shot review.")
+      expect(parentText).toContain("## Review report")
+      expect(parentText).toContain("[P1] Guard the missing value")
+      const last = (yield* sessions.context(parent.id)).findLast(
+        (message): message is SessionMessage.Assistant => message.type === "assistant",
+      )
+      expect(SubagentCompletion.text(last)).toBe("parent review response")
     }),
   )
 
   it.live("preserves a malformed reviewer response instead of reporting no findings", () =>
     Effect.gen(function* () {
       const raw = "I could not produce a structured report."
-      const { parent, child, events, sessions, jobs } = yield* runReview(TestLLM.text(raw, "review"))
+      const { parent, child, notices, sessions, jobs } = yield* runReview(TestLLM.text(raw, "review"))
 
-      expect(events[1]?.data.metadata?.state).toBe("completed")
-      expect(events[1]?.data.text).toContain(raw)
-      expect(events[1]?.data.text).toContain("did not match the review report format")
-      expect(events[1]?.data.text.toLowerCase()).not.toContain("no findings")
+      const synthetic = (yield* sessions.context(parent.id)).filter((message) => message.type === "synthetic")
+      const completion = synthetic.find((message) => message.metadata?.state === "completed")
+      expect(notices.map((event) => event.data.metadata?.state)).toEqual(["running"])
+      expect(completion?.text).toContain(raw)
+      expect(completion?.text).toContain("did not match the review report format")
+      expect(completion?.text.toLowerCase()).not.toContain("no findings")
       expect((yield* sessions.get(child.id)).time.archived).toBeDefined()
       expect(yield* jobs.pendingBackground).toEqual([])
-      expect((yield* sessions.context(parent.id)).filter((message) => message.type === "synthetic")).toHaveLength(2)
+      expect(synthetic).toHaveLength(2)
       expect(yield* sessions.inbox(parent.id)).toEqual([])
     }),
   )
@@ -208,7 +232,9 @@ describe("SessionReview lifecycle", () => {
   it.live("reuses a delivered review notice when delivery retries", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service
+      const bus = yield* Bus.Service
       const jobs = yield* Job.Service
+      const llm = yield* TestLLM.Test
       const directory = yield* tmpdirScoped()
       const parent = yield* sessions.create({
         location: { directory: AbsolutePath.make(directory.path) },
@@ -236,7 +262,21 @@ describe("SessionReview lifecycle", () => {
         },
       }
 
+      yield* llm.push(TestLLM.text("parent review response", "parent"))
+      const finished = yield* bus
+        .subscribe(SessionEvent.Execution.Succeeded)
+        .pipe(
+          Stream.filter((event) => event.data.sessionID === parent.id),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkScoped({ startImmediately: true }),
+        )
+      yield* Effect.yieldNow
+
       yield* SubagentCompletion.deliver(sessions, jobs, input)
+      yield* Fiber.join(finished).pipe(Effect.timeout("5 seconds"))
+      yield* sessions.wait(parent.id)
+
       yield* SubagentCompletion.deliver(sessions, jobs, input)
 
       const synthetic = (yield* sessions.context(parent.id)).filter((message) => message.type === "synthetic")
@@ -247,6 +287,7 @@ describe("SessionReview lifecycle", () => {
       expect(synthetic[0]?.text).toContain("## Review report")
       expect((yield* sessions.get(child.id)).time.archived).toBeDefined()
       expect(yield* jobs.pendingBackground).toEqual([])
+      expect(yield* llm.requests()).toHaveLength(1)
     }),
   )
 
@@ -324,7 +365,15 @@ describe("SessionReview lifecycle", () => {
         .subscribe(SessionEvent.Synthetic)
         .pipe(
           Stream.filter((event) => event.data.sessionID === parent.id),
-          Stream.take(2),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkScoped({ startImmediately: true }),
+        )
+      const finished = yield* bus
+        .subscribe(SessionEvent.Execution.Succeeded)
+        .pipe(
+          Stream.filter((event) => event.data.sessionID === parent.id),
+          Stream.take(1),
           Stream.runCollect,
           Effect.forkScoped({ startImmediately: true }),
         )
@@ -348,27 +397,33 @@ describe("SessionReview lifecycle", () => {
       yield* gate.release
 
       const events = Array.from(yield* Fiber.join(notices).pipe(Effect.timeout("5 seconds")))
+      yield* Fiber.join(finished).pipe(Effect.timeout("5 seconds"))
       yield* Fiber.join(archived).pipe(Effect.timeout("5 seconds"))
+      yield* sessions.wait(parent.id)
       yield* Effect.yieldNow
 
-      expect(events.map((event) => event.data.metadata?.state)).toEqual(["running", "cancelled"])
-      expect(events[1]?.data.description).toBe("Review: HEAD~1 — cancelled")
-      expect(events[1]?.data.text).toContain("## Review cancelled")
-      expect(events[1]?.data.text.toLowerCase()).not.toContain("no findings")
+      expect(events.map((event) => event.data.metadata?.state)).toEqual(["running"])
+      const synthetic = (yield* sessions.context(parent.id)).filter((message) => message.type === "synthetic")
+      const cancelled = synthetic.find((message) => message.metadata?.state === "cancelled")
+      expect(cancelled?.description).toBe("Review: HEAD~1 — cancelled")
+      expect(cancelled?.text).toContain("## Review cancelled")
+      expect(cancelled?.text.toLowerCase()).not.toContain("no findings")
       expect((yield* sessions.get(child.id)).time.archived).toBeDefined()
       expect(yield* jobs.pendingBackground).toEqual([])
       expect(yield* jobs.get(child.id)).toBeUndefined()
       expect(yield* sessions.inbox(parent.id)).toEqual([])
-      expect(yield* llm.requests()).toHaveLength(2)
+      const requests = yield* llm.requests()
+      expect(requests).toHaveLength(3)
+      expect(userTexts(requests[2]!).join("\n")).toContain("## Review cancelled")
     }),
   )
 
   it.live("does not advertise mutation or CodeMode tools under a broad parent allow", () =>
     Effect.gen(function* () {
-      const { llm } = yield* runReview(TestLLM.text(JSON.stringify(report), "review"), [
+      const { before, llm } = yield* runReview(TestLLM.text(JSON.stringify(report), "review"), [
         { action: "*", resource: "*", effect: "allow" },
       ])
-      const childRequest = (yield* llm.requests()).at(-1)
+      const childRequest = (yield* llm.requests())[before]
       if (!childRequest) return yield* Effect.die("missing review request")
 
       const names = childRequest.tools.map((tool) => tool.name)

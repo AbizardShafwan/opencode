@@ -1311,6 +1311,16 @@ const seedReviewBackground = (
     return { recovery, background, notificationID: background.notificationID }
   })
 
+function reviewInbox(database: Database.Service["Service"], parent: Session.ID) {
+  return Effect.gen(function* () {
+    const items = yield* SessionInbox.list(database.db, parent)
+    expect(items).toHaveLength(1)
+    const item = items[0]
+    if (item?.type !== "synthetic") return yield* Effect.die("expected a synthetic review inbox item")
+    return item
+  })
+}
+
 /** Plain deliveries seed user prompts; objects seed control items. */
 function seedInbox(
   database: Database.Service["Service"],
@@ -1451,7 +1461,7 @@ function buildExecution(
 }
 
 describe("SessionRestart review recovery", () => {
-  it.effect("reconciles a terminal review child with a running marker without resuming", () =>
+  it.effect("delivers a terminal review to the parent inbox and resumes the parent", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
       const bus = yield* Bus.Service
@@ -1488,8 +1498,8 @@ describe("SessionRestart review recovery", () => {
         restartedJobs,
       )
       const restart = Context.get(context, SessionRestart.Service)
-      const notices = yield* bus
-        .subscribe(SessionEvent.Synthetic)
+      const enqueued = yield* bus
+        .subscribe(SessionEvent.InboxEnqueued)
         .pipe(
           Stream.filter((event) => event.data.sessionID === parent),
           Stream.take(1),
@@ -1506,26 +1516,24 @@ describe("SessionRestart review recovery", () => {
         )
       yield* Effect.yieldNow
       yield* restart.resumeSuspendedSessions
-      const events = Array.from(yield* Fiber.join(notices).pipe(Effect.timeout("5 seconds")))
+      yield* Fiber.join(enqueued).pipe(Effect.timeout("5 seconds"))
       yield* Fiber.join(archived).pipe(Effect.timeout("5 seconds"))
       yield* Effect.yieldNow
 
-      expect(drained).toEqual([])
-      expect(events[0]?.data.metadata).toMatchObject({
+      expect(drained).toEqual([parent])
+      const item = yield* reviewInbox(database, parent)
+      expect(item.id).toBe(review.notificationID)
+      expect(item.payload.metadata).toMatchObject({
         source: "subagent",
         childID: child,
         agent: "Review",
         state: "completed",
       })
-      expect(events[0]?.data.text).toContain("## Review report")
+      expect(item.payload.text).toContain("## Review report")
       expect((yield* store.get(child))?.time.archived).toBeDefined()
       expect(yield* restartedJobs.pendingBackground).toEqual([])
-      expect(yield* SessionInbox.list(database.db, parent)).toEqual([])
-      const synthetic = (yield* store.context(parent)).filter((message) => message.type === "synthetic")
-      expect(synthetic).toHaveLength(1)
-      expect(synthetic[0]?.id).toBe(review.notificationID)
       yield* restart.resumeSuspendedSessions
-      expect((yield* store.context(parent)).filter((message) => message.type === "synthetic")).toHaveLength(1)
+      expect(yield* reviewInbox(database, parent)).toMatchObject({ id: review.notificationID })
     }),
   )
 
@@ -1564,8 +1572,8 @@ describe("SessionRestart review recovery", () => {
         restartedJobs,
       )
       const restart = Context.get(context, SessionRestart.Service)
-      const notices = yield* bus
-        .subscribe(SessionEvent.Synthetic)
+      const enqueued = yield* bus
+        .subscribe(SessionEvent.InboxEnqueued)
         .pipe(
           Stream.filter((event) => event.data.sessionID === parent),
           Stream.take(1),
@@ -1582,25 +1590,26 @@ describe("SessionRestart review recovery", () => {
         )
       yield* Effect.yieldNow
       yield* restart.resumeSuspendedSessions
-      const events = Array.from(yield* Fiber.join(notices).pipe(Effect.timeout("5 seconds")))
+      yield* Fiber.join(enqueued).pipe(Effect.timeout("5 seconds"))
       yield* Fiber.join(archived).pipe(Effect.timeout("5 seconds"))
       yield* Effect.yieldNow
 
-      expect(drained).toEqual([{ sessionID: child, force: true }])
+      expect(drained).toEqual([
+        { sessionID: child, force: true },
+        { sessionID: parent, force: false },
+      ])
       expect(childAttempts).toBe(1)
-      expect(events[0]?.data.metadata).toMatchObject({
+      const item = yield* reviewInbox(database, parent)
+      expect(item.id).toBe(review.notificationID)
+      expect(item.payload.metadata).toMatchObject({
         source: "subagent",
         childID: child,
         agent: "Review",
         state: "completed",
       })
-      expect(events[0]?.data.text).toContain("## Review report")
+      expect(item.payload.text).toContain("## Review report")
       expect((yield* store.get(child))?.time.archived).toBeDefined()
       expect(yield* restartedJobs.pendingBackground).toEqual([])
-      expect(yield* SessionInbox.list(database.db, parent)).toEqual([])
-      const synthetic = (yield* store.context(parent)).filter((message) => message.type === "synthetic")
-      expect(synthetic).toHaveLength(1)
-      expect(synthetic[0]?.id).toBe(review.notificationID)
     }),
   )
 
@@ -1617,7 +1626,7 @@ describe("SessionRestart review recovery", () => {
       const firstScope = yield* Scope.make()
       yield* Effect.addFinalizer(() => Scope.close(firstScope, Exit.void))
       const firstJobs = yield* Job.make.pipe(Scope.provide(firstScope))
-      yield* seedReviewBackground(firstJobs, parent, child)
+      const review = yield* seedReviewBackground(firstJobs, parent, child)
       yield* bus.publish(SessionEvent.Execution.Interrupted, { sessionID: child, reason: "shutdown" })
       expect((yield* store.get(child))?.outcome).toBeUndefined()
       yield* Scope.close(firstScope, Exit.void)
@@ -1637,8 +1646,8 @@ describe("SessionRestart review recovery", () => {
         restartedJobs,
       )
       const restart = Context.get(context, SessionRestart.Service)
-      const notices = yield* bus
-        .subscribe(SessionEvent.Synthetic)
+      const enqueued = yield* bus
+        .subscribe(SessionEvent.InboxEnqueued)
         .pipe(
           Stream.filter((event) => event.data.sessionID === parent),
           Stream.take(1),
@@ -1655,21 +1664,22 @@ describe("SessionRestart review recovery", () => {
         )
       yield* Effect.yieldNow
       yield* restart.resumeSuspendedSessions
-      const events = Array.from(yield* Fiber.join(notices).pipe(Effect.timeout("5 seconds")))
+      yield* Fiber.join(enqueued).pipe(Effect.timeout("5 seconds"))
       yield* Fiber.join(archived).pipe(Effect.timeout("5 seconds"))
       yield* Effect.yieldNow
 
-      expect(drained).toEqual([child])
-      expect(events[0]?.data.metadata).toMatchObject({ state: "completed", childID: child })
-      expect(events[0]?.data.text).toContain("## Review report")
-      expect(events[0]?.data.text).not.toContain("## Review cancelled")
+      expect(drained).toEqual([child, parent])
+      const item = yield* reviewInbox(database, parent)
+      expect(item.id).toBe(review.notificationID)
+      expect(item.payload.metadata).toMatchObject({ state: "completed", childID: child })
+      expect(item.payload.text).toContain("## Review report")
+      expect(item.payload.text).not.toContain("## Review cancelled")
       expect((yield* store.get(child))?.time.archived).toBeDefined()
       expect(yield* restartedJobs.pendingBackground).toEqual([])
-      expect(yield* SessionInbox.list(database.db, parent)).toEqual([])
     }),
   )
 
-  it.effect("delivers a completed persisted review without resuming", () =>
+  it.effect("delivers a completed persisted review and resumes the parent", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
       const bus = yield* Bus.Service
@@ -1682,7 +1692,7 @@ describe("SessionRestart review recovery", () => {
       const firstScope = yield* Scope.make()
       yield* Effect.addFinalizer(() => Scope.close(firstScope, Exit.void))
       const firstJobs = yield* Job.make.pipe(Scope.provide(firstScope))
-      yield* seedReviewBackground(firstJobs, parent, child, Effect.succeed(reviewReport))
+      const review = yield* seedReviewBackground(firstJobs, parent, child, Effect.succeed(reviewReport))
       yield* firstJobs.wait({ id: child })
       expect((yield* firstJobs.pendingBackground).find((item) => item.id === child)).toMatchObject({
         status: "completed",
@@ -1700,6 +1710,14 @@ describe("SessionRestart review recovery", () => {
         restartedJobs,
       )
       const restart = Context.get(context, SessionRestart.Service)
+      const enqueued = yield* bus
+        .subscribe(SessionEvent.InboxEnqueued)
+        .pipe(
+          Stream.filter((event) => event.data.sessionID === parent),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkScoped({ startImmediately: true }),
+        )
       const archived = yield* bus
         .subscribe(SessionEvent.Archived)
         .pipe(
@@ -1710,16 +1728,16 @@ describe("SessionRestart review recovery", () => {
         )
       yield* Effect.yieldNow
       yield* restart.resumeSuspendedSessions
+      yield* Fiber.join(enqueued).pipe(Effect.timeout("5 seconds"))
       yield* Fiber.join(archived).pipe(Effect.timeout("5 seconds"))
       yield* Effect.yieldNow
 
-      expect(drained).toEqual([])
-      const synthetic = (yield* store.context(parent)).filter((message) => message.type === "synthetic")
-      expect(synthetic).toHaveLength(1)
-      expect(synthetic[0]?.text).toContain("## Review report")
+      expect(drained).toEqual([parent])
+      const item = yield* reviewInbox(database, parent)
+      expect(item.id).toBe(review.notificationID)
+      expect(item.payload.text).toContain("## Review report")
       expect((yield* store.get(child))?.time.archived).toBeDefined()
       expect(yield* restartedJobs.pendingBackground).toEqual([])
-      expect(yield* SessionInbox.list(database.db, parent)).toEqual([])
     }),
   )
 
@@ -1764,8 +1782,8 @@ describe("SessionRestart review recovery", () => {
         restartedJobs,
       )
       const restart = Context.get(context, SessionRestart.Service)
-      const notices = yield* bus
-        .subscribe(SessionEvent.Synthetic)
+      const enqueued = yield* bus
+        .subscribe(SessionEvent.InboxEnqueued)
         .pipe(
           Stream.filter((event) => event.data.sessionID === parent),
           Stream.take(1),
@@ -1782,22 +1800,22 @@ describe("SessionRestart review recovery", () => {
         )
       yield* Effect.yieldNow
       yield* restart.resumeSuspendedSessions
-      const events = Array.from(yield* Fiber.join(notices).pipe(Effect.timeout("5 seconds")))
+      yield* Fiber.join(enqueued).pipe(Effect.timeout("5 seconds"))
       yield* Fiber.join(archived).pipe(Effect.timeout("5 seconds"))
       yield* Effect.yieldNow
 
-      expect(drained).toEqual([])
-      expect(events[0]?.data.metadata).toMatchObject({
+      expect(drained).toEqual([parent])
+      const item = yield* reviewInbox(database, parent)
+      expect(item.payload.metadata).toMatchObject({
         source: "subagent",
         childID: child,
         agent: "Review",
         state: "cancelled",
       })
-      expect(events[0]?.data.text).toContain("## Review cancelled")
-      expect(events[0]?.data.text.toLowerCase()).not.toContain("no findings")
+      expect(item.payload.text).toContain("## Review cancelled")
+      expect(item.payload.text.toLowerCase()).not.toContain("no findings")
       expect((yield* store.get(child))?.time.archived).toBeDefined()
       expect(yield* restartedJobs.pendingBackground).toEqual([])
-      expect(yield* SessionInbox.list(database.db, parent)).toEqual([])
     }),
   )
 
@@ -1846,8 +1864,8 @@ describe("SessionRestart review recovery", () => {
         restartedJobs,
       )
       const restart = Context.get(context, SessionRestart.Service)
-      const notices = yield* bus
-        .subscribe(SessionEvent.Synthetic)
+      const enqueued = yield* bus
+        .subscribe(SessionEvent.InboxEnqueued)
         .pipe(
           Stream.filter((event) => event.data.sessionID === parent),
           Stream.take(1),
@@ -1864,18 +1882,18 @@ describe("SessionRestart review recovery", () => {
         )
       yield* Effect.yieldNow
       yield* restart.resumeSuspendedSessions
-      const events = Array.from(yield* Fiber.join(notices).pipe(Effect.timeout("5 seconds")))
+      yield* Fiber.join(enqueued).pipe(Effect.timeout("5 seconds"))
       yield* Fiber.join(archived).pipe(Effect.timeout("5 seconds"))
       yield* Effect.yieldNow
 
-      expect(drained).toEqual([])
-      expect(events[0]?.data.metadata).toMatchObject({ state: "error", childID: child })
-      expect(events[0]?.data.text).toContain("## Review failed")
-      expect(events[0]?.data.text).toContain("review failed")
-      expect(events[0]?.data.text.toLowerCase()).not.toContain("no findings")
+      expect(drained).toEqual([parent])
+      const item = yield* reviewInbox(database, parent)
+      expect(item.payload.metadata).toMatchObject({ state: "error", childID: child })
+      expect(item.payload.text).toContain("## Review failed")
+      expect(item.payload.text).toContain("review failed")
+      expect(item.payload.text.toLowerCase()).not.toContain("no findings")
       expect((yield* store.get(child))?.time.archived).toBeDefined()
       expect(yield* restartedJobs.pendingBackground).toEqual([])
-      expect(yield* SessionInbox.list(database.db, parent)).toEqual([])
     }),
   )
 
@@ -1908,8 +1926,8 @@ describe("SessionRestart review recovery", () => {
         restartedJobs,
       )
       const restart = Context.get(context, SessionRestart.Service)
-      const notices = yield* bus
-        .subscribe(SessionEvent.Synthetic)
+      const enqueued = yield* bus
+        .subscribe(SessionEvent.InboxEnqueued)
         .pipe(
           Stream.filter((event) => event.data.sessionID === parent),
           Stream.take(1),
@@ -1926,16 +1944,16 @@ describe("SessionRestart review recovery", () => {
         )
       yield* Effect.yieldNow
       yield* restart.resumeSuspendedSessions
-      const events = Array.from(yield* Fiber.join(notices).pipe(Effect.timeout("5 seconds")))
+      yield* Fiber.join(enqueued).pipe(Effect.timeout("5 seconds"))
       yield* Fiber.join(archived).pipe(Effect.timeout("5 seconds"))
       yield* Effect.yieldNow
 
-      expect(drained).toEqual([])
-      expect(events[0]?.data.text).toContain("empty response")
-      expect(events[0]?.data.text.toLowerCase()).not.toContain("no findings")
+      expect(drained).toEqual([parent])
+      const item = yield* reviewInbox(database, parent)
+      expect(item.payload.text).toContain("empty response")
+      expect(item.payload.text.toLowerCase()).not.toContain("no findings")
       expect((yield* store.get(child))?.time.archived).toBeDefined()
       expect(yield* restartedJobs.pendingBackground).toEqual([])
-      expect(yield* SessionInbox.list(database.db, parent)).toEqual([])
     }),
   )
 
@@ -1971,8 +1989,8 @@ describe("SessionRestart review recovery", () => {
         restartedJobs,
       )
       const restart = Context.get(context, SessionRestart.Service)
-      const notices = yield* bus
-        .subscribe(SessionEvent.Synthetic)
+      const enqueued = yield* bus
+        .subscribe(SessionEvent.InboxEnqueued)
         .pipe(
           Stream.filter((event) => event.data.sessionID === parent),
           Stream.take(1),
@@ -1989,17 +2007,17 @@ describe("SessionRestart review recovery", () => {
         )
       yield* Effect.yieldNow
       yield* restart.resumeSuspendedSessions
-      const events = Array.from(yield* Fiber.join(notices).pipe(Effect.timeout("5 seconds")))
+      yield* Fiber.join(enqueued).pipe(Effect.timeout("5 seconds"))
       yield* Fiber.join(archived).pipe(Effect.timeout("5 seconds"))
       yield* Effect.yieldNow
 
-      expect(drained).toEqual([])
-      expect(events[0]?.data.text).toContain("## Review failed")
-      expect(events[0]?.data.text).toContain("failed without an error message")
-      expect(events[0]?.data.text.toLowerCase()).not.toContain("no findings")
+      expect(drained).toEqual([parent])
+      const item = yield* reviewInbox(database, parent)
+      expect(item.payload.text).toContain("## Review failed")
+      expect(item.payload.text).toContain("failed without an error message")
+      expect(item.payload.text.toLowerCase()).not.toContain("no findings")
       expect((yield* store.get(child))?.time.archived).toBeDefined()
       expect(yield* restartedJobs.pendingBackground).toEqual([])
-      expect(yield* SessionInbox.list(database.db, parent)).toEqual([])
     }),
   )
 
