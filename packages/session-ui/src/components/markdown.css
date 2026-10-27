@@ -286,30 +286,22 @@
     unicode-bidi: isolate;
   }
 
-  [data-component="markdown-mermaid"] {
-    min-height: 96px;
+  [data-component="markdown-code"][data-mermaid-view] {
+    display: flex;
+    flex-direction: column;
     margin: 12px 0 24px;
-    padding: 16px;
-    overflow: auto;
-    border: 0.5px solid var(--v2-border-border-base);
-    border-radius: 6px;
-    background: var(--v2-background-bg-layer-02);
-    direction: ltr;
-    unicode-bidi: isolate;
+
+    > [data-slot="mermaid-viewer-host"] {
+      order: -1;
+    }
+
+    > pre {
+      margin: 4px 0 0;
+    }
   }
 
-  [data-component="markdown-mermaid"] > svg {
-    display: block;
-    width: 100%;
-    min-width: 480px;
-    height: auto;
-    margin: 0 auto;
-  }
-
-  [data-component="markdown-code"][data-mermaid-pending="true"] > pre,
-  [data-component="markdown-code"][data-mermaid-pending="true"] > [data-slot="markdown-copy-button"],
-  [data-component="markdown-code"][data-mermaid-ready="true"] > pre,
-  [data-component="markdown-code"][data-mermaid-ready="true"] > [data-slot="markdown-copy-button"] {
+  [data-component="markdown-code"][data-mermaid-view] > [data-slot="markdown-copy-button"],
+  [data-component="markdown-code"][data-mermaid-view="diagram"][data-mermaid-ready="true"] > pre {
     display: none;
   }
 

@@ -3,7 +3,6 @@ export * as SubagentJob from "./subagent-job.js"
 import { Cause, Context, Effect, Exit, Layer, Scope } from "effect"
 import { Node } from "@opencode/util/effect/app-node"
 import type { LayerNode } from "@opencode/util/effect/layer-node"
-import { Bus } from "../bus.js"
 import { Job } from "../job.js"
 import { Session } from "../session.js"
 import { SubagentCompletion } from "./subagent-completion.js"
@@ -37,12 +36,11 @@ export const result = (receipt: SessionExecution.Receipt) =>
 const make: Effect.Effect<
   Interface,
   never,
-  Session.Service | Job.Service | SessionExecution.Service | Bus.Service | SessionStore.Service | Scope.Scope
+  Session.Service | Job.Service | SessionExecution.Service | SessionStore.Service | Scope.Scope
 > = Effect.gen(function* () {
   const sessions = yield* Session.Service
   const jobs = yield* Job.Service
   const execution = yield* SessionExecution.Service
-  const bus = yield* Bus.Service
   const store = yield* SessionStore.Service
   const scope = yield* Scope.Scope
   // Jobs and their completion observers outlive the plugin that launched them.
@@ -59,7 +57,6 @@ const make: Effect.Effect<
       const info = (yield* job.wait()).info
       if (info)
         yield* SubagentCompletion.deliver(sessions, jobs, { ...info, recovery }).pipe(
-          Effect.provideService(Bus.Service, bus),
           Effect.provideService(SessionStore.Service, store),
         )
     }).pipe(
@@ -106,5 +103,5 @@ const make: Effect.Effect<
 export const node: LayerNode.Provider<Service, never, typeof Node.tags.values.global> = Node.makeGlobalNode({
   service: Service,
   layer: Layer.effect(Service, make),
-  deps: [Session.node, Job.node, SessionExecution.node, Bus.node, SessionStore.node],
+  deps: [Session.node, Job.node, SessionExecution.node, SessionStore.node],
 })

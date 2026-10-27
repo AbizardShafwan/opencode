@@ -26,6 +26,25 @@ const shown = (count: Locator) =>
       .join("")
   })
 
+story("Norse thoughts use the same group spacing as tool rows", async ({ mount, page }) => {
+  await page.addInitScript(() => localStorage.setItem("opencode-theme-id", "norse"))
+  const root = await mount("current-tool-group--mixed-reasoning")
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "norse")
+  await page.evaluate(() => document.fonts.ready.then(() => undefined))
+  const thought = root.locator('[data-timeline-part-id="reasoning_first"]')
+  await expect(thought.getByRole("button")).toHaveAttribute("aria-expanded", "false")
+  // Measure the visible row, not its wrapper: margins inside the wrapper caused the extra blank space.
+  expect(
+    await thought.evaluate((node) => {
+      const item = node.closest('[data-slot="context-tool-group-item"]')!
+      const previous = item.previousElementSibling!.firstElementChild!.getBoundingClientRect()
+      const next = item.nextElementSibling!.firstElementChild!.getBoundingClientRect()
+      const bounds = node.getBoundingClientRect()
+      return [bounds.top - previous.bottom, next.top - bounds.bottom]
+    }),
+  ).toEqual([8, 8])
+})
+
 for (const reasoningDefaultOpen of [false, true]) {
   story(
     `keeps ordered thoughts and tool-only counts with reasoning ${reasoningDefaultOpen ? "expanded" : "collapsed"}`,

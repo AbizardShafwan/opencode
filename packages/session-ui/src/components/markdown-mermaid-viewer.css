@@ -1,0 +1,255 @@
+[data-component="markdown-mermaid"] {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  color: var(--v2-text-text-base);
+  direction: ltr;
+  unicode-bidi: isolate;
+  font-size: 13px;
+  line-height: var(--line-height-compact);
+
+  [data-slot="mermaid-toolbar"] {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 0 0 4px;
+  }
+
+  [data-slot="mermaid-view-switch"] {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-left: 1px;
+  }
+
+  [data-slot="mermaid-view-switch"] > button,
+  [data-slot="mermaid-navigation"] > button {
+    position: relative;
+    appearance: none;
+    margin: 0;
+    padding: 4px 0;
+    border: 0;
+    border-radius: 2px;
+    background: none;
+    box-shadow: none;
+    color: var(--v2-text-text-muted);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 440;
+    line-height: var(--line-height-compact);
+    letter-spacing: -0.04px;
+    cursor: pointer;
+    transition: color 0.15s ease;
+
+    &:hover:not(:disabled) {
+      color: var(--v2-text-text-base);
+    }
+
+    &:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--v2-border-border-focus);
+      outline-offset: 3px;
+    }
+  }
+
+  [data-slot="mermaid-view-switch"] > button[aria-pressed="true"] {
+    color: var(--v2-text-text-base);
+    font-weight: 530;
+
+    &::after {
+      position: absolute;
+      right: 0;
+      bottom: 3px;
+      left: 0;
+      height: 1px;
+      background: currentColor;
+      content: "";
+      opacity: 0.4;
+    }
+  }
+
+  [data-slot="mermaid-actions"] {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+
+  [data-slot="mermaid-diagram"] {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  [hidden] {
+    display: none;
+  }
+
+  [data-slot="mermaid-stage"] {
+    position: relative;
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  [data-slot="mermaid-frame"] {
+    position: relative;
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  [data-slot="mermaid-viewport"] {
+    position: relative;
+    overflow: hidden;
+    border-radius: 6px;
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+
+    &:active {
+      cursor: grabbing;
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--v2-border-border-focus);
+      outline-offset: 0;
+    }
+  }
+
+  [data-slot="mermaid-canvas"] {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform-origin: center;
+
+    > svg {
+      display: block;
+    }
+  }
+
+  /* Keep zoom controls below the canvas so they never cover diagram content. */
+  [data-slot="mermaid-footer"] {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px 8px;
+    min-height: 28px;
+    padding: 2px 2px 0;
+  }
+
+  [data-slot="mermaid-navigation"] {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+
+    > button {
+      min-width: 24px;
+      text-align: center;
+    }
+  }
+
+  [data-slot="mermaid-navigation"] output {
+    min-width: 4.5ch;
+    padding: 0 4px;
+    color: var(--v2-text-text-muted);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+  }
+
+  > p {
+    margin: 4px 2px 0;
+    color: var(--v2-text-text-muted);
+    font-size: 13px;
+    line-height: var(--line-height-compact);
+  }
+
+  [data-slot="mermaid-hint"] {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  &[data-expanded] [data-slot="mermaid-hint"] {
+    position: static;
+    width: auto;
+    height: auto;
+    margin: 0;
+    overflow: visible;
+    clip-path: none;
+    color: var(--v2-text-text-muted);
+    font-size: 12px;
+    line-height: var(--line-height-compact);
+    white-space: normal;
+  }
+
+  &[data-expanded] [data-slot="mermaid-viewport"] {
+    flex: 1;
+    min-height: 0;
+  }
+
+  [data-slot="mermaid-source"] {
+    flex: 1;
+    overflow: auto;
+    margin: 4px 0 0;
+    padding: 16px;
+    border-radius: 6px;
+    background: var(--v2-background-bg-layer-02);
+    font-family: var(--font-family-mono);
+    font-size: 13px;
+    line-height: var(--line-height-base);
+    white-space: pre;
+  }
+}
+
+[data-component="mermaid-dialog"] {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: min(1200px, calc(100vw - 32px));
+  height: min(860px, calc(100vh - 96px));
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  background: var(--v2-background-bg-layer-01);
+  box-shadow: var(--v2-elevation-overlay);
+  color: var(--v2-text-text-base);
+
+  > header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 8px 8px 16px;
+    border-bottom: 0.5px solid var(--v2-border-border-muted);
+
+    h2 {
+      margin: 0;
+      font-size: 13px;
+      font-weight: 530;
+      line-height: var(--line-height-compact);
+      letter-spacing: -0.04px;
+    }
+  }
+
+  > [data-component="markdown-mermaid"] {
+    flex: 1;
+    min-height: 0;
+    padding: 6px 12px 12px;
+  }
+}

@@ -457,23 +457,287 @@ story("keeps a reopened cached answer recent under cache pressure", async ({ pag
   expect(cached).toBe("**Cached answer**")
 })
 
-story("renders cached Mermaid blocks and falls back to code for invalid diagrams", async ({ page }) => {
+story("toggles and copies Mermaid source with invalid-code fallback", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"])
   await page.evaluate(async (fixture) => {
     const { mountMarkdown } = await import(fixture)
     await mountMarkdown({ text: "```mermaid\nflowchart LR\n A[Start] --> B[End]\n```", cached: true })
   }, fixture)
   const harness = page.getByTestId("markdown-fixture")
   const markdown = harness.locator('[data-component="markdown"]')
-  await expect(markdown.locator('[data-component="markdown-mermaid"] > svg')).toBeVisible()
+  await expect(markdown.locator('[data-slot="mermaid-canvas"] > svg')).toBeVisible()
+  await markdown.getByRole("button", { name: "Code", exact: true }).click()
+  await expect(markdown.locator("pre code")).toBeVisible()
+  await expect(markdown.locator("pre code")).toHaveText("flowchart LR\n A[Start] --> B[End]")
+  await expect(markdown.locator('[data-slot="mermaid-canvas"] > svg')).toBeHidden()
+  await markdown.getByRole("button", { name: "Copy code", exact: true }).click()
+  await expect(markdown.getByRole("button", { name: "Code copied", exact: true })).toBeVisible()
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("flowchart LR\n A[Start] --> B[End]")
+  await markdown.getByRole("button", { name: "Diagram", exact: true }).click()
+  await expect(markdown.locator("pre code")).toBeHidden()
   await harness.getByRole("button", { name: "Toggle Markdown" }).click()
   await expect(markdown).toHaveCount(0)
   await harness.getByRole("button", { name: "Toggle Markdown" }).click()
-  await expect(markdown.locator('[data-component="markdown-mermaid"] > svg')).toBeVisible()
+  await expect(markdown.locator('[data-slot="mermaid-canvas"] > svg')).toBeVisible()
   await harness.getByLabel("Markdown text").fill("```mermaid\nnot a diagram\n```")
-  await expect(markdown.locator('[data-component="markdown-mermaid"]')).toHaveCount(0)
+  await expect(markdown.getByRole("status")).toHaveText(
+    "Unable to render this Mermaid diagram. You can still view and copy its code.",
+  )
+  await expect(markdown.locator('[data-slot="mermaid-canvas"] > svg')).toHaveCount(0)
   await expect(markdown.locator("pre code")).toBeVisible()
   await expect(markdown.locator("pre code")).toHaveText("not a diagram")
-  await expect(markdown.getByRole("button", { name: "Copy", exact: true })).toBeVisible()
+  await expect(markdown.getByRole("button", { name: "Copy code", exact: true })).toBeVisible()
+})
+
+story("navigates Mermaid independently and expands it with keyboard-accessible controls", async ({ page }) => {
+  await page.evaluate(async (fixture) => {
+    const { mountMarkdown } = await import(fixture)
+    await mountMarkdown({
+      text: "```mermaid\nflowchart LR\n A[Start] --> B[End]\n```\n\n```mermaid\nsequenceDiagram\n Alice->>Bob: Hello\n```",
+    })
+  }, fixture)
+  const harness = page.getByTestId("markdown-fixture")
+  const diagrams = harness.locator('[data-component="markdown-mermaid"]')
+  const first = diagrams.nth(0)
+  const second = diagrams.nth(1)
+  const viewport = first.getByRole("region", { name: "Diagram", exact: true })
+  const canvas = first.locator('[data-slot="mermaid-canvas"]')
+  await expect(canvas.locator("> svg")).toContainText("Start")
+  await expect(second.locator('[data-slot="mermaid-canvas"] > svg')).toContainText("Hello")
+  await expect(viewport).toHaveAccessibleDescription(/Drag to pan/)
+  await page.evaluate(() => document.fonts.ready.then(() => undefined))
+
+  // Mermaid HTML labels have a measured SVG viewport; prose padding must not clip their text.
+  const labels = await canvas.locator("foreignObject").evaluateAll((elements) =>
+    elements.map((element) => {
+      const range = document.createRange()
+      range.selectNodeContents(element.querySelector(".nodeLabel")!)
+      const text = range.getBoundingClientRect()
+      const box = element.getBoundingClientRect()
+
+      return {
+        left: text.left - box.left,
+        right: box.right - text.right,
+        top: text.top - box.top,
+        bottom: box.bottom - text.bottom,
+      }
+    }),
+  )
+
+  expect(labels).toHaveLength(2)
+  labels.forEach((label) => {
+    expect(label.left).toBeGreaterThanOrEqual(-1)
+    expect(label.right).toBeGreaterThanOrEqual(-1)
+    expect(label.top).toBeGreaterThanOrEqual(-1)
+    expect(label.bottom).toBeGreaterThanOrEqual(-1)
+  })
+  const initial = (await canvas.boundingBox())!
+  await first.getByRole("button", { name: "Zoom in", exact: true }).click()
+  await expect(first.getByLabel("Zoom level")).toHaveText("125%")
+  await expect(second.getByLabel("Zoom level")).toHaveText("100%")
+  expect((await canvas.boundingBox())!.width).toBeCloseTo(initial.width * 1.25, 0)
+
+  await viewport.focus()
+  const before = (await canvas.boundingBox())!
+  await viewport.press("ArrowRight")
+  expect((await canvas.boundingBox())!.x).toBeCloseTo(before.x - 32, 0)
+  const box = (await viewport.boundingBox())!
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(box.x + box.width / 2 + 40, box.y + box.height / 2 + 20)
+  await page.mouse.up()
+  expect((await canvas.boundingBox())!.x).toBeCloseTo(before.x + 8, 0)
+  await viewport.press("0")
+  await expect(first.getByLabel("Zoom level")).toHaveText("100%")
+  expect((await canvas.boundingBox())!.x).toBeCloseTo(initial.x, 0)
+  await viewport.press("+")
+  await expect(first.getByLabel("Zoom level")).toHaveText("125%")
+  await page.keyboard.down("Control")
+  await page.mouse.wheel(0, -20)
+  await page.keyboard.up("Control")
+  await expect(first.getByLabel("Zoom level")).toHaveText("153%")
+  await viewport.press("0")
+  await viewport.press("+")
+
+  const expand = first.getByRole("button", { name: "Expand", exact: true })
+  await expand.click()
+  const dialog = page.getByRole("dialog", { name: "Mermaid diagram", exact: true })
+  await expect(dialog.locator('[data-slot="mermaid-canvas"] > svg')).toContainText("Start")
+  await expect(dialog.getByLabel("Zoom level")).toHaveText("100%")
+  expect(await dialog.locator('[data-slot="mermaid-canvas"] > svg').getAttribute("id")).not.toBe(
+    await canvas.locator("> svg").getAttribute("id"),
+  )
+  await dialog.getByRole("button", { name: "Code", exact: true }).click()
+  await expect(dialog.locator("pre code")).toHaveText("flowchart LR\n A[Start] --> B[End]")
+  await dialog.getByRole("button", { name: "Diagram", exact: true }).click()
+  await dialog.getByRole("button", { name: "Zoom in", exact: true }).click()
+  await expect(dialog.getByLabel("Zoom level")).toHaveText("125%")
+  await dialog.getByRole("button", { name: "Fit", exact: true }).click()
+  await expect(dialog.getByLabel("Zoom level")).toHaveText("100%")
+  await page.keyboard.press("Escape")
+  await expect(dialog).toHaveCount(0)
+  await expect(expand).toBeFocused()
+  await expect(first.getByLabel("Zoom level")).toHaveText("125%")
+  await expand.click()
+  await expect(dialog.locator('[data-slot="mermaid-canvas"] > svg')).toContainText("Start")
+  // Removing the owning block must also close its expanded viewer.
+  await harness.getByLabel("Markdown text").evaluate((element: HTMLTextAreaElement) => {
+    element.value = "No diagrams remain."
+    element.dispatchEvent(new Event("input", { bubbles: true }))
+  })
+  await expect(dialog).toHaveCount(0)
+  await expect(diagrams).toHaveCount(0)
+})
+
+story("keeps tall Mermaid diagrams readable until explicitly fitted", async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 900 })
+  await page.evaluate(async (fixture) => {
+    const { mountMarkdown } = await import(fixture)
+    await mountMarkdown({
+      text: "```mermaid\nflowchart TD\n Start --> A[Validate request]\n Start --> B[Load history]\n A --> C[Prepare context]\n B --> C\n C --> D[Generate response]\n D --> E[Deliver response]\n```",
+    })
+  }, fixture)
+  const harness = page.getByTestId("markdown-fixture")
+  const diagram = harness.locator('[data-component="markdown-mermaid"]')
+  const viewport = diagram.getByRole("region", { name: "Diagram", exact: true })
+  const svg = diagram.locator('[data-slot="mermaid-canvas"] > svg')
+  await expect(svg).toContainText("Deliver response")
+  await page.evaluate(() => document.fonts.ready.then(() => undefined))
+
+  for (const width of [900, 390]) {
+    await page.setViewportSize({ width, height: 900 })
+    await expect.poll(async () => (await viewport.boundingBox())!.height).toBeGreaterThan(420)
+    await expect
+      .poll(async () => (await svg.boundingBox())!.width)
+      .toBeCloseTo(width === 900 ? 480 : (await viewport.boundingBox())!.width - 32, 0)
+    await expect(diagram.getByLabel("Zoom level")).toHaveText("100%")
+  }
+
+  const readable = (await viewport.boundingBox())!
+  await diagram.getByRole("button", { name: "Fit", exact: true }).click()
+  await expect(viewport).toHaveCSS("height", "420px")
+  await expect(diagram.getByLabel("Zoom level")).not.toHaveText("100%")
+  await expect.poll(async () => (await svg.boundingBox())!.height).toBeCloseTo(388, 0)
+  await diagram.getByRole("button", { name: "Code", exact: true }).click()
+  await expect(harness.locator("pre code")).toContainText("Prepare context")
+  await diagram.getByRole("button", { name: "Diagram", exact: true }).click()
+  await expect(viewport).toHaveCSS("height", "420px")
+  await diagram.getByRole("button", { name: "Reset zoom", exact: true }).focus()
+  await page.keyboard.press("Enter")
+  await expect.poll(async () => (await viewport.boundingBox())!.height).toBeCloseTo(readable.height, 0)
+  await expect(diagram.getByLabel("Zoom level")).toHaveText("100%")
+  await diagram.getByRole("button", { name: "Expand", exact: true }).click()
+  const dialog = page.getByRole("dialog", { name: "Mermaid diagram", exact: true })
+  const expanded = dialog.getByRole("region", { name: "Diagram", exact: true })
+  await expect(dialog.locator('[data-slot="mermaid-canvas"] > svg')).toContainText("Deliver response")
+  await expect
+    .poll(() =>
+      expanded.evaluate((element) => {
+        const viewport = element.getBoundingClientRect()
+        const svg = element.querySelector("svg")!.getBoundingClientRect()
+
+        return svg.width > 0 && svg.height > 0 && svg.width <= viewport.width && svg.height <= viewport.height
+      }),
+    )
+    .toBe(true)
+})
+
+story("updates same-length Mermaid input and preserves navigation while streaming", async ({ page }) => {
+  await page.evaluate(async (fixture) => {
+    const { mountMarkdown } = await import(fixture)
+    await mountMarkdown({ text: "```mermaid\nflowchart LR\n A[First] --> B[End]\n", streaming: true })
+  }, fixture)
+  const harness = page.getByTestId("markdown-fixture")
+  const diagram = harness.locator('[data-component="markdown-mermaid"]')
+  const svg = diagram.locator('[data-slot="mermaid-canvas"] > svg')
+  await expect(svg).toContainText("First")
+  await diagram.getByRole("button", { name: "Zoom in", exact: true }).click()
+  await harness.getByLabel("Markdown text").fill("```mermaid\nflowchart LR\n A[Other] --> B[End]\n")
+  await expect(svg).toContainText("Other")
+  await expect(svg).not.toContainText("First")
+  await expect(diagram.getByLabel("Zoom level")).toHaveText("125%")
+  await diagram.getByRole("button", { name: "Code", exact: true }).click()
+  await harness.getByLabel("Markdown text").fill("```mermaid\nflowchart LR\n A[Other] --> B[End]\n B --> C[Incomplete")
+  await expect(diagram.getByRole("button", { name: "Code", exact: true })).toHaveAttribute("aria-pressed", "true")
+  await expect(harness.locator("pre code")).toContainText("Incomplete")
+  await diagram.getByRole("button", { name: "Diagram", exact: true }).click()
+  await expect(svg).toBeVisible()
+  await expect(svg).toContainText("Other")
+  await harness
+    .getByLabel("Markdown text")
+    .fill("```mermaid\nflowchart LR\n A[Other] --> B[End]\n B --> C[Complete]\n```")
+  await expect(svg).toContainText("Complete")
+  await expect(diagram.getByLabel("Zoom level")).toHaveText("125%")
+  await harness.getByLabel("Streaming").uncheck()
+  await expect(svg).toContainText("Complete")
+  // Removing a viewer while rendering is queued must not resurrect it.
+  await harness.getByLabel("Markdown text").fill("```mermaid\nclassDiagram\nAnimal <|-- Duck\n```")
+  await harness.getByRole("button", { name: "Toggle Markdown" }).click()
+  await expect(diagram).toHaveCount(0)
+  await harness.getByRole("button", { name: "Toggle Markdown" }).click()
+  await expect(svg).toContainText("Duck")
+})
+
+story.describe("Mermaid touch navigation", () => {
+  story.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } })
+
+  story("pinches a diagram without zooming the page and scrolls at its readable scale", async ({ page }) => {
+    await page.evaluate(async (fixture) => {
+      const { mountMarkdown } = await import(fixture)
+      await mountMarkdown({
+        text: "```mermaid\nflowchart TD\n A[Start] --> B[Validate]\n B --> C[Prepare]\n C --> D[Generate]\n D --> E[Deliver]\n E --> F[End]\n```",
+      })
+    }, fixture)
+    expect(await page.evaluate(() => matchMedia("(hover: none)").matches)).toBe(true)
+    const diagram = page.getByTestId("markdown-fixture").locator('[data-component="markdown-mermaid"]')
+    await expect(diagram.locator('[data-slot="mermaid-canvas"] > svg')).toContainText("Start")
+    const viewport = diagram.getByRole("region", { name: "Diagram", exact: true })
+    await viewport.scrollIntoViewIfNeeded()
+    const box = (await viewport.boundingBox())!
+    const x = box.x + box.width / 2
+    const y = box.y + box.height / 2
+    const scale = await page.evaluate(() => visualViewport!.scale)
+    const cdp = await page.context().newCDPSession(page)
+
+    try {
+      await cdp.send("Input.dispatchTouchEvent", {
+        type: "touchStart",
+        touchPoints: [
+          { id: 1, x: x - 30, y },
+          { id: 2, x: x + 30, y },
+        ],
+      })
+      await cdp.send("Input.dispatchTouchEvent", {
+        type: "touchMove",
+        touchPoints: [
+          { id: 1, x: x - 60, y },
+          { id: 2, x: x + 60, y },
+        ],
+      })
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] })
+      await expect(diagram.getByLabel("Zoom level")).toHaveText("200%")
+      expect(await page.evaluate(() => visualViewport!.scale)).toBe(scale)
+      await diagram.getByRole("button", { name: "Reset zoom", exact: true }).tap()
+      await expect(diagram.getByLabel("Zoom level")).toHaveText("100%")
+      await viewport.scrollIntoViewIfNeeded()
+      const readable = (await viewport.boundingBox())!
+      const before = await page.evaluate(() => window.scrollY)
+      const center = { x: readable.x + readable.width / 2, y: readable.y + readable.height / 2 }
+      await cdp.send("Input.dispatchTouchEvent", {
+        type: "touchStart",
+        touchPoints: [{ id: 1, ...center }],
+      })
+      await cdp.send("Input.dispatchTouchEvent", {
+        type: "touchMove",
+        touchPoints: [{ id: 1, x: center.x, y: center.y - 100 }],
+      })
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] })
+      await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(before)
+      await expect(diagram.getByLabel("Zoom level")).toHaveText("100%")
+    } finally {
+      await cdp.detach()
+    }
+  })
 })
 
 story("renders the trailing chunk while the stream is paused", async ({ page }) => {
@@ -634,7 +898,7 @@ for (const theme of ["light", "dark"]) {
       })
     }, fixture)
     const harness = page.getByTestId("markdown-fixture")
-    const diagrams = harness.locator('[data-component="markdown-mermaid"] > svg')
+    const diagrams = harness.locator('[data-slot="mermaid-canvas"] > svg')
     await expect(diagrams).toHaveCount(2)
     await expect(diagrams.nth(0)).toBeVisible()
     await expect(diagrams.nth(0)).toContainText("swim()")
@@ -646,6 +910,18 @@ for (const theme of ["light", "dark"]) {
     await expect(diagrams).toHaveCount(2)
     await expect(diagrams.nth(0)).toBeVisible()
     await expect(diagrams.nth(1)).toBeVisible()
+
+    if (theme === "light") {
+      const previous = await diagrams.nth(1).getAttribute("id")
+      const node = diagrams.nth(1).locator(".node").filter({ hasText: "Parse" }).locator(":scope > rect")
+      const fill = await node.evaluate((node) => getComputedStyle(node).fill)
+      await page.evaluate(() => {
+        document.documentElement.dataset.colorScheme = "dark"
+      })
+      await expect(diagrams.nth(1)).not.toHaveAttribute("id", previous!)
+      await expect(node).not.toHaveCSS("fill", fill)
+      await expect(diagrams.nth(0)).toContainText("swim()")
+    }
   })
 }
 

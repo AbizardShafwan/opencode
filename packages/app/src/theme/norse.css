@@ -83,8 +83,20 @@ html[data-theme="norse"] ::selection {
   background: color-mix(in srgb, var(--norse-royal) 42%, transparent);
 }
 
+/* Norse does not draw outline focus rings. */
 html[data-theme="norse"] :focus-visible {
-  outline: 2px solid var(--norse-royal);
+  outline: none;
+}
+
+/* Keyboard-driven question controls have no other focus cue. */
+html[data-theme="norse"] [data-slot="question-option"]:focus-visible,
+html[data-theme="norse"] [data-slot="question-progress-segment"]:focus-visible {
+  outline: 1px solid var(--norse-gold);
+  outline-offset: -1px;
+}
+
+html[data-theme="norse"] [data-slot="question-custom-toggle"]:focus-visible {
+  outline: 1px solid var(--norse-gold);
   outline-offset: 2px;
 }
 
@@ -551,10 +563,6 @@ html[data-theme="norse"] [data-slot="norse-rail-search"] {
   color: var(--norse-muted);
 }
 
-html[data-theme="norse"] [data-slot="norse-rail-search"]:focus-within {
-  border-color: color-mix(in srgb, var(--norse-royal) 55%, transparent);
-}
-
 html[data-theme="norse"] [data-slot="norse-rail-search"] input {
   width: 100%;
   min-width: 0;
@@ -815,10 +823,6 @@ html[data-theme="norse"] [data-slot="home-panel"] [data-component="home-session-
   border-radius: 10px !important;
   background: color-mix(in srgb, var(--norse-card) 70%, transparent) !important;
   color: var(--norse-muted);
-}
-
-html[data-theme="norse"] [data-slot="home-panel"] [data-component="home-session-search"] label:focus-within {
-  border-color: color-mix(in srgb, var(--norse-royal) 55%, transparent) !important;
 }
 
 html[data-theme="norse"] [data-component="home-session-row"] {
@@ -1288,7 +1292,7 @@ html[data-theme="norse"] [data-slot="text-part-copy-wrapper"] {
 /* Reasoning and tool rows read as rune + line, not cards. */
 html[data-theme="norse"] [data-component="reasoning-part"] {
   max-width: 100%;
-  margin: 14px 0;
+  margin: 0;
   border: 0;
   padding: 0;
 }
@@ -1325,7 +1329,7 @@ html[data-theme="norse"]
   > [data-slot="collapsible-trigger"]:is([aria-expanded="true"], [data-locked]) {
   min-height: 0;
   padding-block: 0 var(--tool-content-gap);
-  background: var(--v2-background-bg-base);
+  background: var(--norse-card);
 }
 
 html[data-theme="norse"]
@@ -1337,7 +1341,6 @@ html[data-theme="norse"]
   padding-inline: 8px;
   border-radius: 8px;
   box-shadow: inset 0 0 0 1px var(--norse-gold-line);
-  outline-offset: -2px;
 }
 
 html[data-theme="norse"]
@@ -1353,7 +1356,7 @@ html[data-theme="norse"]
   html[data-theme="norse"]
     [data-component="collapsed-tool-group"]
     > [data-component="collapsible"].tool-collapsible
-    > [data-slot="collapsible-trigger"][aria-expanded="true"] {
+    > [data-slot="collapsible-trigger"]:is([aria-expanded="true"], [data-locked]) {
     background-color: color-mix(in srgb, var(--norse-card) 60%, transparent);
     background-image: linear-gradient(110deg, var(--norse-royal-soft), var(--norse-gold-soft));
     backdrop-filter: blur(24px) saturate(1.2);
@@ -1365,6 +1368,49 @@ html[data-theme="norse"]
   > [data-component="collapsible"].tool-collapsible
   > [data-slot="collapsible-trigger"]:is([aria-expanded="true"], [data-locked]) {
   height: var(--sticky-accordion-offset);
+}
+
+/* File disclosures share the rune rows' open surface, not the original design's opaque cards. */
+html[data-theme="norse"] [data-component="accordion"][data-scope="apply-patch"] {
+  /* The viewer's shadow tree consumes this override for both code and diff surfaces. */
+  --opencode-diffs-bg: var(--norse-card);
+
+  [data-component="sticky-accordion-header"] {
+    background: transparent;
+    border-radius: 6px;
+  }
+
+  [data-slot="accordion-trigger"] {
+    border: 0;
+    padding-inline: 0;
+    color: var(--norse-text);
+  }
+
+  [data-slot="apply-patch-file-info"] {
+    /* Match the tool rune's 16px column, 3px end margin, and 8px text gap. */
+    gap: 11px;
+  }
+
+  [data-component="sticky-accordion-header"][data-expanded] {
+    /* A solid surface masks code beneath the sticky filename without glass or a gold frame. */
+    background: var(--norse-card);
+  }
+
+  [data-slot="accordion-content"][data-expanded] {
+    background: var(--norse-card);
+    border-color: var(--norse-border);
+  }
+}
+
+/* Important declarations reverse layer priority; override the shared file background in its own layer. */
+@layer components {
+  html[data-theme="norse"] [data-component="accordion"][data-scope="apply-patch"] [data-slot="accordion-trigger"] {
+    background-color: transparent !important;
+
+    &:hover {
+      background-color: var(--norse-gold-soft) !important;
+    }
+  }
 }
 
 html[data-theme="norse"] [data-component="tool-trigger"],
@@ -1680,14 +1726,6 @@ html[data-theme="norse"] [data-component="tool-loaded-item"][data-tool="skill"] 
   font-weight: 700;
 }
 
-html[data-theme="norse"]
-  [data-component="collapsible"].tool-collapsible
-  > [data-slot="collapsible-trigger"]:focus-visible,
-html[data-theme="norse"] [data-component="read-tool-group"]:focus-visible {
-  outline: 2px solid var(--norse-royal);
-  outline-offset: 2px;
-}
-
 html[data-theme="norse"] [data-component="card"][data-kind="tool-error-card"] {
   padding: 0;
   border: 0;
@@ -1834,8 +1872,9 @@ html[data-theme="norse"] .settings-nav {
 }
 
 html[data-theme="norse"] .settings-tab-header {
-  padding: 20px 26px 0;
-  background: transparent;
+  padding: 20px 26px 14px;
+  /* Sticky titles and filters must mask the settings rows scrolling underneath. */
+  background: var(--norse-card-deep);
 }
 
 html[data-theme="norse"] .settings-tab-header::before {
@@ -2000,11 +2039,11 @@ html[data-theme="norse"] [data-component="input"] {
   box-shadow: none !important;
 }
 
+/* Fields keep their neutral border while focused; only the surface brightens. */
 html[data-theme="norse"] [data-component="text-input-v2"]:focus-within,
 html[data-theme="norse"] [data-component="select-v2"]:focus-within,
 html[data-theme="norse"] [data-component="textarea-v2"]:focus-within,
 html[data-theme="norse"] [data-component="input"]:focus {
-  border-color: color-mix(in srgb, var(--norse-royal) 60%, transparent) !important;
   background: color-mix(in srgb, var(--norse-card) 95%, transparent) !important;
 }
 
@@ -2208,7 +2247,7 @@ html[data-theme="norse"] [data-slot="mobile-panel"] {
   }
 
   html[data-theme="norse"] .settings-tab-header {
-    padding: 14px 16px 0;
+    padding: 14px 16px;
   }
 
   html[data-theme="norse"] .settings-tab-body {

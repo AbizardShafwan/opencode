@@ -66,17 +66,18 @@ for (const theme of ["original", "norse-dark", "norse-light"]) {
     })
     await expect.poll(() => top(header)).toBe(48)
     await expect.poll(() => top(file)).toBe(84)
-    await expect(file).toHaveCSS("background-color", /^rgb\(/)
+    if (theme === "original") await expect(file).toHaveCSS("background-color", /^rgb\(/)
+    if (theme !== "original") {
+      await expect(file).toHaveCSS("background-color", theme === "norse-light" ? "rgb(226, 231, 240)" : "rgb(30, 30, 36)")
+      await expect(file).toHaveCSS("backdrop-filter", "none")
+    }
 
     await page.setViewportSize({ width: 390, height: 844 })
     await expect.poll(() => top(header)).toBe(48)
     await expect(header).toHaveCSS("height", "36px")
 
     await expect(header).toBeFocused()
-    if (theme !== "original") {
-      await expect(header).toHaveCSS("outline-width", "2px")
-      await expect(header).toHaveCSS("outline-offset", "-2px")
-    }
+    if (theme !== "original") await expect(header).toHaveCSS("outline-style", "none")
     await header.press("Enter")
     await expect(header).toHaveAttribute("aria-expanded", "false")
     await expect.poll(() => top(header)).toBe(48)

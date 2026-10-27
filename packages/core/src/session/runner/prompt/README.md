@@ -78,12 +78,13 @@ removes the role and `/review` fails clearly.
 
 A completed review is rendered from the reviewer's structured report. Malformed output is preserved
 as raw text rather than treated as a clean review; missing final assistant text is reported as an
-empty response; failure and cancellation are marked explicitly. Delivery publishes one durable
-parent `session.synthetic` host notice with `source: "subagent"`, `childID`, the role name and the
-terminal state. It does not add an inbox item, wake the parent model, or apply automatic fixes. The
-existing linked-subagent notice opens the raw reviewer session and report; there is no new inline
-review UI. Archiving after completion retains the reviewer Session and its history; it is not
-deletion or an API-level closure.
+empty response; failure and cancellation are marked explicitly. Delivery admits one durable parent
+synthetic inbox item and wakes the parent session, so the main agent receives the rendered report
+as a user-visible turn and responds to it. The item reuses the persisted notification ID for
+idempotent retries. A suspended parent in restart recovery receives the item without being revived;
+it is delivered when the parent resumes. The existing linked-subagent notice still opens the raw
+reviewer session; there is no separate inline review UI. Archiving after completion retains the
+reviewer Session and its history; it is not deletion or an API-level closure.
 
 The reviewer may use shell commands only under the review prompt's inspection instructions. That is
 policy guidance, not an operating-system sandbox.

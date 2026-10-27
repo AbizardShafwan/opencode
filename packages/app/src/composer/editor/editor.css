@@ -1,3 +1,8 @@
+[data-component="composer-editor"] {
+  /* Firefox does not supply Chromium's implicit word breaking for editable text. */
+  overflow-wrap: anywhere;
+}
+
 [data-component="composer-editor"]:empty::before {
   content: "\200B";
 }
