@@ -27,7 +27,8 @@ test("Norse agent modes share one segmented control and keep selection keyboard 
   await expect(build).not.toHaveCSS("background-color", "rgba(0, 0, 0, 0)")
   await plan.focus()
   await expect(plan).toBeFocused()
-  await expect(plan).toHaveCSS("outline-style", "solid")
+  /* Norse keeps keyboard activation without an outline ring. */
+  await expect(plan).toHaveCSS("outline-style", "none")
   await plan.press("Enter")
   await expect(plan).toHaveAttribute("aria-pressed", "true")
   await expect(build).toHaveAttribute("aria-pressed", "false")

@@ -229,6 +229,11 @@
   outline-color: var(--v2-border-border-focus);
 }
 
+/* Norse has no focus rings, so the chosen icon keeps its own selection outline. */
+html[data-theme="norse"] .project-settings-icon--active {
+  outline-color: var(--norse-gold);
+}
+
 .project-settings-icon-overlay {
   position: absolute;
   inset: 0;
@@ -274,6 +279,13 @@
   box-shadow:
     0 0 0 2px var(--v2-background-bg-layer-01),
     0 0 0 4px var(--v2-border-border-focus);
+}
+
+/* Norse has no focus rings, so the chosen colour keeps its own selection ring. */
+html[data-theme="norse"] .project-settings-color--selected {
+  box-shadow:
+    0 0 0 2px var(--v2-background-bg-layer-01),
+    0 0 0 4px var(--norse-gold);
 }
 
 @media (hover: hover) {

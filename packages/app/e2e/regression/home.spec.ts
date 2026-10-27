@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test"
 import { expectPath, holdRoute, NO_PROVIDER, project, REMOTE_SERVER, seed, sessionHref } from "../utils/app"
 import { mockOpenCodeServer } from "../utils/mock-server"
 import { fixture, mockStressTimeline } from "../utils/session-fixture"
-import { mockRemoteServer } from "../utils/workspace"
+import { mockRemoteServer, openSession } from "../utils/workspace"
 import { APP_READY_TIMEOUT, expectAppVisible } from "../utils/waits"
 
 test.use({ serviceWorkers: "block" })
@@ -75,6 +75,21 @@ test("the session context menu renames, exports, and deletes a Home session", as
   await dialog.getByRole("button", { name: "Delete session" }).click()
   await removed
   await expect(renamedRow).toBeHidden()
+})
+
+test("Norse Home search shows no focus ring after keyboard navigation", async ({ page }) => {
+  await openSession(page, { name: "Norse search", seed: { theme: { id: "norse", scheme: "dark" } } })
+  await page.keyboard.press("ControlOrMeta+b")
+  const search = page.getByRole("textbox", { name: /Search sessions/ })
+  const field = search.locator("..")
+  await expect(search).toBeFocused()
+  await expect(search).toHaveCSS("outline-style", "none")
+  await expect(field).toHaveCSS("outline-style", "none")
+  const focusedBorder = await field.evaluate((node) => getComputedStyle(node).borderTopColor)
+  await search.press("Escape")
+  await expect(search).not.toBeFocused()
+  // Focusing the field must not add or recolour a border.
+  await expect(field).toHaveCSS("border-top-color", focusedBorder)
 })
 
 test("the Home shortcut focuses session search, and the Home button leaves focus alone", async ({ page }) => {

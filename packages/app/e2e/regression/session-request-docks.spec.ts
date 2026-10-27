@@ -170,6 +170,46 @@ test("replies with predefined choices and the edited custom multiselect answer",
   expect(cancellations).toEqual([])
 })
 
+test("keeps a visible focus cue on Norse question options", async ({ page }) => {
+  await mockServer(page, {
+    seed: { theme: { id: "norse", scheme: "dark" } },
+    forms: [
+      {
+        id: "frm_question_focus",
+        sessionID,
+        title: "Questions",
+        metadata: { kind: "question" },
+        fields: [
+          {
+            key: "q0",
+            type: "string",
+            title: "Implementation",
+            description: "Which implementation should be used?",
+            options: [
+              { value: "minimal", label: "Minimal", description: "Use the smallest correct change" },
+              { value: "extended", label: "Extended", description: "Include additional behavior" },
+            ],
+            custom: true,
+          },
+        ],
+      },
+    ],
+  })
+
+  await page.goto(sessionHref(sessionID))
+  await expectSessionTitle(page, title)
+
+  const question = page.locator('[data-component="dock-prompt"][data-kind="question"]')
+  const minimal = question.getByRole("radio", { name: /Minimal/ })
+  const extended = question.getByRole("radio", { name: /Extended/ })
+  await minimal.focus()
+  await page.keyboard.press("ArrowDown")
+  await expect(extended).toBeFocused()
+  await expect(extended).toHaveCSS("outline-style", "solid")
+  await expect(extended).toHaveCSS("outline-width", "1px")
+  await expect(extended).not.toHaveCSS("outline-color", "rgba(0, 0, 0, 0)")
+})
+
 test("shows a pending permission dock", async ({ page }) => {
   const replies: { sessionID: string; permissionID: string; body: unknown }[] = []
   await mockServer(page, {
@@ -280,6 +320,6 @@ test("restores the draft caret before typing after a request dock closes", async
   await expect(editor).toHaveText(`${draft.slice(0, cursor)}x${draft.slice(cursor)}`)
 })
 
-function mockServer(page: Page, requests: Pick<WorkspaceInput, "sessionPermissions" | "onPermissionReply" | "forms">) {
+function mockServer(page: Page, requests: Pick<WorkspaceInput, "sessionPermissions" | "onPermissionReply" | "forms" | "seed">) {
   return mockWorkspace(page, { name: "RequestDocks", directory, sessions: [{ id: sessionID, title }], ...requests })
 }

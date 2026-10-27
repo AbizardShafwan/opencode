@@ -18,7 +18,9 @@ story("Norse file rows stay transparent when collapsed and readable when expande
     .poll(async () => (await fileName.boundingBox())!.x - (await shellName.boundingBox())!.x)
     .toBe(0)
   await trigger.focus()
-  await expect(trigger).toHaveCSS("outline-width", "2px")
+  await expect(trigger).toBeFocused()
+  /* Norse keeps keyboard activation but draws no focus ring. */
+  await expect(trigger).toHaveCSS("outline-style", "none")
   await trigger.press("Enter")
   await expect(trigger).toHaveAttribute("aria-expanded", "true")
   await expect(file.getByRole("region")).toBeVisible()

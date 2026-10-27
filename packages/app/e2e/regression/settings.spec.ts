@@ -54,6 +54,37 @@ const patched = (page: Page) =>
     (request) => request.method() === "PATCH" && new URL(request.url()).pathname === `/api/project/${projectID}`,
   )
 
+test("Norse settings headers mask scrolling content without moving the title", async ({ page }) => {
+  await mockWorkspace(page, { name: "Norse settings", seed: { theme: { id: "norse", scheme: "dark" } } })
+  await page.goto("/settings?tab=shortcuts")
+  const settings = page.getByTestId("settings-screen")
+  const panel = settings.locator(".settings-panel:visible")
+  const header = panel.locator(".settings-tab-header")
+  await expect(header.getByRole("heading", { name: "Keyboard shortcuts" })).toBeVisible()
+  await page.evaluate(() => document.fonts.ready.then(() => undefined))
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 844 })
+    await panel.evaluate((node) => (node.scrollTop = 0))
+    const top = await header.evaluate((node) => node.getBoundingClientRect().top)
+    await panel.evaluate((node) => (node.scrollTop = 350))
+    await expect(panel).toHaveJSProperty("scrollTop", 350)
+    await expect.poll(() => header.evaluate((node) => node.getBoundingClientRect().top)).toBe(top)
+    await expect(header).toHaveCSS("background-color", "rgb(24, 24, 30)")
+    await expect(header).toHaveCSS("background-image", "none")
+    await expect(panel.getByRole("searchbox", { name: "Search shortcuts" })).toBeInViewport()
+  }
+
+  await page.setViewportSize({ width: 1280, height: 844 })
+  const field = panel.locator('[data-component="settings-filter-search"] [data-component="text-input-v2"]')
+  const search = panel.getByRole("searchbox", { name: "Search shortcuts" })
+  const border = await field.evaluate((node) => getComputedStyle(node).borderTopColor)
+  await search.click()
+  await expect(search).toBeFocused()
+  // Norse keeps the neutral field border and draws no ring when a field takes focus.
+  await expect(field).toHaveCSS("outline-color", "rgba(0, 0, 0, 0)")
+  await expect(field).toHaveCSS("border-top-color", border)
+})
+
 test("settings has its own route and returns through app history", async ({ page }) => {
   const { settings } = await open(page)
   const home = page.getByRole("button", { name: "Home", exact: true })
