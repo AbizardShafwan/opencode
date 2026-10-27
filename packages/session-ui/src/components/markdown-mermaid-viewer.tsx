@@ -250,19 +250,41 @@ function MermaidViewport(props: { svg: string; i18n: UiI18n; expanded?: boolean 
   let viewport!: HTMLDivElement
   let canvas!: HTMLDivElement
   const hint = createUniqueId()
-  const [state, setState] = createStore({ zoom: 1, x: 0, y: 0, width: 0, height: 0, diagramWidth: 1, diagramHeight: 1 })
+  const [state, setState] = createStore({
+    zoom: 1,
+    x: 0,
+    y: 0,
+    width: 0,
+    height: 0,
+    diagramWidth: 1,
+    diagramHeight: 1,
+    compact: false,
+  })
   const pointers = new Map<number, { x: number; y: number }>()
 
+  const readableWidth = createMemo(() => {
+    const available = Math.max(1, state.width - 32)
+
+    // Preserve the old SVG's natural-width cap and 480px minimum, but let narrow messages fit without overflow.
+    return props.expanded ? available : Math.min(available, Math.max(480, state.diagramWidth))
+  })
+
+  // Inline diagrams use the message width and grow vertically; only an explicit Fit caps their height.
+  const height = createMemo(() => {
+    const natural = Math.max(160, (readableWidth() * state.diagramHeight) / state.diagramWidth + 32)
+
+    return state.compact ? Math.min(420, natural) : natural
+  })
+
   const size = createMemo(() => {
-    const scale = Math.min(
-      Math.max(1, state.width - 32) / state.diagramWidth,
-      Math.max(1, state.height - 32) / state.diagramHeight,
-    )
+    const scale = Math.min(readableWidth() / state.diagramWidth, Math.max(1, state.height - 32) / state.diagramHeight)
 
     return { width: state.diagramWidth * scale, height: state.diagramHeight * scale }
   })
 
-  const fit = () => setState({ zoom: 1, x: 0, y: 0 })
+  const fit = () => setState({ compact: true, zoom: 1, x: 0, y: 0 })
+  const reset = () => setState({ compact: false, zoom: 1, x: 0, y: 0 })
+  const reading = () => !props.expanded && !state.compact && state.zoom === 1
 
   const zoom = (factor: number, x = 0, y = 0) => {
     const next = Math.min(8, Math.max(0.25, state.zoom * factor))
@@ -320,6 +342,8 @@ function MermaidViewport(props: { svg: string; i18n: UiI18n; expanded?: boolean 
     pointers.set(event.pointerId, next)
 
     if (!other) {
+      // A tall inline diagram must not trap single-finger page scrolling at its default scale.
+      if (event.pointerType === "touch" && reading()) return
       setState({ x: state.x + next.x - previous.x, y: state.y + next.y - previous.y })
 
       return
@@ -344,9 +368,8 @@ function MermaidViewport(props: { svg: string; i18n: UiI18n; expanded?: boolean 
           ref={viewport}
           data-slot="mermaid-viewport"
           style={{
-            height: props.expanded
-              ? undefined
-              : `${Math.min(420, Math.max(160, ((state.width - 32) * state.diagramHeight) / state.diagramWidth + 32))}px`,
+            height: props.expanded ? undefined : `${height()}px`,
+            "touch-action": reading() ? "pan-y" : "none",
           }}
           tabIndex={0}
           role="region"
@@ -426,7 +449,16 @@ function MermaidViewport(props: { svg: string; i18n: UiI18n; expanded?: boolean 
           >
             −
           </button>
-          <output aria-label={props.i18n.t("ui.mermaid.zoom")}>{Math.round(state.zoom * 100)}%</output>
+          <button
+            type="button"
+            aria-label={props.i18n.t("ui.mermaid.resetZoom")}
+            title={props.i18n.t("ui.mermaid.resetZoom")}
+            onClick={reset}
+          >
+            <output aria-label={props.i18n.t("ui.mermaid.zoom")}>
+              {Math.round((state.zoom * size().width * 100) / readableWidth())}%
+            </output>
+          </button>
           <button
             type="button"
             aria-label={props.i18n.t("ui.mermaid.zoomIn")}
