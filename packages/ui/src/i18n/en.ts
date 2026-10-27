@@ -190,6 +190,7 @@ const source = {
   "ui.mermaid.expand": "Expand",
   "ui.mermaid.navigation": "Diagram navigation",
   "ui.mermaid.zoom": "Zoom level",
+  "ui.mermaid.resetZoom": "Reset zoom",
   "ui.mermaid.zoomIn": "Zoom in",
   "ui.mermaid.zoomOut": "Zoom out",
   "ui.mermaid.fit": "Fit",
