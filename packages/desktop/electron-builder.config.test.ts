@@ -13,9 +13,9 @@ import { CLI_BINARIES, nodePtyPackage } from "./scripts/utils"
 const { FileMatcher } = createRequire(import.meta.resolve("electron-builder"))("app-builder-lib/out/fileMatcher")
 
 const channels = [
-  { channel: "dev", appId: "ai.opencode.desktop.dev" },
-  { channel: "beta", appId: "ai.opencode.desktop.beta" },
-  { channel: "prod", appId: "ai.opencode.desktop" },
+  { channel: "dev", appId: "ai.memyr.desktop.dev", productName: "Memyr Dev", packageName: "memyr-dev" },
+  { channel: "beta", appId: "ai.memyr.desktop.beta", productName: "Memyr Beta", packageName: "memyr-beta" },
+  { channel: "prod", appId: "ai.memyr.desktop", productName: "Memyr", packageName: "memyr" },
 ] as const
 
 function load(channel: string, target?: string): Configuration {
@@ -47,10 +47,15 @@ function trimFilter(dir: string, config: Configuration) {
   ]).createFilter()
 }
 
-test.each(channels)("channel identity for $channel", ({ channel, appId }) => {
+test.each(channels)("channel identity for $channel", ({ channel, appId, productName, packageName }) => {
   const config = load(channel)
   expect(config.appId).toBe(appId)
+  expect(config.productName).toBe(productName)
+  expect(config.artifactName).toBe("memyr-desktop-${os}-${arch}.${ext}")
   expect(config.extraMetadata?.desktopName).toBe(`${appId}.desktop`)
+  // This fork has no update service, so packaging must not declare a feed.
+  expect(config.publish).toBeUndefined()
+  expect(config.protocols?.schemes).toEqual(["memyr"])
   // The executable must never end in `.desktop`: libappimage resolves the
   // AppImage's desktop entry by globbing `*.desktop`, and an ELF matching
   // that glob breaks integration (anomalyco/opencode#51867).
@@ -63,10 +68,13 @@ test.each(channels)("channel identity for $channel", ({ channel, appId }) => {
 
   for (const fpm of [config.deb?.fpm, config.rpm?.fpm]) {
     expect(fpm).toContainEqual(expect.stringContaining(`/usr/share/metainfo/${appId}.metainfo.xml`))
-    expect(
-      fpm?.some((entry) => entry.endsWith("opencode-desktop.desktop=/usr/share/applications/opencode-desktop.desktop")),
-    ).toBe(channel === "prod")
+    // The OpenCode desktop entry belongs to the upstream app; a Memyr package must not ship it.
+    const legacy = "opencode-desktop.desktop=/usr/share/applications/opencode-desktop.desktop"
+
+    expect(fpm?.some((entry) => entry.endsWith(legacy))).toBe(false)
   }
+
+  expect(config.rpm?.packageName).toBe(packageName)
 
   // Shared Electron binaries must not ship /usr/lib/.build-id links that collide with other Electron RPMs.
   // fpm rejects flags after the first src=dest mapping, so the flag must come first.
@@ -74,26 +82,28 @@ test.each(channels)("channel identity for $channel", ({ channel, appId }) => {
   expect(config.deb?.fpm).not.toContain("--rpm-rpmbuild-define=_build_id_links none")
 })
 
-test("legacy Linux launcher stays hidden", async () => {
-  const desktop = await Bun.file(path.join(import.meta.dirname, "resources/linux/opencode-desktop.desktop")).text()
-  expect(desktop).toContain("Exec=/opt/OpenCode/ai.opencode %U")
-  expect(desktop).toContain("Icon=ai.opencode")
-  expect(desktop).toContain("StartupWMClass=ai.opencode.desktop")
-  expect(desktop).toContain("NoDisplay=true")
-})
-
 test("shared packaging defaults", async () => {
   const config = load("dev")
-  expect(config.mac?.sign).toBeFunction()
+  expect(config.mac?.notarize).toBe(false)
+
+  // A local build has no Apple identity: signing is disabled unless CSC_LINK or CSC_NAME opts in.
+  if (process.env.CSC_LINK || process.env.CSC_NAME) {
+    expect(config.mac?.sign).toBeFunction()
+  } else {
+    expect(config.mac?.identity).toBeNull()
+  }
+
   expect(config.dmg?.sign).not.toBe(true)
   expect(config.mac?.extendInfo?.NSAutoFillRequiresTextContentTypeForOneTimeCodeOnMac).toBe(true)
   const include = path.join(import.meta.dirname, "resources/windows/installer.nsh")
   expect(config.nsis?.include).toBe(include)
   expect(await Bun.file(include).exists()).toBe(true)
-  expect(config.files).toContain("!resources/opencode-cli*")
-  expect(config.extraResources).toEqual([
-    { from: "resources/", to: "", filter: ["opencode-cli", "opencode-cli.exe", "opencode-cli.version"] },
-  ])
+  expect(config.files).toContain("!resources/memyr-cli*")
+  expect(config.extraResources).toContainEqual({
+    from: "resources/",
+    to: "",
+    filter: ["memyr-cli", "memyr-cli.exe", "memyr-cli.version"],
+  })
 })
 
 test("trims external dependencies without excluding runtime files", () => {

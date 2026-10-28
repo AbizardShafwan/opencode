@@ -1,11 +1,11 @@
 export * as DesktopCli from "./desktop-cli"
 
-import { execFile, spawn } from "node:child_process"
-import { existsSync, readFileSync } from "node:fs"
+import { execFile } from "node:child_process"
+import { existsSync, lstatSync, readFileSync } from "node:fs"
 import { promisify } from "node:util"
 import { app } from "electron"
 import { Context, Effect, FileSystem, Layer, Option, Path, Schema } from "effect"
-import installer from "../../../../../install?raw"
+import { product } from "../../../product"
 import { DesktopPaths } from "../paths"
 import { BUNDLED_CLI_VERSION_KEY } from "../storage/keys"
 import { getStore } from "../storage/store"
@@ -19,9 +19,15 @@ export interface Resolved {
   readonly binary?: string
 }
 
+export interface Installed {
+  readonly path: string
+  /** False when a command already exists and was left untouched. */
+  readonly created: boolean
+}
+
 export interface Interface {
   readonly resolve: Effect.Effect<Resolved>
-  readonly install: Effect.Effect<string, Error>
+  readonly install: Effect.Effect<Installed, Error>
 }
 
 export class Service extends Context.Service<Service, Interface>()("opencode/desktop/DesktopCli") {}
@@ -36,15 +42,34 @@ export const layer = Layer.effect(
     )
 
     const install = Effect.gen(function* () {
-      if (process.platform !== "darwin") return yield* Effect.fail(new Error("CLI installation requires macOS"))
+      const fs = yield* FileSystem.FileSystem
+
+      if (process.platform !== "darwin")
+        return yield* Effect.fail(new Error("CLI installation requires macOS"))
       const cli = yield* resolve
 
       if (!cli.binary) return yield* Effect.fail(new Error("Bundled CLI executable is unavailable"))
-      const home = app.getPath("home")
-      yield* runInstaller(cli.binary, home)
+      const directory = path.join(app.getPath("home"), ".local", "bin")
+      const destination = path.join(directory, product.cli.executable)
 
-      return path.join(home, ".opencode", "bin", "opencode")
-    })
+      // Never replace a command another installer owns (scripts/memyr keeps a symlink here) or one
+      // the user put there. Report it so the menu action stays honest instead of silently failing.
+      if (commandExists(destination)) {
+        yield* Effect.logInfo("v2 CLI install skipped, command already exists", { path: destination })
+
+        return { path: destination, created: false }
+      }
+
+      const temp = `${destination}.${process.pid}.tmp`
+
+      yield* fs.makeDirectory(directory, { recursive: true })
+      yield* fs.copyFile(cli.binary, temp)
+      // The command did not exist, so the rename cannot replace another file or symlink.
+      yield* fs.rename(temp, destination)
+      yield* fs.chmod(destination, 0o755)
+
+      return { path: destination, created: true }
+    }).pipe(Effect.provide(yield* Effect.context<FileSystem.FileSystem>()))
 
     return Service.of({ resolve, install })
   }),
@@ -65,6 +90,7 @@ const make = Effect.fn("DesktopCli.resolve")(function* () {
           "--cwd",
           development,
           "--define=OPENCODE_VERSION=process.env.OPENCODE_VERSION",
+          `--define=OPENCODE_APP_ID=${JSON.stringify(product.cli.appId)}`,
           "src/index.ts",
         ],
         binary: undefined,
@@ -101,7 +127,7 @@ const bundledVersion = Effect.fn("DesktopCli.bundledVersion")(function* (bundled
   // async read waits behind everything else the main thread is doing at that moment.
   const shipped = yield* Effect.sync(() => {
     try {
-      return readFileSync(path.join(path.dirname(bundled), "opencode-cli.version"), "utf8").trim()
+      return readFileSync(path.join(path.dirname(bundled), product.cli.versionFile), "utf8").trim()
     } catch {
       return ""
     }
@@ -186,32 +212,21 @@ const run = Effect.fn("DesktopCli.run")(function* (binary: string, args: string[
   return stdout
 })
 
-const runInstaller = Effect.fn("DesktopCli.installForUser")(function* (binary: string, home: string) {
-  yield* Effect.tryPromise({
-    try: () =>
-      new Promise<void>((resolve, reject) => {
-        const child = spawn("/bin/bash", ["-s", "--", "--binary", binary], {
-          env: { ...process.env, HOME: home },
-          stdio: ["pipe", "ignore", "pipe"],
-        })
-
-        let stderr = ""
-        child.stderr.on("data", (chunk) => (stderr += chunk))
-        child.on("error", reject)
-        child.on("close", (code) => {
-          if (code === 0) return resolve()
-          reject(new Error(stderr.trim() || `CLI installer exited with code ${code}`))
-        })
-        child.stdin.end(installer)
-      }),
-    catch: (error) => (error instanceof Error ? error : new Error(String(error))),
-  })
-})
-
 function executableName() {
-  return process.platform === "win32" ? "opencode-cli.exe" : "opencode-cli"
+  return process.platform === "win32" ? `${product.cli.resource}.exe` : product.cli.resource
+}
+
+// A broken symlink still occupies the command path; existsSync would follow it and report false.
+function commandExists(file: string) {
+  try {
+    lstatSync(file)
+
+    return true
+  } catch {
+    return false
+  }
 }
 
 function developmentExecutableName() {
-  return process.platform === "win32" ? "opencode-cli-dev.exe" : "opencode-cli-dev"
+  return process.platform === "win32" ? `${product.cli.resource}-dev.exe` : `${product.cli.resource}-dev`
 }

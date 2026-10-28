@@ -78,6 +78,7 @@ function fakeBridge() {
 
   const value: Bridge = {
     packaged: false,
+    updates: false,
     call: () => Promise.reject(new Error("no calls in this test")),
     subscribe: () => pending.promise,
     on: (listener) => {

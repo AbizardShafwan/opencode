@@ -919,6 +919,7 @@ story("startup enable state does not wait for the manager, and live updates beat
 
     const bridge: Bridge = {
       packaged: false,
+      updates: false,
       call: async () => undefined,
       subscribe: async () => ({ available: false }),
       on: (listener) => {

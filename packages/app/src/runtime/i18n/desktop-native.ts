@@ -306,6 +306,11 @@ export const DESKTOP_NATIVE_ENGLISH = {
 
   "desktop.picker.error.notSelected": "File was not selected by the picker",
   "desktop.picker.error.sizeLimit": "Selected attachments exceed the {{limit}} MB limit",
+
+  // Appended after every key that locale files map by position, so their existing indices stay aligned.
+  "desktop.cli.existing.title": "CLI Already Installed",
+  "desktop.cli.existing.message":
+    "A 'memyr' command already exists at {{path}}.\n\nUse that installation, or remove it before installing the bundled CLI.",
 } as const
 
 export type DesktopNativeKey = keyof typeof DESKTOP_NATIVE_ENGLISH

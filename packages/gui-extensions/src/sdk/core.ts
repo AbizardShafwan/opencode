@@ -72,6 +72,11 @@ export interface Build {
   readonly platform: "web" | "desktop"
   /** A packaged desktop app, not a development run. Always false on the web. */
   readonly packaged: boolean
+  /**
+   * Whether this build has an update service to check. False for a fork without a release feed, and always false on
+   * the web; the updater stays disabled instead of failing against a missing feed.
+   */
+  readonly updates: boolean
 }
 
 /**

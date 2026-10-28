@@ -152,6 +152,11 @@ export interface Cli {
   readonly command: readonly string[]
   /** The executable's path; undefined when it runs from source. */
   readonly binary?: string
+  /**
+   * A Linux executable of the same CLI that a WSL distro can run, when the package carries one.
+   * Undefined on builds without it, and while a development build compiles it on demand.
+   */
+  readonly wslBinary?: string
   /** An unpackaged app running the CLI from source. */
   readonly development: boolean
 }

@@ -175,6 +175,7 @@ export function mount(input: {
 
     const bridge: Bridge = {
       packaged: false,
+      updates: false,
       async call(request) {
         if (request.ipc === "updater" && input.updater != null) throw new Error(input.updater)
         const method = methods.get(request.ipc)?.[request.method]

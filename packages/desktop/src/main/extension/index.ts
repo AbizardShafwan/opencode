@@ -1,7 +1,10 @@
 export * as Extensions from "./index"
 
+import { existsSync } from "node:fs"
+import path from "node:path"
 import { app } from "electron"
 import { Context, Effect, Layer } from "effect"
+import { product } from "../../../product"
 import type { ExtensionEndpoint } from "../../shared/ipc-rpc/extensions"
 import { ApplicationLifecycle } from "../lifecycle"
 import { Shutdown } from "../lifecycle/shutdown"
@@ -78,6 +81,7 @@ export const layer = Layer.effect(
             version: cli.version,
             command: cli.command,
             binary: cli.binary,
+            wslBinary: app.isPackaged ? wslBinary() : undefined,
             development: !app.isPackaged && !cli.binary,
           },
           subscriptions,
@@ -131,3 +135,9 @@ export const layer = Layer.effect(
     })
   }),
 )
+
+function wslBinary() {
+  const file = path.join(process.resourcesPath, product.cli.wslResource)
+
+  return existsSync(file) ? file : undefined
+}

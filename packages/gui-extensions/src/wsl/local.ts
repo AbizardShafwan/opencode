@@ -8,11 +8,12 @@ const execFileAsync = promisify(execFile)
 
 /** Development only: builds the Linux CLI from this checkout so WSL runs the same source. */
 export async function buildLocalWslCli(input: { version: string; script: string; output: string }) {
-  const directory = await mkdtemp(join(tmpdir(), "opencode-wsl-cli-"))
+  const directory = await mkdtemp(join(tmpdir(), "memyr-wsl-cli-"))
   const root = join(dirname(input.script), "../../..")
 
   const build = async () => {
     const packageManager = (
+      // SAFETY: package.json is this checkout's manifest, and the repo tooling requires packageManager.
       JSON.parse(await readFile(join(root, "package.json"), "utf8")) as { packageManager: string }
     ).packageManager
 
@@ -27,14 +28,19 @@ export async function buildLocalWslCli(input: { version: string; script: string;
       [
         packageManager,
         input.script,
-        `--target=opencode-${target}`,
+        `--target=memyr-${target}`,
+        "--memyr",
         "--skip-install",
         "--skip-web-ui",
         `--outdir=${directory}`,
       ],
-      { cwd: root, env: { ...process.env, OPENCODE_VERSION: input.version }, windowsHide: true },
+      {
+        cwd: root,
+        env: { ...process.env, OPENCODE_CHANNEL: "memyr", OPENCODE_VERSION: input.version },
+        windowsHide: true,
+      },
     )
-    await copyFile(join(directory, `cli-${target}`, "bin", "opencode"), input.output)
+    await copyFile(join(directory, `cli-${target}`, "bin", "memyr"), input.output)
 
     return input.output
   }

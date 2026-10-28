@@ -2,8 +2,18 @@ import { readFileSync } from "node:fs"
 import type { Plugin } from "vite"
 import manifest from "./manifest.json" with { type: "json" }
 
+// The Memyr CLI embeds the web UI built with OPENCODE_CHANNEL=memyr, which is outside the
+// dev/beta/prod channel set but presents as the stable product.
+function presentationChannel(channel: string) {
+  if (channel === "beta") return "beta"
+
+  if (channel === "prod" || channel === "memyr") return "prod"
+
+  return "dev"
+}
+
 export function icons(channel: string): Plugin {
-  const selected = channel === "beta" || channel === "prod" ? channel : "dev"
+  const selected = presentationChannel(channel)
   const prefix = `icons/${selected}`
 
   const files = [

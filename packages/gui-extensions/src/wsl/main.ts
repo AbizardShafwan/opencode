@@ -30,7 +30,7 @@ const setup: MainSetup<typeof definition> = (ctx) => {
     desktopLog.write(level, `[wsl] ${message}`, data)
 
   const controller = createWslServersController({
-    cli: { version: cli.version },
+    cli: { version: cli.version, binary: cli.wslBinary },
     runtime,
     t,
     log,
@@ -51,7 +51,10 @@ const setup: MainSetup<typeof definition> = (ctx) => {
           const binary = await buildLocalWslCli({ ...local, version: cli.version })
           await runtime.installCli(distro, { version: cli.version, binary })
         }
-      : (distro, build) => runtime.installCli(distro, build),
+      : async (distro, build) => {
+          if (!build.binary) throw new Error(t("error.noWslCli"))
+          await runtime.installCli(distro, build)
+        },
     spawnSidecar: (distro, signal) => {
       log("info", "spawning wsl sidecar", { distro })
 

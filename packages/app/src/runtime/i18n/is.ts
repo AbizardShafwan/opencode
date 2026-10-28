@@ -47,7 +47,7 @@ const desktop = [
   "Tilkynna villu",
   "Memyr-valmynd",
   "CLI uppsett",
-  "CLI var sett upp í {{path}}\n\nEndurræstu skjáherminn til að nota 'opencode2' skipunina.",
+  "CLI var sett upp í {{path}}\n\nEndurræstu skjáherminn til að nota 'memyr' skipunina.",
   "Uppsetning mistókst",
   "Ekki tókst að setja upp CLI: {{error}}",
   "Endurræsa forrit",

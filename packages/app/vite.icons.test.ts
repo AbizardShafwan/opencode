@@ -4,7 +4,7 @@ import { build, createServer } from "vite"
 import { icons } from "./vite.icons"
 import manifest from "./manifest.json" with { type: "json" }
 
-test.each(["dev", "beta", "prod", "local"])("bundles %s app icons", async (channel) => {
+test.each(["dev", "beta", "prod", "local", "memyr"])("bundles %s app icons", async (channel) => {
   const result = await build({
     root: import.meta.dirname,
     configFile: false,
@@ -24,7 +24,13 @@ test.each(["dev", "beta", "prod", "local"])("bundles %s app icons", async (chann
 
   if (!("output" in result)) throw new Error("Expected a single build output")
 
-  await check(channel === "local" ? "dev" : channel, async (path) => {
+  // A `memyr` build is the CLI's embedded stable UI; like `local`, it is not a desktop channel name.
+  const presentation = new Map([
+    ["local", "dev"],
+    ["memyr", "prod"],
+  ])
+
+  await check(presentation.get(channel) ?? channel, async (path) => {
     const file = result.output.find((file) => `/${file.fileName}` === path)
 
     if (file?.type !== "asset") throw new Error(`Missing asset: ${path}`)

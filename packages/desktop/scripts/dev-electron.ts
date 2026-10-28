@@ -1,6 +1,9 @@
 import { $ } from "bun"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
+import { channelIdentity } from "../product"
+
+const identity = channelIdentity("dev")
 
 export async function prepareDevElectron() {
   const electron = dirname(fileURLToPath(import.meta.resolve("electron/package.json")))
@@ -15,8 +18,8 @@ export async function prepareDevElectron() {
     .digest("hex")
     .slice(0, 16)
 
-  const root = join(import.meta.dirname, "../node_modules/.cache/opencode-dev", hash)
-  const bundle = join(root, "OpenCode Dev.app")
+  const root = join(import.meta.dirname, "../node_modules/.cache/memyr-dev", hash)
+  const bundle = join(root, `${identity.name}.app`)
   // Electron uses the executable's name to distinguish development from packaged apps.
   const executable = join(bundle, "Contents/MacOS/Electron")
 
@@ -28,10 +31,10 @@ export async function prepareDevElectron() {
   const plist = join(bundle, "Contents/Info.plist")
 
   for (const key of ["CFBundleName", "CFBundleDisplayName"]) {
-    await $`plutil -replace ${key} -string ${"OpenCode Dev"} ${plist}`
+    await $`plutil -replace ${key} -string ${identity.name} ${plist}`
   }
 
-  await $`plutil -replace CFBundleIdentifier -string ai.opencode.desktop.dev ${plist}`
+  await $`plutil -replace CFBundleIdentifier -string ${identity.appId} ${plist}`
   await $`plutil -insert NSAutoFillRequiresTextContentTypeForOneTimeCodeOnMac -bool true ${plist}`
   await Bun.write(join(bundle, "Contents/Resources/electron.icns"), icon)
   // Changing the bundle resources invalidates Electron's signature.

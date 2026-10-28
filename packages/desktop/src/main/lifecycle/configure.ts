@@ -51,7 +51,7 @@ export function acquireApplicationLock() {
 
 function createTestRoot() {
   const root = testOnboarding
-    ? path.join(tmpdir(), `opencode-onboarding-${randomUUID()}`)
+    ? path.join(tmpdir(), `memyr-onboarding-${randomUUID()}`)
     : process.env.OPENCODE_DESKTOP_TEST_ROOT
 
   if (!root) return undefined
@@ -61,7 +61,11 @@ function createTestRoot() {
   for (const dir of ["data", "config", "cache", "state", "desktop", "session", "documents"])
     mkdirSync(path.join(root, dir), { recursive: true })
 
-  if (testOnboarding) process.env.OPENCODE_DB = ":memory:"
+  if (testOnboarding) {
+    // The compiled CLI reads its prefixed override; OPENCODE_DB keeps upstream-only paths working.
+    process.env.MEMYR_DB = ":memory:"
+    process.env.OPENCODE_DB = ":memory:"
+  }
 
   process.env.XDG_DATA_HOME = path.join(root, "data")
   process.env.XDG_CONFIG_HOME = path.join(root, "config")

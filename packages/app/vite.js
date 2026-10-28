@@ -78,7 +78,11 @@ export const channel = (() => {
 
   if (raw === "local" || raw === "dev" || raw === "beta" || raw === "prod") return raw
 
-  if (process.env.OPENCODE_CHANNEL === "latest") return "prod"
+  if (raw === "latest") return "prod"
+
+  // A Memyr CLI build embeds the web UI with OPENCODE_CHANNEL=memyr. It is a stable product build,
+  // so it uses the production presentation: prod icons and no channel badge.
+  if (raw === "memyr") return "prod"
 
   return "dev"
 })()

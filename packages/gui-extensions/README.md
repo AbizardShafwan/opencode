@@ -239,7 +239,7 @@ SDK icon fields use `IconName` from `@opencode/ui/icons/catalog`, a dependency-f
 | `ctx.dialogs`                | `Dialogs`                                                      | `open` returns a handle to close; a dialog closes with its owner  |
 | `ctx.links`                  | `Links`                                                        | Opens a local link, or checks it exists, with the best handler    |
 | `ctx.embeds`                 | `Embeds`                                                       | Shows a web page the main entry created                           |
-| `ctx.build`                  | `Build`                                                        | Version, channel, platform, packaged                              |
+| `ctx.build`                  | `Build`                                                        | Version, channel, platform, packaged, updates                     |
 | `ctx.locale`                 | `Locale`                                                       | Locale and writing direction                                      |
 | `ctx.appearance`             | `Appearance`                                                   | The user's mono font                                              |
 | `ctx.router`                 | `Router`                                                       | The route path, and whether it is changing                        |

@@ -5,12 +5,15 @@ import { nativeT } from "./translations"
 
 export function showCliInstaller(desktopCli: DesktopCli.Interface) {
   return desktopCli.install.pipe(
-    Effect.tap((path) =>
+    Effect.tap((installed) =>
       Effect.promise(() =>
         dialog.showMessageBox({
           type: "info",
-          message: nativeT("desktop.cli.installed.message", { path }),
-          title: nativeT("desktop.cli.installed.title"),
+          message: nativeT(
+            installed.created ? "desktop.cli.installed.message" : "desktop.cli.existing.message",
+            { path: installed.path },
+          ),
+          title: nativeT(installed.created ? "desktop.cli.installed.title" : "desktop.cli.existing.title"),
         }),
       ),
     ),

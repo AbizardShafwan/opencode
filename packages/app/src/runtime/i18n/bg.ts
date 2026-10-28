@@ -662,7 +662,7 @@ export const dict = {
   "desktop.menu.installCli": "Инсталиране на CLI...",
   "desktop.cli.installed.title": "CLI е инсталиран",
   "desktop.cli.installed.message":
-    "CLI е инсталиран в {{path}}\n\nРестартирайте терминала, за да използвате командата 'opencode2'.",
+    "CLI е инсталиран в {{path}}\n\nРестартирайте терминала, за да използвате командата 'memyr'.",
   "desktop.cli.failed.title": "Неуспешна инсталация",
   "desktop.cli.failed.message": "CLI не можа да бъде инсталиран: {{error}}",
   "command.project.copyID": "Копиране на идентификатора на проекта",

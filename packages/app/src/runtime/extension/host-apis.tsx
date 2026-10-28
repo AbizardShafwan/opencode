@@ -253,6 +253,7 @@ export function createHostApis() {
       channel: (import.meta.env.VITE_OPENCODE_CHANNEL ?? "local") as Build["channel"],
       platform: platform.platform,
       packaged: platform.extensions?.packaged ?? false,
+      updates: platform.extensions?.updates ?? false,
     }),
     locale: () => ({
       locale: language.intl,

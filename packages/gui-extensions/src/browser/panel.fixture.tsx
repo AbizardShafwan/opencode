@@ -779,7 +779,7 @@ export function mountBrowserRegion(input: RegionHost) {
       remove() {},
     })
 
-    const build: Build = { version: "", channel: "dev", platform: "desktop", packaged: false }
+    const build: Build = { version: "", channel: "dev", platform: "desktop", packaged: false, updates: false }
     const locale: Locale = { locale: () => "en", direction: () => "ltr", setDirection() {} }
     const appearance: Appearance = { font: () => "monospace" }
     const router: Router = { routing: () => false, path: () => "/" }

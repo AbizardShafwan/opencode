@@ -1,12 +1,13 @@
+import { channelIdentity, product } from "../product"
 import { resolveChannel } from "./utils"
 
 const arg = process.argv[2]
 
 const channel = arg === "dev" || arg === "beta" || arg === "prod" ? arg : resolveChannel()
 
-const appId = channel === "prod" ? "ai.opencode.desktop" : `ai.opencode.desktop.${channel}`
+const identity = channelIdentity(channel)
 
-const productName = channel === "prod" ? "OpenCode" : `OpenCode ${channel.charAt(0).toUpperCase() + channel.slice(1)}`
+const appId = identity.appId
 
 const summary = `Open source AI coding agent${channel !== "prod" ? ` (${channel})` : ""}`
 
@@ -17,16 +18,16 @@ const xml = `<?xml version="1.0" encoding="UTF-8"?>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT</project_license>
 
-  <name>${productName}</name>
+  <name>${identity.name}</name>
   <summary>${summary}</summary>
 
-  <developer id="ly.anoma">
-    <name>Anomaly Innovations Inc.</name>
+  <developer id="ai.memyr">
+    <name>${product.name}</name>
   </developer>
 
   <description>
     <p>
-      OpenCode is an open source agent that helps you write and run code with any AI model.
+      ${product.name} is an open source agent that helps you write and run code with any AI model.
     </p>
   </description>
 

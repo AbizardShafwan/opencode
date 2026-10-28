@@ -9,6 +9,7 @@ test("a list main pushes while the initial list is pending wins over the older r
 
   const bridge: Bridge = {
     packaged: false,
+    updates: false,
     call: () => Promise.reject(new Error("no calls in this test")),
     subscribe: async () => ({ available: false }),
     on: (listener) => {

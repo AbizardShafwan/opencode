@@ -661,7 +661,7 @@ export const dict = {
   "desktop.menu.installCli": "CLI суулгах...",
   "desktop.cli.installed.title": "CLI суулгагдлаа",
   "desktop.cli.installed.message":
-    "CLI-г {{path}} замд суулгалаа\n\n'opencode2' командыг ашиглахын тулд терминалаа дахин эхлүүлнэ үү.",
+    "CLI-г {{path}} замд суулгалаа\n\n'memyr' командыг ашиглахын тулд терминалаа дахин эхлүүлнэ үү.",
   "desktop.cli.failed.title": "Суулгалт амжилтгүй боллоо",
   "desktop.cli.failed.message": "CLI-г суулгаж чадсангүй: {{error}}",
   "command.project.copyID": "Төслийн ID-г хуулах",
