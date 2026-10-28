@@ -1,5 +1,5 @@
 import { Effect } from "effect"
-import type { Extension } from "../extension.js"
+import { type Extension, isAsync } from "../extension.js"
 import { type ExtensionInvocation, hooked } from "../tool-runtime.js"
 import type { Interpreter } from "./interpreter.js"
 import { createErrorValue, isErrorType } from "./intrinsics.js"
@@ -133,25 +133,34 @@ export const extensionGlobals = <R>(
     throw typeError(`${label} produced ${describeHost(value)}, which the program cannot hold.`)
   }
 
-  // A host function as a program function. Arguments cross in; a global's call runs inside the host's extension
-  // hooks, which see the host's own error on failure; then whatever came back, or was thrown, crosses out so the
-  // program catches a copy. Functions inside results are part of a value's API and skip the hooks.
+  // A host function as a program function. Arguments cross in; for a global, the `extension.before` hook runs before
+  // the host function is called, so a call it denies never reaches the host. The host's result, or what it threw,
+  // crosses out so the program catches a copy, and `extension.after` sees how the call ended. Functions inside
+  // results are part of a value's API and skip the hooks.
   const wrap = (value: Function, label: string, describe?: (args: ReadonlyArray<unknown>) => ExtensionInvocation) =>
     fn<R>(builtins, value.name, value.length, (_, values) => {
       const args = values.map((item, index) => toHost(item, `Argument ${index + 1} to ${label}`))
-      const call = callHost<R>(value, args)
+      const cross = (reason: unknown) => new Throw(fromHost(reason, label))
+      const call = describe?.(args)
       const hooks = ctx.tools.hooks
-      const work = (
-        describe === undefined
-          ? call.effect
-          : hooked(describe(args), hooks["extension.before"], hooks["extension.after"], call.effect)
-      ).pipe(
-        Effect.mapBoth({
-          onFailure: (reason) => new Throw(fromHost(reason, label)),
-          onSuccess: (result) => fromHost(result, label),
+      const before = call && hooks["extension.before"]?.(call).pipe(Effect.mapError(cross))
+      const after = call && hooks["extension.after"]
+      const settle = (effect: Effect.Effect<unknown, unknown, R>) =>
+        (after ? hooked(call, undefined, after, effect) : effect).pipe(
+          Effect.mapBoth({ onFailure: cross, onSuccess: (result) => fromHost(result, label) }),
+        )
+      // A denied call fails the way the global would: an async global rejects its promise, a sync one throws.
+      if (isAsync(value))
+        return ctx.pending.createHost(
+          Effect.andThen(before ?? Effect.void, settle(Effect.suspend(() => callHost<R>(value, args).effect))),
+        )
+      return Effect.andThen(
+        before ?? Effect.void,
+        Effect.suspend(() => {
+          const host = callHost<R>(value, args)
+          return host.async ? ctx.pending.createHost(settle(host.effect)) : settle(host.effect)
         }),
       )
-      return call.async ? ctx.pending.createHost(work) : work
     })
 
   return extensions.flatMap((extension) =>
@@ -163,7 +172,7 @@ export const extensionGlobals = <R>(
 
 /**
  * Calls a host function and describes what the program waits on. A returned Effect or Promise settles later; a
- * returned value or a throw settles now. An Effect has not started yet, so it runs only once the hooks admit it.
+ * returned value or a throw settles now.
  */
 const callHost = <R>(value: Function, args: ReadonlyArray<unknown>) => {
   try {
