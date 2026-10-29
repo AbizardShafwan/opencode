@@ -3,7 +3,8 @@
 ## Install, update, uninstall
 
 These scripts install the full native CLI, TUI, local server, persistent-terminal
-support, and embedded web UI. They do not package the separate native desktop GUI.
+support, and embedded web UI. They do not build the desktop app; see
+[Desktop](#desktop) for that.
 The source installer targets glibc Linux and macOS; on Windows use WSL. Native Windows
 installation is not implemented. Linux x64 is the locally verified platform.
 
@@ -42,6 +43,8 @@ Install/update builds the current checkout, including local modifications, using
 `bun install --frozen-lockfile`. It embeds the web UI; it never uses the CLI's
 web-UI-skipping build mode. The installed command is `~/.local/bin/memyr`.
 Add `~/.local/bin` to your PATH if necessary; scripts do not edit shell profiles.
+The desktop's "Install CLI" action writes that same command only when nothing
+already exists there, so it never replaces the symlink this installer owns.
 Use `memyr --help`, `memyr`, `memyr serve`, and `memyr service status` normally.
 Upstream `upgrade` and `uninstall` commands refuse to operate in the Memyr build;
 use the scripts above instead.
@@ -96,6 +99,31 @@ redirect these resources. Other existing feature/debug environment variables kee
 their upstream names. No upstream account/session/config migration is automatic.
 Source development without `--memyr` still uses the repository's normal identity;
 `dev:live` deliberately connects to the existing OpenCode server, not Memyr.
+
+## Desktop
+
+The desktop app is a first-class Memyr build that coexists with OpenCode Desktop.
+It uses `ai.memyr.desktop` (and `.dev`/`.beta`), artifacts named
+`memyr-desktop-*`, Linux packages `memyr`, `memyr-dev`, and `memyr-beta`, and the
+`memyr://` protocol. It does not register `opencode://`, so the upstream app keeps
+that handler; Console return links handed directly to the process still resolve.
+
+Updates are disabled. Packaging declares no `publish` feed, `Build.updates` is
+false, and the updater menu item is disabled. There is no upstream server to
+check. Build the CLI first, then the app; the CLI distribution is mandatory for
+every channel:
+
+```sh
+OPENCODE_CHANNEL=memyr bun run --cwd packages/cli build -- --memyr
+OPENCODE_CHANNEL=prod OPENCODE_CLI_DIST="$PWD/packages/cli/dist" bun run --cwd packages/desktop build
+OPENCODE_CHANNEL=prod bun run --cwd packages/desktop package
+```
+
+Local macOS builds are unsigned and unnotarized; signing opts in through
+`CSC_LINK`/`CSC_NAME`. On Windows, the package carries a Linux Memyr CLI for WSL
+when the supplied distribution includes it, and the WSL flow installs that binary
+as `~/.memyr/bin/memyr` instead of downloading OpenCode. See
+[the desktop guide](packages/desktop/README.md) for details.
 
 ## Configurable agents and threads
 

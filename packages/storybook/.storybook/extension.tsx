@@ -90,7 +90,7 @@ function createStoryContext(definition: Definition) {
 /** The host's build, locale, appearance, router, keybind, server and workspace APIs for a story, by context property. */
 export function createStoryHostApis(platform: Build["platform"]) {
   const language = useLanguage()
-  const build: Build = { version: "", channel: "dev", platform, packaged: false }
+  const build: Build = { version: "", channel: "dev", platform, packaged: false, updates: false }
   const locale: Locale = { locale: language.intl, direction: language.direction, setDirection: language.setDirection }
   const appearance: Appearance = { font: () => "var(--font-family-mono)" }
   const router: Router = { routing: () => false, path: () => "/" }

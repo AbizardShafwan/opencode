@@ -47,7 +47,7 @@ const desktop = [
   "Hiba jelentése",
   "Memyr menü",
   "CLI telepítve",
-  "A CLI telepítve ide: {{path}}\n\nIndítsa újra a terminált az 'opencode2' parancs használatához.",
+  "A CLI telepítve ide: {{path}}\n\nIndítsa újra a terminált az 'memyr' parancs használatához.",
   "A telepítés nem sikerült",
   "Nem sikerült telepíteni a CLI-t: {{error}}",
   "Újraindítás",

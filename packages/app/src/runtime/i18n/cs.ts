@@ -663,7 +663,7 @@ export const dict = {
   "desktop.menu.installCli": "Nainstalovat CLI...",
   "desktop.cli.installed.title": "CLI nainstalováno",
   "desktop.cli.installed.message":
-    "CLI bylo nainstalováno do {{path}}\n\nChcete-li používat příkaz 'opencode2', restartujte terminál.",
+    "CLI bylo nainstalováno do {{path}}\n\nChcete-li používat příkaz 'memyr', restartujte terminál.",
   "desktop.cli.failed.title": "Instalace se nezdařila",
   "desktop.cli.failed.message": "CLI se nepodařilo nainstalovat: {{error}}",
   "command.project.copyID": "Kopírovat ID projektu",

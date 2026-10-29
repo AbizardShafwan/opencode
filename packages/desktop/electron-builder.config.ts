@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process"
+import { existsSync } from "node:fs"
 import { readdir, stat } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -7,6 +8,7 @@ import { promisify } from "node:util"
 import type { CustomMacSignOptions } from "app-builder-lib"
 import { Arch, type Configuration } from "electron-builder"
 import { NativeArch } from "../../script/native-arch"
+import { channelIdentity, product, type DesktopChannel } from "./product"
 import { CLI_BINARIES, getCurrentCli, nodePtyPackage } from "./scripts/utils"
 
 const execFileAsync = promisify(execFile)
@@ -17,13 +19,6 @@ const rootDir = path.resolve(packageDir, "../..")
 
 const signScript = path.join(rootDir, "script", "sign-windows.ps1")
 
-// The Electron 42 packaging update briefly installed Linux launchers/icons under
-// "opencode-desktop". Keep that hidden desktop entry around so existing GNOME/KDE
-// pins still resolve after the canonical app id changes back to ai.opencode.desktop.
-const legacyDesktopEntry = path.join(packageDir, "resources", "linux", "opencode-desktop.desktop")
-
-const legacyDesktopEntryFpm = `${legacyDesktopEntry}=/usr/share/applications/opencode-desktop.desktop`
-
 // rpmbuild adds /usr/lib/.build-id links for every ELF file. The bundled Electron
 // binaries are byte-identical across apps on the same Electron version, so those
 // links collide with other Electron RPMs (Slack, Unity Hub, ...) and rpm/zypper
@@ -33,6 +28,10 @@ const rpmNoBuildIdLinksFpm = "--rpm-rpmbuild-define=_build_id_links none"
 
 const metainfoFpm = (appId: string) =>
   `${path.join(packageDir, "resources", `${appId}.metainfo.xml`)}=/usr/share/metainfo/${appId}.metainfo.xml`
+
+// The fork has no Apple Developer identity, so local macOS builds stay unsigned and unnotarized.
+// A signed build opts in by supplying an identity through electron-builder's usual CSC_* variables.
+const appleSigning = Boolean(process.env.CSC_LINK || process.env.CSC_NAME)
 
 async function signWindows(configuration: { path: string }) {
   if (process.platform !== "win32") return
@@ -52,7 +51,7 @@ function macSignOptions(options: CustomMacSignOptions): CustomMacSignOptions {
     optionsForFile: (file) => {
       const defaults = options.optionsForFile?.(file)
 
-      if (file !== path.join(options.app, "Contents/Resources/opencode-cli")) return defaults ?? {}
+      if (file !== path.join(options.app, `Contents/Resources/${product.cli.resource}`)) return defaults ?? {}
 
       // The Bun CLI loads bun-pty's native library; Electron and its helpers do not need this exception.
       return { ...defaults, entitlements: path.join(packageDir, "resources/entitlements.cli.plist") }
@@ -60,7 +59,7 @@ function macSignOptions(options: CustomMacSignOptions): CustomMacSignOptions {
   }
 }
 
-function resolveChannel() {
+function resolveChannel(): DesktopChannel {
   const raw = process.env.OPENCODE_CHANNEL
 
   if (raw === "dev" || raw === "beta" || raw === "prod") return raw
@@ -70,15 +69,9 @@ function resolveChannel() {
   return "dev"
 }
 
-const APP_IDS = {
-  dev: "ai.opencode.desktop.dev",
-  beta: "ai.opencode.desktop.beta",
-  prod: "ai.opencode.desktop",
-} as const
-
 // libappimage (used by AppImageLauncher) resolves the .desktop entry inside an
 // AppImage by globbing `*.desktop` at the squashfs root. If the main
-// executable itself ends in `.desktop` (prod appId `ai.opencode.desktop`), the
+// executable itself ends in `.desktop` (prod appId `ai.memyr.desktop`), the
 // ELF binary matches the glob and is parsed as a desktop entry, so
 // integration fails with `Malformed desktop entry: Unexpected char '\x7f' at 0`
 // (0x7F is the first byte of the ELF magic).
@@ -89,18 +82,22 @@ function linuxExecutableName(appId: string): string {
   return appId.replace(/\.desktop$/, "")
 }
 
+// WSL runs a Linux CLI. A Windows package only carries one when the build supplied a full
+// distribution; otherwise the WSL settings report that no Memyr CLI is available to install.
+const wslCli = path.join(packageDir, "resources", product.cli.wslResource)
+
 const getBase = (appId: string): Configuration => {
   const target = getCurrentCli()
 
   return {
-    artifactName: "opencode-desktop-${os}-${arch}.${ext}",
+    artifactName: `${product.packageName}-desktop-\${os}-\${arch}.\${ext}`,
     directories: {
       output: "dist",
       buildResources: "resources",
     },
     // Linux launchers are .desktop files, so this is the desktop file name,
-    // not just the app id. For prod, app id "ai.opencode.desktop" becomes
-    // "ai.opencode.desktop.desktop".
+    // not just the app id. For prod, app id "ai.memyr.desktop" becomes
+    // "ai.memyr.desktop.desktop".
     // https://developer.gnome.org/documentation/guidelines/maintainer/integrating.html
     // https://www.electron.build/docs/linux/
     extraMetadata: {
@@ -109,7 +106,7 @@ const getBase = (appId: string): Configuration => {
     files: [
       "out/**/*",
       "resources/**/*",
-      "!resources/opencode-cli*",
+      `!resources/${product.cli.resource}*`,
       // Keep only the target platform's node-pty prebuild when cross-packaging with --cpu=*.
       ...CLI_BINARIES.filter((item) => item.os !== target.os || item.cpu !== target.cpu).map(
         (item) => `!**/node_modules/@lydell/node-pty-${item.os}-${item.cpu}{,/**/*}`,
@@ -133,8 +130,9 @@ const getBase = (appId: string): Configuration => {
       {
         from: "resources/",
         to: "",
-        filter: ["opencode-cli", "opencode-cli.exe", "opencode-cli.version"],
+        filter: [product.cli.resource, `${product.cli.resource}.exe`, product.cli.versionFile],
       },
+      ...(existsSync(wslCli) ? [{ from: wslCli, to: product.cli.wslResource }] : []),
     ],
     afterPack: async (context) => {
       const arch = Arch[context.arch]
@@ -144,13 +142,14 @@ const getBase = (appId: string): Configuration => {
 
       if (arch !== target.cpu) throw new Error(`Packaging ${arch} Electron with the ${target.target} CLI`)
       const resources = context.packager.getResourcesDir(context.appOutDir)
-      const cli = path.join(resources, context.electronPlatformName === "win32" ? "opencode-cli.exe" : "opencode-cli")
+      const name = context.electronPlatformName === "win32" ? `${product.cli.resource}.exe` : product.cli.resource
+      const cli = path.join(resources, name)
 
       const file = await stat(cli)
 
       if (!file.isFile() || file.size === 0) throw new Error(`Bundled CLI must be a non-empty file: ${cli}`)
       await NativeArch.verify(cli, arch)
-      const version = path.join(path.dirname(cli), "opencode-cli.version")
+      const version = path.join(path.dirname(cli), product.cli.versionFile)
 
       if ((await stat(version)).size === 0) throw new Error(`Bundled CLI version must be a non-empty file: ${version}`)
 
@@ -189,16 +188,21 @@ const getBase = (appId: string): Configuration => {
       gatekeeperAssess: false,
       entitlements: "resources/entitlements.plist",
       entitlementsInherit: "resources/entitlements.plist",
-      sign: async (options) => {
-        const { sign } = await import("app-builder-lib/out/codeSign/macCodeSign")
-        await sign(macSignOptions(options))
-      },
-      notarize: true,
+      ...(appleSigning
+        ? {
+            sign: async (options: CustomMacSignOptions) => {
+              const { sign } = await import("app-builder-lib/out/codeSign/macCodeSign")
+              await sign(macSignOptions(options))
+            },
+          }
+        : { identity: null }),
+      // No notary credentials exist for this fork, so notarization stays off even for a signed build.
+      notarize: false,
       target: ["dmg", "zip"],
     },
     protocols: {
-      name: "Memyr",
-      schemes: ["opencode"],
+      name: product.name,
+      schemes: [product.protocol],
     },
     win: {
       icon: `resources/icons/icon.ico`,
@@ -206,7 +210,6 @@ const getBase = (appId: string): Configuration => {
         sign: signWindows,
       },
       target: ["nsis"],
-      verifyUpdateCodeSignature: false,
     },
     nsis: {
       include: path.join(packageDir, "resources", "windows", "installer.nsh"),
@@ -220,7 +223,7 @@ const getBase = (appId: string): Configuration => {
       category: "Development",
       executableName: linuxExecutableName(appId),
       // Derive the installed `.desktop` filename from `desktopName`
-      // (`ai.opencode.desktop.desktop` for prod) instead of `executableName`,
+      // (`ai.memyr.desktop.desktop` for prod) instead of `executableName`,
       // so window association is unaffected by the executable rename above.
       syncDesktopName: true,
       desktop: {
@@ -237,7 +240,8 @@ const getBase = (appId: string): Configuration => {
 
 export function getConfig() {
   const channel = resolveChannel()
-  const appId = APP_IDS[channel]
+  const identity = channelIdentity(channel)
+  const appId = identity.appId
   const base = getBase(appId)
 
   switch (channel) {
@@ -245,9 +249,9 @@ export function getConfig() {
       return {
         ...base,
         appId,
-        productName: "Memyr Dev",
+        productName: identity.name,
         deb: { fpm: [metainfoFpm(appId)] },
-        rpm: { packageName: "opencode-dev", fpm: [rpmNoBuildIdLinksFpm, metainfoFpm(appId)] },
+        rpm: { packageName: identity.packageName, fpm: [rpmNoBuildIdLinksFpm, metainfoFpm(appId)] },
       }
     }
 
@@ -255,15 +259,9 @@ export function getConfig() {
       return {
         ...base,
         appId,
-        productName: "Memyr Beta",
-        protocols: { name: "Memyr Beta", schemes: ["opencode"] },
-        publish: {
-          provider: "generic",
-          url: "https://opencode.ai/update/api/beta/desktop/opencode/",
-          channel: "latest",
-        },
+        productName: identity.name,
         deb: { fpm: [metainfoFpm(appId)] },
-        rpm: { packageName: "opencode-beta", fpm: [rpmNoBuildIdLinksFpm, metainfoFpm(appId)] },
+        rpm: { packageName: identity.packageName, fpm: [rpmNoBuildIdLinksFpm, metainfoFpm(appId)] },
       }
     }
 
@@ -271,15 +269,9 @@ export function getConfig() {
       return {
         ...base,
         appId,
-        productName: "Memyr",
-        protocols: { name: "Memyr", schemes: ["opencode"] },
-        publish: {
-          provider: "generic",
-          url: "https://opencode.ai/update/api/latest/desktop/opencode/",
-          channel: "latest",
-        },
-        deb: { fpm: [metainfoFpm(appId), legacyDesktopEntryFpm] },
-        rpm: { packageName: "opencode", fpm: [rpmNoBuildIdLinksFpm, metainfoFpm(appId), legacyDesktopEntryFpm] },
+        productName: identity.name,
+        deb: { fpm: [metainfoFpm(appId)] },
+        rpm: { packageName: identity.packageName, fpm: [rpmNoBuildIdLinksFpm, metainfoFpm(appId)] },
       }
     }
   }

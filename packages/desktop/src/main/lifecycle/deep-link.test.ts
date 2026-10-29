@@ -1,17 +1,15 @@
-import { describe, expect, test } from "bun:test"
+import { expect, test } from "bun:test"
 import { consoleReturnWindow } from "./deep-link"
 
-describe("Console return deep links", () => {
-  test("reads the originating Desktop window", () => {
-    expect(consoleReturnWindow("opencode://console/authorized?window=window-a")).toBe("window-a")
-    expect(consoleReturnWindow("opencode://console/authorized?window=window%20b")).toBe("window b")
-  })
-
-  test("rejects unrelated and malformed links", () => {
-    expect(consoleReturnWindow("opencode://console/other?window=window-a")).toBeUndefined()
-    expect(consoleReturnWindow("opencode://other/authorized?window=window-a")).toBeUndefined()
-    expect(consoleReturnWindow("https://console/authorized?window=window-a")).toBeUndefined()
-    expect(consoleReturnWindow("not a url")).toBeUndefined()
-    expect(consoleReturnWindow("opencode://console/authorized")).toBeUndefined()
-  })
+test("finds the Console return window", () => {
+  // `memyr://` is the registered scheme; an upstream `opencode://` link still answers when this
+  // process is handed it directly.
+  expect(consoleReturnWindow("memyr://console/authorized?window=window-a")).toBe("window-a")
+  expect(consoleReturnWindow("opencode://console/authorized?window=window-a")).toBe("window-a")
+  expect(consoleReturnWindow("memyr://console/authorized?window=window%20b")).toBe("window b")
+  expect(consoleReturnWindow("memyr://console/other?window=window-a")).toBeUndefined()
+  expect(consoleReturnWindow("memyr://other/authorized?window=window-a")).toBeUndefined()
+  expect(consoleReturnWindow("https://console/authorized?window=window-a")).toBeUndefined()
+  expect(consoleReturnWindow("not a url")).toBeUndefined()
+  expect(consoleReturnWindow("memyr://console/authorized")).toBeUndefined()
 })

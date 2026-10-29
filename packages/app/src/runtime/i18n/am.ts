@@ -643,7 +643,7 @@ export const dict = {
   "provider.disconnect.toast.failed.description": "{{provider}}ን ማቋረጥ አልተሳካም።",
   "desktop.menu.installCli": "CLIን ጫን...",
   "desktop.cli.installed.title": "CLI ተጭኗል",
-  "desktop.cli.installed.message": "CLI በ{{path}} ላይ ተጭኗል\n\nየ'opencode2' ትዕዛዝን ለመጠቀም ተርሚናልዎን ዳግም ያስጀምሩ።",
+  "desktop.cli.installed.message": "CLI በ{{path}} ላይ ተጭኗል\n\nየ'memyr' ትዕዛዝን ለመጠቀም ተርሚናልዎን ዳግም ያስጀምሩ።",
   "desktop.cli.failed.title": "መጫን አልተሳካም",
   "desktop.cli.failed.message": "CLIን መጫን አልተሳካም፦ {{error}}",
   "command.project.copyID": "የፕሮጀክት IDን ቅዳ",

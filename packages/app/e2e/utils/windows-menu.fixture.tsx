@@ -21,6 +21,7 @@ export function mount(input: { server: string }) {
     // No main-process extensions run in this fixture.
     const bridge: Bridge = {
       packaged: false,
+      updates: false,
       call: unused,
       subscribe: async () => ({ available: false }),
       on: () => () => undefined,

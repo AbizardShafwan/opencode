@@ -13,7 +13,8 @@ function requireVersion(version: string) {
 
 export function discoverScript() {
   return `cli=""
-if [ -z "$cli" ] && [ -x "$HOME/.opencode/bin/opencode" ]; then cli="$HOME/.opencode/bin/opencode"; fi
+if [ -z "$cli" ] && [ -x "$HOME/.memyr/bin/memyr" ]; then cli="$HOME/.memyr/bin/memyr"; fi
+if [ -z "$cli" ]; then cli="$(command -v memyr 2>/dev/null || true)"; fi
 if [ -n "$cli" ]; then printf '%s\\n' "$cli"; fi
 `
 }
@@ -38,12 +39,17 @@ export function parseVersion(output: string) {
   return version
 }
 
-/** The managed CLI installer also configures the user's shell PATH. */
-export function installScript(input: { version: string; binary?: string }) {
+/**
+ * Installs the Linux Memyr CLI the desktop carries into the distro. There is no public installer for
+ * this fork, so the script copies the supplied binary instead of downloading upstream OpenCode.
+ */
+export function installScript(input: { version: string; binary: string }) {
   const version = requireVersion(input.version)
 
   return `set -eu
-curl -fsSL https://raw.githubusercontent.com/anomalyco/opencode/v2/install | bash -s -- ${input.binary ? `--binary ${input.binary}` : `--version ${quote(version)}`}
-test "$("$HOME/.opencode/bin/opencode" --version | awk '{print $NF}' | sed 's/^v//')" = ${quote(version)}
+mkdir -p "$HOME/.memyr/bin"
+cp ${input.binary} "$HOME/.memyr/bin/memyr"
+chmod 755 "$HOME/.memyr/bin/memyr"
+test "$("$HOME/.memyr/bin/memyr" --version | awk '{print $NF}' | sed 's/^v//')" = ${quote(version)}
 `
 }

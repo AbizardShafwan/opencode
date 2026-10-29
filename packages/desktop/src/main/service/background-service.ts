@@ -1,5 +1,6 @@
 import { app } from "electron"
 import { Context, Effect, FileSystem, Layer, Path } from "effect"
+import { product } from "../../../product"
 import { BackgroundServiceState } from "./background-service-state"
 import { cleanStages } from "./cli-stages"
 import { DesktopCli } from "./desktop-cli"
@@ -47,7 +48,7 @@ const connect = Effect.fn("BackgroundService.connect")(function* (mode: "initial
         process.env.OPENCODE_DESKTOP_SERVER_CHANNEL === "local"
           ? path.join(
               process.env.XDG_STATE_HOME ?? path.join(app.getPath("home"), ".local", "state"),
-              "opencode",
+              product.cli.appId,
               "service-local.json",
             )
           : undefined,

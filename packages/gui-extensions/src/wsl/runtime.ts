@@ -32,6 +32,7 @@ export type RunWslOptions = {
 
 export type WslCliBuild = {
   version: string
+  /** The Linux executable to install; undefined when this build carries none. */
   binary?: string
 }
 
@@ -48,9 +49,11 @@ export function wslArgs(args: string[], distro?: string | null, user?: string | 
 }
 
 export function wslCliInstallCommand(cli: WslCliBuild) {
+  if (!cli.binary) throw new Error("This build has no Linux CLI to install into WSL")
+
   return installScript({
     version: cli.version,
-    binary: cli.binary ? `"$(wslpath -a ${shellEscape(cli.binary)})"` : undefined,
+    binary: `"$(wslpath -a ${shellEscape(cli.binary)})"`,
   })
 }
 

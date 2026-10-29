@@ -75,7 +75,7 @@ const layout: Layout = {
   project() {},
 }
 
-const build: Build = { version: "", channel: "dev", platform: "desktop", packaged: false }
+const build: Build = { version: "", channel: "dev", platform: "desktop", packaged: false, updates: false }
 
 const locale: Locale = { locale: () => "en", direction: () => "ltr", setDirection() {} }
 

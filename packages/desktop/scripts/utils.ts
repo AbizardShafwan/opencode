@@ -1,9 +1,7 @@
-import { chmod, copyFile, mkdtemp, rm } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { chmod, copyFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { Option, Schema } from "effect"
-
-const CLI_VERSION = "dev"
+import { product } from "../product"
 
 const Manifest = Schema.fromJsonString(Schema.Struct({ version: Schema.NonEmptyString }))
 
@@ -19,6 +17,8 @@ export function resolveChannel(): Channel {
   return "dev"
 }
 
+// The upstream release package names describe the artifact directory layout produced by the CLI
+// build (`cli-<os>-<arch>`); the executable inside is the Memyr binary.
 export const CLI_BINARIES: Array<{ target: string; package: string; os: string; cpu: string }> = [
   {
     target: "aarch64-apple-darwin",
@@ -58,6 +58,7 @@ export const CLI_BINARIES: Array<{ target: string; package: string; os: string; 
   },
 ]
 
+/** The packaging target selected for this run, or undefined for the native target. */
 export const CLI_TARGET = process.env.OPENCODE_CLI_TARGET
 
 function nativeTarget() {
@@ -85,33 +86,25 @@ export function nodePtyPackage(target?: string) {
   return `@lydell/node-pty-${cli.os}-${cli.cpu}`
 }
 
-export async function downloadCliToResources(version = CLI_VERSION, dest = windowsify("resources/opencode-cli")) {
-  const { $ } = await import("bun")
-  const cli = getCurrentCli()
-  const directory = await mkdtemp(join(tmpdir(), "opencode-cli-"))
-
-  try {
-    await $`bun install --no-save --cwd ${directory} ${`${cli.package}@${version}`} ${`--os=${cli.os}`} ${`--cpu=${cli.cpu}`}`
-    await copyCliToResources(join(directory, "node_modules", cli.package), dest)
-  } finally {
-    await rm(directory, { recursive: true, force: true })
-  }
-
-  console.log(`Copied ${cli.package}@${version} to ${dest}`)
-}
-
-export async function copyBuiltCliToResources(root: string, dest = windowsify("resources/opencode-cli")) {
+export async function copyBuiltCliToResources(root: string, dest = windowsify(`resources/${product.cli.resource}`)) {
   const cli = getCurrentCli()
   const directory = cli.package.replace("@opencode/", "")
   await copyCliToResources(join(root, directory), dest)
 }
 
-// The package directory is an npm package: its package.json version is the string the executable
-// prints for --version. Writing it next to the executable spares the desktop a ~400 ms spawn of the
-// 200 MB binary on first launch.
+// The package directory is the CLI build output: its package.json version is the string the
+// executable prints for --version. Writing it next to the executable spares the desktop a ~400 ms
+// spawn of the 200 MB binary on first launch.
 async function copyCliToResources(pkg: string, dest: string) {
   const cli = getCurrentCli()
-  await copyFile(join(pkg, "bin", cli.os === "win32" ? "opencode.exe" : "opencode"), dest)
+  const executable = join(pkg, "bin", cli.os === "win32" ? `${product.cli.executable}.exe` : product.cli.executable)
+
+  // Only a --memyr build emits this executable. An upstream artifact would register under
+  // OpenCode's identity, and the desktop would never find the service it started.
+  if (!(await Bun.file(executable).exists()))
+    throw new Error(`Bundled CLI is not a Memyr build: ${pkg} has no ${product.cli.executable} executable`)
+
+  await copyFile(executable, dest)
   await prepareCli(dest)
 
   const manifest = Option.getOrUndefined(
@@ -119,11 +112,31 @@ async function copyCliToResources(pkg: string, dest: string) {
   )
 
   if (!manifest) throw new Error(`Bundled CLI package has no version: ${pkg}`)
+
   await Bun.write(versionFile(dest), manifest.version)
 }
 
 export function versionFile(cli: string) {
-  return join(dirname(cli), "opencode-cli.version")
+  return join(dirname(cli), product.cli.versionFile)
+}
+
+// The Windows desktop runs a Linux CLI inside WSL, so a Windows package carries one when the
+// supplied distribution includes the matching Linux target. Without it, WSL has nothing to install.
+export async function copyWslCliToResources(root: string, dest = `resources/${product.cli.wslResource}`) {
+  const target = process.arch === "arm64" ? "aarch64-unknown-linux-gnu" : "x86_64-unknown-linux-gnu"
+  const pkg = join(root, getCurrentCli(target).package.replace("@opencode/", ""))
+
+  if (!(await Bun.file(join(pkg, "package.json")).exists())) return false
+
+  const executable = join(pkg, "bin", product.cli.executable)
+
+  if (!(await Bun.file(executable).exists()))
+    throw new Error(`WSL CLI is not a Memyr build: ${pkg} has no ${product.cli.executable} executable`)
+
+  await copyFile(executable, dest)
+  await chmod(dest, 0o755)
+
+  return true
 }
 
 async function prepareCli(dest: string) {

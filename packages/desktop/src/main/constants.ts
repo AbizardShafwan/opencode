@@ -1,26 +1,21 @@
 import { app } from "electron"
-
-type Channel = "local" | "dev" | "beta" | "prod"
+import { channelIdentity, product, type DesktopChannel } from "../../product"
 
 const raw = import.meta.env.OPENCODE_CHANNEL
 
-export const CHANNEL: Channel = raw === "local" || raw === "dev" || raw === "beta" || raw === "prod" ? raw : "dev"
+export const CHANNEL: "local" | DesktopChannel =
+  raw === "local" || raw === "dev" || raw === "beta" || raw === "prod" ? raw : "dev"
 
 export const VERSION = app.isPackaged ? app.getVersion() : (process.env.OPENCODE_VERSION ?? app.getVersion())
 
-const appNames: Record<string, string> = {
-  dev: "Memyr Dev",
-  beta: "Memyr Beta",
-  prod: "Memyr",
-}
-
-const appIDs: Record<string, string> = {
-  dev: "ai.opencode.desktop.dev",
-  beta: "ai.opencode.desktop.beta",
-  prod: "ai.opencode.desktop",
-}
+// This fork has no update feed, so a packaged build never runs the updater.
+export const UPDATES = product.updates
 
 // Local renderer/server mode keeps the dev application identity.
-export const APP_NAME = app.isPackaged ? appNames[CHANNEL] : "Memyr Dev"
+export const APP_NAME = app.isPackaged
+  ? channelIdentity(CHANNEL === "local" ? "dev" : CHANNEL).name
+  : channelIdentity("dev").name
 
-export const APP_ID = app.isPackaged ? appIDs[CHANNEL] : "ai.opencode.desktop.dev"
+export const APP_ID = app.isPackaged
+  ? channelIdentity(CHANNEL === "local" ? "dev" : CHANNEL).appId
+  : channelIdentity("dev").appId

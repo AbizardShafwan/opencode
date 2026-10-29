@@ -41,6 +41,7 @@ export function createExtensionBridge(): Bridge {
 
   return {
     packaged: api.getWindowBootstrap().packaged ?? false,
+    updates: api.getWindowBootstrap().updates ?? false,
     call: (input, signal) =>
       cancellable("ExtensionCall", input, signal).catch((cause: unknown) => {
         throw failure(cause)

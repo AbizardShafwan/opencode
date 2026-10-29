@@ -47,7 +47,7 @@ const desktop = [
   "Pranešti apie klaidą",
   "Memyr meniu",
   "CLI įdiegtas",
-  "CLI įdiegtas į {{path}}\n\nPaleiskite terminalą iš naujo, kad galėtumėte naudoti komandą 'opencode2'.",
+  "CLI įdiegtas į {{path}}\n\nPaleiskite terminalą iš naujo, kad galėtumėte naudoti komandą 'memyr'.",
   "Įdiegti nepavyko",
   "Nepavyko įdiegti CLI: {{error}}",
   "Paleisti iš naujo",

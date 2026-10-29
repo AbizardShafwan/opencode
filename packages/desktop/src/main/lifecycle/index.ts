@@ -14,6 +14,12 @@ import { initializeFirstLaunchOnboarding } from "./onboarding"
 import { Shutdown } from "./shutdown"
 import { consoleReturnWindow } from "./deep-link"
 
+// Both schemes are accepted because this process may be handed an upstream Console return link
+// directly; only `memyr://` is registered with the operating system.
+function isDeepLink(value: string) {
+  return value.startsWith("memyr://") || value.startsWith("opencode://")
+}
+
 export interface Interface {
   readonly relaunch: () => void
   readonly prepareToRestart: Effect.Effect<void>
@@ -33,6 +39,8 @@ const runtime = Layer.effect(
     const createWindow = windows.create
     const restoreWindows = windows.restore
     const pendingDeepLinks: string[] = []
+    // Windows starts a cold app with the protocol URL in argv; macOS delivers it through open-url.
+    pendingDeepLinks.push(...process.argv.filter(isDeepLink))
     let shutdownReady = false
     const prepareToRestart = shutdown.run.pipe(Effect.ensuring(Effect.sync(() => (shutdownReady = true))))
 
@@ -77,7 +85,7 @@ const runtime = Layer.effect(
     }
 
     const secondInstance = (_event: Event, argv: string[]) => {
-      const urls = argv.filter((arg) => arg.startsWith("opencode://"))
+      const urls = argv.filter(isDeepLink)
 
       if (urls.length) {
         runFork(Effect.logInfo("deep link received via second-instance", { urls }))

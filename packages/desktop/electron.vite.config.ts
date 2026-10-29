@@ -1,5 +1,6 @@
 import { defineConfig } from "electron-vite"
 import type { Plugin } from "vite"
+import { product } from "./product"
 import { pickerPlugin } from "./scripts/picker"
 import { nodePtyPackage } from "./scripts/utils"
 
@@ -62,6 +63,9 @@ export default defineConfig(({ command }) => {
       define: {
         // Local renderer/server mode still uses the dev application identity and updater policy.
         "import.meta.env.OPENCODE_CHANNEL": JSON.stringify(channel === "local" ? "dev" : channel),
+        // The client's service discovery and global paths follow the CLI identity, so the desktop
+        // watches the registration file the bundled Memyr CLI writes.
+        OPENCODE_APP_ID: JSON.stringify(product.cli.appId),
       },
       build: {
         minify: command === "build",

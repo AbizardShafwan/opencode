@@ -47,7 +47,7 @@ const desktop = [
   "Prijavi pogrešku",
   "Izbornik Memyr",
   "CLI je instaliran",
-  "CLI je instaliran u {{path}}\n\nPonovno pokrenite terminal kako biste mogli koristiti naredbu 'opencode2'.",
+  "CLI je instaliran u {{path}}\n\nPonovno pokrenite terminal kako biste mogli koristiti naredbu 'memyr'.",
   "Instalacija nije uspjela",
   "Instalacija CLI-ja nije uspjela: {{error}}",
   "Ponovno pokreni aplikaciju",

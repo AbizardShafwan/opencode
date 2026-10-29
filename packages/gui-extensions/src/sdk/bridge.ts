@@ -149,6 +149,8 @@ export interface BridgeMenubarItem {
 export interface Bridge {
   /** The app runs packaged, as main's `Build.packaged` says; the window's `Build` reports the same. */
   readonly packaged: boolean
+  /** Whether this build has an update service, as main's `Build.updates` says; the window's `Build` reports the same. */
+  readonly updates: boolean
   /**
    * Calls an Ipc method.
    *

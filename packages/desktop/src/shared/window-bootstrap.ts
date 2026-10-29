@@ -5,6 +5,8 @@ export type WindowBootstrap = {
   firstLaunchPending?: boolean
   /** The app runs packaged (`app.isPackaged`), as extensions' `Build.packaged` reports in both processes. */
   packaged?: boolean
+  /** Whether this build has an update service, as extensions' `Build.updates` reports. */
+  updates?: boolean
 }
 
 const prefix = "--opencode-window="

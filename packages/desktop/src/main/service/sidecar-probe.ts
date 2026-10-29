@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs"
 import path from "node:path"
 import { app } from "electron"
 import type { Endpoint } from "@opencode/client/service"
+import { product } from "../../../product"
 
 // The main thread idles between showing the first window and evaluating the main bundle, waiting
 // for the renderer's asset requests. That slot is long enough to find out whether a compatible
@@ -26,7 +27,7 @@ export function sidecarProbe() {
 
 function bundledVersion() {
   try {
-    return readFileSync(path.join(process.resourcesPath, "opencode-cli.version"), "utf8").trim()
+    return readFileSync(path.join(process.resourcesPath, product.cli.versionFile), "utf8").trim()
   } catch {
     return ""
   }
