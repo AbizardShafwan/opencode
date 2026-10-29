@@ -55,8 +55,6 @@ export function SessionProviderUsage(props: { session: MountedSession; providerI
         return ctx.t("usage.antigravity.title")
       case "codex-rate-limit":
         return ctx.t("usage.codex.title")
-      case "claude-code-usage":
-        return ctx.t("usage.claude.title")
       case "ollama-balance":
         return ctx.t("usage.ollama.title")
     }

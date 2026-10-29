@@ -2,7 +2,6 @@ import { expect, test } from "bun:test"
 import {
   parseAntigravityGroups,
   parseAntigravityModels,
-  parseClaudeCode,
   parseCodex,
   parseDeepSeek,
   parseOllama,
@@ -50,19 +49,6 @@ test("labels Codex windows from their reported length and converts reset seconds
     { id: "weekly", label: "weekly", remainingPercent: 59, resetsAt: 1_800_086_400_000 },
   ])
   expect(parseCodex({ rate_limit: null })).toBeUndefined()
-})
-
-test("reads Claude Code percentages and ISO reset times", () => {
-  expect(
-    parseClaudeCode({
-      five_hour: { utilization: 22, resets_at: "2026-10-28T12:00:00Z" },
-      seven_day: { utilization: 64.5, resets_at: "2026-11-02T12:00:00Z" },
-    }),
-  ).toEqual([
-    { id: "5h", label: "5h", remainingPercent: 78, resetsAt: Date.parse("2026-10-28T12:00:00Z") },
-    { id: "weekly", label: "weekly", remainingPercent: 35.5, resetsAt: Date.parse("2026-11-02T12:00:00Z") },
-  ])
-  expect(parseClaudeCode({ five_hour: null, seven_day: null })).toEqual([])
 })
 
 test("reads Ollama Cloud's remaining session and weekly limits", () => {
@@ -138,7 +124,7 @@ test("groups per-model Antigravity quota into the Gemini and Claude/GPT pools", 
         },
         "gpt-oss-120b-medium": { quotaInfo: { remainingFraction: 0.75 } },
         "gemini-3-pro-image": { quotaInfo: { remainingFraction: 0 } },
-        "chat_hidden": { quotaInfo: { remainingFraction: 0 } },
+        chat_hidden: { quotaInfo: { remainingFraction: 0 } },
       },
     }),
   ).toEqual([

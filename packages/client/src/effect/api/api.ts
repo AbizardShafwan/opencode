@@ -2379,12 +2379,7 @@ export type UsageReadOutput = {
   readonly data:
     | {
         readonly providerID: Provider.ID
-        readonly source:
-          | "deepseek-balance"
-          | "antigravity-quota"
-          | "codex-rate-limit"
-          | "claude-code-usage"
-          | "ollama-balance"
+        readonly source: "deepseek-balance" | "antigravity-quota" | "codex-rate-limit" | "ollama-balance"
         readonly fetchedAt: number
         readonly balances?:
           | ReadonlyArray<{

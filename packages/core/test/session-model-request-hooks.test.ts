@@ -45,84 +45,69 @@ const transport = SessionModelTransport.Service.of({
 })
 
 describe("SessionModelRequest Anthropic identity", () => {
-  for (const connection of [
-    {
-      name: "subscription",
-      settings: { authToken: "sk-ant-oat-test", claudeCode: true },
-      userAgent: "claude-cli/2.1.295",
-    },
-    { name: "API key", settings: { apiKey: "sk-ant-api03-test" }, userAgent: undefined },
-  ]) {
-    it.effect(`preserves the ${connection.name} user-agent for every Session request kind`, () =>
-      Effect.gen(function* () {
-        const requests = yield* SessionModelRequest.Service.pipe(Effect.provide(SessionModelRequest.layer))
-        const app = yield* App.Metadata
-        const calls: HttpClientRequest.HttpClientRequest[] = []
-        const http = HttpClient.make((request) =>
-          Effect.sync(() => {
-            calls.push(request)
-            return HttpClientResponse.fromWeb(
-              request,
-              new Response(
-                [
-                  { type: "message_start", message: { usage: { input_tokens: 1 } } },
-                  { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
-                  { type: "message_stop" },
-                ]
-                  .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
-                  .join(""),
-                { headers: { "content-type": "text/event-stream" } },
-              ),
-            )
-          }),
-        )
-        const llm = yield* LLMClient.Service.pipe(
-          Effect.provide(LLMClient.layer.pipe(Layer.provide(RequestExecutor.layer), Layer.fresh)),
-          Effect.provideService(HttpClient.HttpClient, http),
-        )
-        const selected = SessionRunnerModel.resolved(
-          Anthropic.configure({
-            ...connection.settings,
-            baseURL: "https://api.anthropic.test/v1",
-            headers: { "x-configured": "preserved" },
-          }).model("claude-opus-5"),
-          {
-            capabilities: { tools: true, input: ["text"], output: ["text"] },
-            cost: [],
-            limit: { context: 1_000_000, output: 128_000 },
-          },
-        )
+  it.effect("preserves the API key and application user-agent for every Session request kind", () =>
+    Effect.gen(function* () {
+      const requests = yield* SessionModelRequest.Service.pipe(Effect.provide(SessionModelRequest.layer))
+      const app = yield* App.Metadata
+      const calls: HttpClientRequest.HttpClientRequest[] = []
+      const http = HttpClient.make((request) =>
+        Effect.sync(() => {
+          calls.push(request)
+          return HttpClientResponse.fromWeb(
+            request,
+            new Response(
+              [
+                { type: "message_start", message: { usage: { input_tokens: 1 } } },
+                { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+                { type: "message_stop" },
+              ]
+                .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
+                .join(""),
+              { headers: { "content-type": "text/event-stream" } },
+            ),
+          )
+        }),
+      )
+      const llm = yield* LLMClient.Service.pipe(
+        Effect.provide(LLMClient.layer.pipe(Layer.provide(RequestExecutor.layer), Layer.fresh)),
+        Effect.provideService(HttpClient.HttpClient, http),
+      )
+      const selected = SessionRunnerModel.resolved(
+        Anthropic.configure({
+          apiKey: "sk-ant-api03-test",
+          baseURL: "https://api.anthropic.test/v1",
+          headers: { "x-configured": "preserved" },
+        }).model("claude-opus-5"),
+        {
+          capabilities: { tools: true, input: ["text"], output: ["text"] },
+          cost: [],
+          limit: { context: 1_000_000, output: 128_000 },
+        },
+      )
 
-        for (const kind of KINDS) {
-          const prepared = yield* requests[kind]({
-            session,
-            agent: Agent.ID.make("build"),
-            model: selected,
-            system: [SystemPart.make("Be concise.")],
-            messages: [Message.user("Hi")],
-          })
-          yield* llm.generate(prepared.request, prepared.options)
-        }
+      for (const kind of KINDS) {
+        const prepared = yield* requests[kind]({
+          session,
+          agent: Agent.ID.make("build"),
+          model: selected,
+          system: [SystemPart.make("Be concise.")],
+          messages: [Message.user("Hi")],
+        })
+        yield* llm.generate(prepared.request, prepared.options)
+      }
 
-        expect(calls).toHaveLength(KINDS.length)
-        for (const call of calls) {
-          expect(call.headers).toMatchObject({
-            "user-agent": connection.userAgent ?? App.useragent(app),
-            "x-opencode-session-id": session.id,
-            "x-configured": "preserved",
-          })
-          if (connection.settings.authToken) {
-            expect(call.headers.authorization).toBe(`Bearer ${connection.settings.authToken}`)
-            expect(call.headers["x-api-key"]).toBeUndefined()
-          }
-          if (connection.settings.apiKey) {
-            expect(call.headers["x-api-key"]).toBe(connection.settings.apiKey)
-            expect(call.headers.authorization).toBeUndefined()
-          }
-        }
-      }).pipe(Effect.provideService(SessionModelTransport.Service, transport)),
-    )
-  }
+      expect(calls).toHaveLength(KINDS.length)
+      for (const call of calls) {
+        expect(call.headers).toMatchObject({
+          "user-agent": App.useragent(app),
+          "x-opencode-session-id": session.id,
+          "x-configured": "preserved",
+          "x-api-key": "sk-ant-api03-test",
+        })
+        expect(call.headers.authorization).toBeUndefined()
+      }
+    }).pipe(Effect.provideService(SessionModelTransport.Service, transport)),
+  )
 })
 
 describe("SessionModelRequest HTTP hooks", () => {

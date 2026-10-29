@@ -9,7 +9,6 @@ export default {
   "usage.deepseek.title": "DeepSeek balance",
   "usage.antigravity.title": "Antigravity quota",
   "usage.codex.title": "Codex usage",
-  "usage.claude.title": "Claude Code usage",
   "usage.ollama.title": "Ollama usage",
   "usage.remaining": "{{percent}} left",
   "usage.reset": "Resets in {{duration}}",

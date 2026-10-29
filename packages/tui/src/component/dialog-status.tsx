@@ -125,8 +125,6 @@ function usageTitle(source: UsageInfo["source"]) {
       return "Antigravity quota"
     case "codex-rate-limit":
       return "Codex usage"
-    case "claude-code-usage":
-      return "Claude Code usage"
     case "ollama-balance":
       return "Ollama usage"
   }

@@ -872,6 +872,23 @@
             "required": false
           },
           {
+            "name": "descendants",
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": ["true", "false"]
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "With parentID, include the entire descendant tree rather than only direct children."
+            },
+            "required": false
+          },
+          {
             "name": "archived",
             "in": "query",
             "schema": {
@@ -14202,6 +14219,117 @@
           "required": true
         }
       }
+    },
+    "/api/usage": {
+      "get": {
+        "tags": ["usage"],
+        "operationId": "usage.read",
+        "parameters": [
+          {
+            "name": "location",
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "directory": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "required": false,
+            "style": "deepObject",
+            "explode": true
+          },
+          {
+            "name": "providerID",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/Provider.ID"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "location": {
+                      "$ref": "#/components/schemas/Location.PublicRef"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Usage.Result"
+                    }
+                  },
+                  "required": ["location", "data"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "LocationNotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocationNotFoundErrorEncoded"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "ServiceUnavailableError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceUnavailableErrorEncoded"
+                }
+              }
+            }
+          }
+        },
+        "description": "Read the selected model provider's account usage: DeepSeek balance, Antigravity quota pools, or Codex and Ollama Cloud rate-limit windows. Returns nothing when the provider has no usage to read or its endpoint fails.",
+        "summary": "Read provider usage"
+      }
     }
   },
   "components": {
@@ -14226,6 +14354,9 @@
           },
           "model": {
             "$ref": "#/components/schemas/Model.Ref"
+          },
+          "variant": {
+            "type": "string"
           },
           "request": {
             "$ref": "#/components/schemas/Provider.Request"
@@ -14350,6 +14481,9 @@
                 "additionalProperties": false
               }
             ]
+          },
+          "variant": {
+            "type": "string"
           },
           "request": {
             "type": "object",
@@ -19322,6 +19456,9 @@
           "parentID": {
             "$ref": "#/components/schemas/Session.ID"
           },
+          "taskName": {
+            "type": "string"
+          },
           "fork": {
             "type": "object",
             "properties": {
@@ -19387,6 +19524,12 @@
           },
           "permissions": {
             "$ref": "#/components/schemas/Permission.Ruleset"
+          },
+          "authority": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Permission.Ruleset"
+            }
           },
           "revert": {
             "$ref": "#/components/schemas/Session.Revert"
@@ -19465,6 +19608,9 @@
           },
           "model": {
             "$ref": "#/components/schemas/Model.Ref"
+          },
+          "thinking": {
+            "$ref": "#/components/schemas/Session.Message.Thinking"
           },
           "content": {
             "type": "array",
@@ -20144,6 +20290,23 @@
           }
         },
         "required": ["id", "time", "type", "text"],
+        "additionalProperties": false
+      },
+      "Session.Message.Thinking": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": ["enabled", "disabled", "adaptive"]
+          },
+          "effort": {
+            "type": "string"
+          },
+          "budget": {
+            "type": "integer",
+            "minimum": -1
+          }
+        },
         "additionalProperties": false
       },
       "Session.Message.ToolState.Completed": {
@@ -20974,6 +21137,113 @@
         "required": ["_tag", "message"],
         "additionalProperties": false
       },
+      "Usage.Balance": {
+        "type": "object",
+        "properties": {
+          "currency": {
+            "type": "string"
+          },
+          "total": {
+            "type": "string"
+          },
+          "granted": {
+            "type": "string"
+          },
+          "toppedUp": {
+            "type": "string"
+          }
+        },
+        "required": ["currency", "total"],
+        "additionalProperties": false
+      },
+      "Usage.Group": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "windows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Usage.Window"
+            }
+          }
+        },
+        "required": ["label", "windows"],
+        "additionalProperties": false
+      },
+      "Usage.Info": {
+        "type": "object",
+        "properties": {
+          "providerID": {
+            "$ref": "#/components/schemas/Provider.ID"
+          },
+          "source": {
+            "$ref": "#/components/schemas/Usage.Source"
+          },
+          "fetchedAt": {
+            "type": "number"
+          },
+          "balances": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Usage.Balance"
+            }
+          },
+          "windows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Usage.Window"
+            }
+          },
+          "groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Usage.Group"
+            }
+          }
+        },
+        "required": ["providerID", "source", "fetchedAt"],
+        "additionalProperties": false
+      },
+      "Usage.Result": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/Usage.Info"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "Usage.Source": {
+        "type": "string",
+        "enum": ["deepseek-balance", "antigravity-quota", "codex-rate-limit", "ollama-balance"]
+      },
+      "Usage.Window": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "remainingPercent": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "resetsAt": {
+            "type": "number"
+          }
+        },
+        "required": ["id", "label", "remainingPercent"],
+        "additionalProperties": false
+      },
       "V2EventEncoded": {
         "type": "string",
         "contentMediaType": "application/json"
@@ -21565,6 +21835,10 @@
     {
       "name": "config",
       "description": "Location-scoped configuration routes."
+    },
+    {
+      "name": "usage",
+      "description": "Provider account usage for the selected model."
     }
   ]
 }

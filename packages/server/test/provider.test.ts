@@ -7,6 +7,35 @@ import { tmpdirScoped } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
 import { createRoutes } from "../src/routes"
 
+it.live("Anthropic offers API-key and environment authentication without a subscription method", () =>
+  Effect.gen(function* () {
+    const tmp = yield* tmpdirScoped("opencode-anthropic-auth-")
+    const context = yield* Layer.build(
+      createRoutes({
+        password: "secret",
+        database: { path: ":memory:" },
+        models: { fetch: false },
+        fs: { filewatcher: false },
+        config: { directory: tmp.path, project: false },
+      }).pipe(Layer.provide(HttpServer.layerServices)),
+    )
+    const handler = Context.get(context, HttpRouter.HttpRouter)
+      .asHttpEffect()
+      .pipe(HttpEffect.toWebHandlerWith(context))
+    const url = new URL("/api/integration", "http://opencode.local")
+    url.searchParams.set("location[directory]", tmp.path)
+    const response = yield* Effect.promise((signal) =>
+      handler(new Request(url, { headers: { authorization: `Basic ${btoa("opencode:secret")}` }, signal })),
+    )
+    expect(response.status).toBe(200)
+    const body = yield* Effect.promise(() => response.json())
+    expect(body.data.find((integration: { id: string }) => integration.id === "anthropic")?.methods).toEqual([
+      { type: "key" },
+      { type: "env", names: ["ANTHROPIC_API_KEY"] },
+    ])
+  }),
+)
+
 it.live(
   "provider reads stay nonblocking while authentication discovery waits for plugins",
   () =>

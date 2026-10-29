@@ -4,7 +4,6 @@ import type { ProviderAuthOption } from "../route/auth-options.js"
 import type { ProviderPackage } from "../provider-package.js"
 import { ProviderConfigurationError, ProviderID, type ModelID } from "../schema/index.js"
 import { AnthropicMessages } from "../protocols/anthropic-messages.js"
-import { AnthropicClaudeCode } from "./anthropic-claude-code.js"
 import { AnthropicCompatible } from "./anthropic-compatible.js"
 
 export type AnthropicOptionsInput = AnthropicMessages.OptionsInput
@@ -19,10 +18,6 @@ export type Config = RouteDefaultsInput &
   ProviderAuthOption<"optional"> & {
     readonly baseURL?: string
     readonly providerOptions?: AnthropicMessages.ProviderOptionsInput
-    /** Bearer token for a Claude Pro/Max subscription connection. */
-    readonly authToken?: string
-    /** Apply the Claude Code request envelope required by a subscription connection. */
-    readonly claudeCode?: boolean
   }
 
 export type Settings = ProviderPackage.Settings &
@@ -32,7 +27,6 @@ export type Settings = ProviderPackage.Settings &
     | { readonly apiKey?: never; readonly authToken?: string }
   ) & {
     readonly baseURL?: string
-    readonly claudeCode?: boolean
   }
 
 const auth = (options: ProviderAuthOption<"optional">) => {
@@ -43,24 +37,7 @@ const auth = (options: ProviderAuthOption<"optional">) => {
 }
 
 export const configure = (input: Config = {}) => {
-  const { apiKey: _apiKey, auth: _auth, authToken, claudeCode, baseURL, ...rest } = input
-  if (claudeCode) {
-    if (!authToken)
-      throw new ProviderConfigurationError({
-        provider: id,
-        message: "Anthropic Claude Code subscription requires a bearer token",
-      })
-    const route = AnthropicClaudeCode.route({
-      ...rest,
-      baseURL: baseURL ?? AnthropicMessages.DEFAULT_BASE_URL,
-      authToken,
-    })
-    return {
-      id,
-      model: (modelID: string | ModelID) => route.model<AnthropicMessages.ProviderOptionsInput>({ id: modelID }),
-      configure,
-    }
-  }
+  const { apiKey: _apiKey, auth: _auth, baseURL, ...rest } = input
   const compatible = AnthropicCompatible.configure({
     ...rest,
     auth: auth(input),
@@ -77,7 +54,7 @@ export const configure = (input: Config = {}) => {
 export const provider = configure()
 export const model: ProviderPackage.Definition<Settings, AnthropicMessages.ProviderOptionsInput>["model"] = (
   modelID,
-  { apiKey, authToken, baseURL, body, headers, claudeCode, ...providerOptions },
+  { apiKey, authToken, baseURL, body, headers, ...providerOptions },
 ) => {
   if (apiKey !== undefined && authToken !== undefined)
     throw new ProviderConfigurationError({
@@ -85,8 +62,7 @@ export const model: ProviderPackage.Definition<Settings, AnthropicMessages.Provi
       message: "Anthropic apiKey cannot be combined with authToken",
     })
   return configure({
-    ...(authToken === undefined ? { apiKey: apiKey } : claudeCode ? { authToken } : { auth: Auth.bearer(authToken) }),
-    claudeCode,
+    ...(authToken === undefined ? { apiKey: apiKey } : { auth: Auth.bearer(authToken) }),
     baseURL,
     headers,
     http: body === undefined ? undefined : { body },

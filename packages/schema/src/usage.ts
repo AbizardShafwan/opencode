@@ -11,21 +11,18 @@ import { optional } from "./schema.js"
  * - `deepseek-balance`: DeepSeek prepaid account balance.
  * - `antigravity-quota`: Antigravity / Cloud Code Assist shared quota pools.
  * - `codex-rate-limit`: OpenAI Codex subscription 5-hour and weekly windows.
- * - `claude-code-usage`: Claude Code subscription 5-hour and weekly windows.
  * - `ollama-balance`: Ollama Cloud session (5-hour) and weekly limits.
  */
 export const Source = Schema.Literals([
   "deepseek-balance",
   "antigravity-quota",
   "codex-rate-limit",
-  "claude-code-usage",
   "ollama-balance",
-])
-  .annotate({ identifier: "Usage.Source" })
+]).annotate({ identifier: "Usage.Source" })
 export type Source = typeof Source.Type
 
 /**
- * A quota window such as Codex, Claude Code, or Ollama Cloud's 5-hour and weekly limits, or one
+ * A quota window such as Codex or Ollama Cloud's 5-hour and weekly limits, or one
  * Antigravity pool bucket. It reports what remains rather than what was consumed, because that is
  * what a client draws: the last percentage of a window is not the same as an empty allowance.
  */
@@ -67,7 +64,7 @@ export const Group = Schema.Struct({
 /**
  * Usage for the selected model's provider. Only the fields owned by `source` are present:
  * `balances` for `deepseek-balance`, `groups` for `antigravity-quota`, and `windows` for
- * `codex-rate-limit`, `claude-code-usage`, and `ollama-balance`.
+ * `codex-rate-limit` and `ollama-balance`.
  */
 export interface Info extends Schema.Schema.Type<typeof Info> {}
 export const Info = Schema.Struct({
@@ -77,7 +74,7 @@ export const Info = Schema.Struct({
   fetchedAt: Schema.Finite,
   /** DeepSeek balances, one per currency the account reports. */
   balances: Schema.Array(Balance).pipe(optional),
-  /** Codex, Claude Code, or Ollama Cloud rate-limit windows. */
+  /** Codex or Ollama Cloud rate-limit windows. */
   windows: Schema.Array(Window).pipe(optional),
   /** Antigravity quota pools. */
   groups: Schema.Array(Group).pipe(optional),

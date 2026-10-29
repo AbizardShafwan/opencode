@@ -2,7 +2,7 @@ export * as AccountUsage from "./account-usage.js"
 
 /**
  * Provider account usage for the selected model: DeepSeek balance, Antigravity quota
- * pools, Codex rate-limit windows, Claude Code subscription windows, and Ollama Cloud limits.
+ * pools, Codex rate-limit windows, and Ollama Cloud limits.
  *
  * Provider credentials live on the server, so a client never fetches these values itself.
  * A provider without a supported subscription, or one whose endpoint fails, reads as
@@ -27,14 +27,10 @@ import { IntegrationConnection } from "./integration/connection.js"
 
 /** The ChatGPT OAuth methods whose account carries Codex rate limits. */
 const openAIMethods = new Set(["chatgpt-browser", "chatgpt-headless", "chatgpt-token-sharing"])
-const claudeCodeMethod = "claude-code"
 
 const deepseekBalanceURL = "https://api.deepseek.com/user/balance"
 const ollamaBalanceURL = "https://ollama.com/api/balance"
 const codexUsageURL = "https://chatgpt.com/backend-api/wham/usage"
-const claudeCodeUsageURL = "https://api.anthropic.com/api/oauth/usage"
-const claudeCodeVersion = "2.1.75"
-const claudeCodeBeta = "oauth-2025-04-20"
 /** Antigravity's daily host first, as the provider plugin uses, then the production host. */
 const antigravityHosts = [ANTIGRAVITY_ENDPOINT, "https://cloudcode-pa.googleapis.com"]
 
@@ -158,24 +154,6 @@ const fetchSource = (
         }),
       )
     }
-    case "claude-code-usage": {
-      if (value.type !== "oauth") return Effect.succeed(undefined)
-      return json(
-        HttpClientRequest.get(claudeCodeUsageURL).pipe(
-          HttpClientRequest.bearerToken(value.access),
-          HttpClientRequest.acceptJson,
-          HttpClientRequest.setHeaders({
-            "anthropic-beta": claudeCodeBeta,
-            "user-agent": `claude-cli/${claudeCodeVersion}`,
-          }),
-        ),
-      ).pipe(
-        Effect.map((payload) => {
-          const windows = payload === undefined ? undefined : parseClaudeCode(payload)
-          return windows?.length ? { providerID, source, fetchedAt, windows } : undefined
-        }),
-      )
-    }
     case "antigravity-quota": {
       if (value.type !== "oauth") return Effect.succeed(undefined)
       return antigravityGroups(json, value).pipe(
@@ -246,7 +224,6 @@ function resolveSource(providerID: Provider.ID, value: Value): Usage.Source | un
   if (value.type !== "oauth") return undefined
   if (providerID === Provider.ID.google && value.methodID === ANTIGRAVITY_METHOD_ID) return "antigravity-quota"
   if (providerID === Provider.ID.openai && openAIMethods.has(value.methodID)) return "codex-rate-limit"
-  if (providerID === Provider.ID.anthropic && value.methodID === claudeCodeMethod) return "claude-code-usage"
   return undefined
 }
 
@@ -344,50 +321,21 @@ export function parseOllama(payload: unknown): Usage.Window[] | undefined {
   })
 }
 
-const ClaudeWindow = Schema.Struct({
-  utilization: Schema.Number,
-  resets_at: Schema.optional(Schema.String),
-})
-
-const ClaudePayload = Schema.Struct({
-  five_hour: Schema.optional(Schema.NullOr(ClaudeWindow)),
-  seven_day: Schema.optional(Schema.NullOr(ClaudeWindow)),
-})
+type PercentWindow = typeof CodexWindow.Type
 
 /**
- * Claude Code 5-hour and weekly windows. This endpoint reports `utilization` as a 0–100
- * percentage, unlike the `anthropic-ratelimit-unified-*` headers, which report a fraction.
- */
-export function parseClaudeCode(payload: unknown): Usage.Window[] | undefined {
-  const decoded = Schema.decodeUnknownOption(ClaudePayload)(payload)
-  if (Option.isNone(decoded)) return undefined
-  return percentWindows([
-    { window: decoded.value.five_hour, fallback: "5h" },
-    { window: decoded.value.seven_day, fallback: "weekly" },
-  ])
-}
-
-type PercentWindow = {
-  readonly used_percent?: number
-  readonly utilization?: number
-  readonly limit_window_seconds?: number
-  readonly reset_at?: number
-  readonly resets_at?: string
-}
-
-/**
- * Codex and Claude Code report what they consumed, while the contract carries what remains, so
- * the windows invert the provider percentage once here.
+ * Codex reports what it consumed, while the contract carries what remains, so the windows
+ * invert the provider percentage once here.
  */
 function percentWindows(
   entries: readonly { window: PercentWindow | null | undefined; fallback: string }[],
 ): Usage.Window[] {
   return entries.flatMap(({ window, fallback }) => {
     if (!window) return []
-    const used = window.used_percent ?? window.utilization
-    if (used === undefined || !Number.isFinite(used)) return []
+    const used = window.used_percent
+    if (!Number.isFinite(used)) return []
     const label = windowLengthLabel(window.limit_window_seconds) ?? fallback
-    const resetsAt = resetTime(window.reset_at ?? window.resets_at)
+    const resetsAt = resetTime(window.reset_at)
     return [
       {
         id: label,

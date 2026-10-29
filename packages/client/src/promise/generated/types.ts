@@ -320,12 +320,7 @@ export type ConfigModelReasoning =
 
 export type ConfigShellOption = { path: string; name: string; acceptable: boolean }
 
-export type UsageSource =
-  | "deepseek-balance"
-  | "antigravity-quota"
-  | "codex-rate-limit"
-  | "claude-code-usage"
-  | "ollama-balance"
+export type UsageSource = "deepseek-balance" | "antigravity-quota" | "codex-rate-limit" | "ollama-balance"
 
 export type UsageBalance = { currency: string; total: string; granted?: string; toppedUp?: string }
 

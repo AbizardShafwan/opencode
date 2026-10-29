@@ -73,7 +73,9 @@ export async function lifecycle(input: {
       },
       true,
     )
-    if (!/^(?:memyr v)?0\.0\.0-memyr-[\d.]+\s*$/.test(output)) throw new Error(`Not a Memyr build: ${output}`)
+    // Stable versions must identify Memyr; a bare version could belong to upstream OpenCode.
+    if (!/^memyr v\d+\.\d+\.\d+\s*$/.test(output) && !/^(?:memyr v)?0\.0\.0-memyr-[\d.]+\s*$/.test(output))
+      throw new Error(`Not a Memyr build: ${output}`)
     await mkdir(path.join(prefix, "releases"), { recursive: true })
     const release = await mkdtemp(path.join(prefix, "releases", "release-"))
     const next = path.join(prefix, `current-${crypto.randomUUID()}`)

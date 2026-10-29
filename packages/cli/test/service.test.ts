@@ -200,10 +200,14 @@ test("service filenames share release channels and identify preview channels", (
   expect(ServiceConfig.filename("local")).toBe("service-local.json")
   expect(ServiceConfig.filename("preview-a")).toBe("service-preview-a.json")
   expect(ServiceConfig.filename("preview/a")).toBe("service-preview-a.json")
+  expect(ServiceConfig.filename("memyr")).toBe("service-memyr.json")
   expect(ServiceConfig.versionBelongsToChannel("0.0.0-preview-a-1234", "preview-a")).toBe(true)
   expect(ServiceConfig.versionBelongsToChannel("0.0.0-preview-a-1234.2", "preview-a")).toBe(true)
   expect(ServiceConfig.versionBelongsToChannel("0.0.0-preview-a-other-1234", "preview-a")).toBe(false)
   expect(ServiceConfig.versionBelongsToChannel("1.2.3", "preview-a")).toBe(false)
+  expect(ServiceConfig.versionBelongsToChannel("1.0.0", "memyr", "1.0.0")).toBe(true)
+  expect(ServiceConfig.versionBelongsToChannel("0.0.0-memyr-1234", "memyr", "1.0.0")).toBe(true)
+  expect(ServiceConfig.versionBelongsToChannel("1.2.3", "memyr", "1.0.0")).toBe(false)
 })
 
 test("service config migrates from the hashed channel filename", async () => {

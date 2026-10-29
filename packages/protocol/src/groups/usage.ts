@@ -24,7 +24,7 @@ export const UsageGroup = HttpApiGroup.make("server.usage")
           identifier: "usage.read",
           summary: "Read provider usage",
           description:
-            "Read the selected model provider's account usage: DeepSeek balance, Antigravity quota pools, or Codex, Claude Code, and Ollama Cloud rate-limit windows. Returns nothing when the provider has no usage to read or its endpoint fails.",
+            "Read the selected model provider's account usage: DeepSeek balance, Antigravity quota pools, or Codex and Ollama Cloud rate-limit windows. Returns nothing when the provider has no usage to read or its endpoint fails.",
         }),
       ),
   )

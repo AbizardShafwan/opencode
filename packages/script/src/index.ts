@@ -37,6 +37,11 @@ const IS_PREVIEW = CHANNEL !== "latest"
 
 const VERSION = await (async () => {
   if (env.OPENCODE_VERSION) return env.OPENCODE_VERSION
+  if (CHANNEL === "memyr") {
+    const version = semver.valid(rootPkg.memyrVersion)
+    if (!version) throw new Error("Root package.json must define a valid memyrVersion")
+    return version
+  }
   if (IS_PREVIEW) return `0.0.0-${CHANNEL}-${previewBuildNumber()}`
   const version = await fetch("https://registry.npmjs.org/@opencode%2fcli/latest")
     .then((res) => {
