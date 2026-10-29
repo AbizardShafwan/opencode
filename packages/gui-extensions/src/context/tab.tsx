@@ -16,6 +16,7 @@ import { createKeyed, useExtension, type MountedSession } from "../sdk"
 import { catalogModel, syncCatalog } from "./catalog"
 import { fetchSessionExport, sessionExportFilename } from "./export"
 import { createSessionContextFormatter } from "./format"
+import { SessionProviderUsage } from "./usage"
 
 function Stat(props: { label: string; value: JSX.Element }) {
   return (
@@ -134,6 +135,8 @@ export default function SessionContextTab(props: { session: MountedSession }) {
       usage: entry?.model?.limit.context ? Math.round((total / entry.model.limit.context) * 100) : null,
     }
   })
+
+  const usageProviderID = createMemo(() => (info()?.model ?? context()?.message.model)?.providerID)
 
   const formatter = createMemo(() => createSessionContextFormatter(i18n.locale()))
 
@@ -294,6 +297,8 @@ export default function SessionContextTab(props: { session: MountedSession }) {
         <div class="grid grid-cols-1 @[32rem]:grid-cols-2 gap-4">
           <For each={stats}>{(stat) => <Stat label={ctx.t(stat.label)} value={stat.value()} />}</For>
         </div>
+
+        <SessionProviderUsage session={props.session} providerID={usageProviderID()} />
 
         <Show when={systemPrompt()}>
           {(prompt) => (

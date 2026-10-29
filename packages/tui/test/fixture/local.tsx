@@ -13,6 +13,7 @@ import { RouteProvider, useRoute } from "../../src/context/route"
 import { ThemeProvider } from "../../src/context/theme"
 import { ToastProvider } from "../../src/ui/toast"
 import { DialogProvider, useDialog } from "../../src/ui/dialog"
+import type { JSX } from "solid-js"
 import type { ModelPreference } from "../../src/model-preference"
 import { tmpdir } from "./fixture"
 import { createApi, createEventStream, createFetch, directory, json, type FetchHandler } from "./tui-client"
@@ -27,6 +28,9 @@ export async function renderLocal(
     preferences?: Partial<ModelPreference>
     args?: Args
     fetch?: FetchHandler
+    children?: () => JSX.Element
+    width?: number
+    height?: number
   } = {},
 ) {
   const temporary = await tmpdir()
@@ -71,6 +75,7 @@ export async function renderLocal(
                           <PermissionProvider>
                             <LocalProvider>
                               <DialogProvider>
+                                {input.children?.()}
                                 <Probe />
                               </DialogProvider>
                             </LocalProvider>
@@ -86,7 +91,7 @@ export async function renderLocal(
         </ArgsProvider>
       </TestTuiContexts>
     ),
-    { width: 100, height: 30, kittyKeyboard: true },
+    { width: input.width ?? 100, height: input.height ?? 30, kittyKeyboard: true },
   )
   await waitForModel(() => local !== undefined && local.model.ready)
   await data.location.sync()

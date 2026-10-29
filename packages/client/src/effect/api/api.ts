@@ -2370,6 +2370,59 @@ export interface ConfigApi<E = never> {
   readonly update: ConfigUpdateOperation<E>
 }
 
+export type UsageReadInput = {
+  readonly location?: { readonly directory?: string | undefined } | undefined
+  readonly providerID: Provider.ID
+}
+export type UsageReadOutput = {
+  readonly location: Location.PublicRef
+  readonly data:
+    | {
+        readonly providerID: Provider.ID
+        readonly source:
+          | "deepseek-balance"
+          | "antigravity-quota"
+          | "codex-rate-limit"
+          | "claude-code-usage"
+          | "ollama-balance"
+        readonly fetchedAt: number
+        readonly balances?:
+          | ReadonlyArray<{
+              readonly currency: string
+              readonly total: string
+              readonly granted?: string | undefined
+              readonly toppedUp?: string | undefined
+            }>
+          | undefined
+        readonly windows?:
+          | ReadonlyArray<{
+              readonly id: string
+              readonly label: string
+              readonly remainingPercent: number
+              readonly resetsAt?: number | undefined
+            }>
+          | undefined
+        readonly groups?:
+          | ReadonlyArray<{
+              readonly label: string
+              readonly description?: string | undefined
+              readonly windows: ReadonlyArray<{
+                readonly id: string
+                readonly label: string
+                readonly remainingPercent: number
+                readonly resetsAt?: number | undefined
+              }>
+            }>
+          | undefined
+      }
+    | undefined
+}
+export type UsageReadOperation<E = never> = (input: UsageReadInput) => Effect.Effect<UsageReadOutput, E>
+
+export interface UsageApi<E = never> {
+  readonly read: UsageReadOperation<E>
+}
+
 export interface AppApi<E = never> {
   readonly server: ServerApi<E>
   readonly location: LocationApi<E>
@@ -2402,4 +2455,5 @@ export interface AppApi<E = never> {
   readonly migration: MigrationApi<E>
   readonly websearch: WebsearchApi<E>
   readonly config: ConfigApi<E>
+  readonly usage: UsageApi<E>
 }

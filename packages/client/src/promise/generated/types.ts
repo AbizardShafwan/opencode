@@ -320,6 +320,17 @@ export type ConfigModelReasoning =
 
 export type ConfigShellOption = { path: string; name: string; acceptable: boolean }
 
+export type UsageSource =
+  | "deepseek-balance"
+  | "antigravity-quota"
+  | "codex-rate-limit"
+  | "claude-code-usage"
+  | "ollama-balance"
+
+export type UsageBalance = { currency: string; total: string; granted?: string; toppedUp?: string }
+
+export type UsageWindow = { id: string; label: string; remainingPercent: number; resetsAt?: number }
+
 export type LocationPublicRef = { directory: AbsolutePath }
 
 export type FileSystemWrite = { path: AbsolutePath }
@@ -874,6 +885,8 @@ export type ConfigModelCapabilities = {
   temperature?: boolean
   reasoning?: ConfigModelReasoning
 }
+
+export type UsageGroup = { label: string; description?: string; windows: Array<UsageWindow> }
 
 export type SessionMessageLocationSwitched = {
   id: SessionMessageID
@@ -2042,6 +2055,15 @@ export type FormReplied = {
   data: { id: FormID; sessionID: string; answer: FormAnswer1 }
 }
 
+export type UsageInfo = {
+  providerID: ProviderID
+  source: UsageSource
+  fetchedAt: number
+  balances?: Array<UsageBalance>
+  windows?: Array<UsageWindow>
+  groups?: Array<UsageGroup>
+}
+
 export type SessionInboxMove = {
   id: SessionMessageID
   sessionID: SessionID
@@ -2432,6 +2454,8 @@ export type CredentialEntry = {
 }
 
 export type FormFields2 = [FormField1, ...Array<FormField1>]
+
+export type UsageResult = UsageInfo | null
 
 export type SessionsResponse = {
   data: Array<SessionInfo>
@@ -6118,3 +6142,16 @@ export type ConfigShellsOutput = Array<ConfigShellOption>
 export type ConfigUpdateInput = { readonly shell: { readonly shell: string | null }["shell"] }
 
 export type ConfigUpdateOutput = void
+
+export type UsageReadInput = {
+  readonly location?: {
+    readonly location?: { readonly directory?: string | undefined } | undefined
+    readonly providerID: string
+  }["location"]
+  readonly providerID: {
+    readonly location?: { readonly directory?: string | undefined } | undefined
+    readonly providerID: string
+  }["providerID"]
+}
+
+export type UsageReadOutput = { location: LocationPublicRef; data: UsageResult }

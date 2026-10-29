@@ -89,6 +89,8 @@ export interface MockServerConfig {
   onRevertStage?: (input: { sessionID: string; messageID: string }) => void
   onSession?: (sessionID: string) => void
   events?: () => OpenCodeEvent[]
+  // Answers `GET /api/usage`; without it, every provider reads as having no usage to show.
+  usage?: (providerID: string) => Schema.Json
   eventRetry?: number
   // Idle event streams send a comment every 15 s like the real server. Set false only to test the client's stall watchdog.
   keepalive?: boolean
@@ -868,6 +870,8 @@ function mockHandlers(
         model: () => Effect.succeed({ location: location(config), data: currentModels(resolve(config.provider)) }),
         modelDefault: () =>
           Effect.succeed({ location: location(config), data: currentDefaultModel(resolve(config.provider)) }),
+        usage: (ctx) =>
+          Effect.succeed({ location: location(config), data: config.usage?.(ctx.query.providerID) ?? null }),
         integrationList: () =>
           Effect.sync(() => ({ location: location(config), data: resolve(config.integrations ?? []) })),
         integrationGet: (ctx) =>

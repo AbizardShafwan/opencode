@@ -337,6 +337,101 @@ for (const direction of ["ltr", "rtl"] as const) {
 }
 
 // A DOM mark survives only while the same node stays mounted.
+test("the context panel lists the selected model provider's account usage", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  const model = { providerID: "deepseek", modelID: "deepseek-chat" }
+  const reads: string[] = []
+
+  await openSession(page, {
+    name: "ContextPanelUsage",
+    provider: {
+      all: [
+        {
+          id: "deepseek",
+          name: "DeepSeek",
+          models: {
+            "deepseek-chat": { id: "deepseek-chat", name: "DeepSeek Chat", limit: { context: 128_000 } },
+          },
+        },
+      ],
+      connected: ["deepseek"],
+      default: model,
+    },
+    sessions: [{ id: "ses_context_panel_usage", title: "Context panel usage", model }],
+    usage: (providerID) => {
+      reads.push(providerID)
+
+      return {
+        providerID,
+        source: "deepseek-balance",
+        fetchedAt: 0,
+        balances: [{ currency: "USD", total: "27.02", granted: "0.00", toppedUp: "27.02" }],
+      }
+    },
+  })
+
+  await page.getByRole("button", { name: "Toggle session context" }).click()
+  const usage = page.locator('[data-slot="session-usage-provider"]')
+  await expect(usage).toContainText("DeepSeek balance")
+  await expect(usage).toContainText("27.02")
+  await expect(usage).toContainText("topped up 27.02")
+  // Only the selected model's provider is asked, so another account's usage never lands in this panel.
+  expect(new Set(reads)).toEqual(new Set(["deepseek"]))
+})
+
+test("the context panel's usage bar empties as a window is spent", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  const model = { providerID: "openai", modelID: "gpt-6-codex" }
+
+  await openSession(page, {
+    name: "ContextPanelUsageBar",
+    provider: {
+      all: [
+        {
+          id: "openai",
+          name: "OpenAI",
+          models: {
+            "gpt-6-codex": { id: "gpt-6-codex", name: "GPT-6 Codex", limit: { context: 272_000 } },
+          },
+        },
+      ],
+      connected: ["openai"],
+      default: model,
+    },
+    sessions: [{ id: "ses_context_panel_usage_bar", title: "Context panel usage bar", model }],
+    usage: (providerID) => ({
+      providerID,
+      source: "codex-rate-limit",
+      fetchedAt: 0,
+      windows: [
+        { id: "5h", label: "5h", remainingPercent: 88 },
+        { id: "weekly", label: "weekly", remainingPercent: 0 },
+      ],
+    }),
+  })
+
+  await page.getByRole("button", { name: "Toggle session context" }).click()
+
+  const full = page.getByRole("progressbar", { name: "5h" })
+  const spent = page.getByRole("progressbar", { name: "weekly" })
+  await expect(full).toHaveAttribute("aria-valuenow", "88")
+  await expect(spent).toHaveAttribute("aria-valuenow", "0")
+  // The bar draws what is left, so a spent window shows an empty track rather than a full one.
+  expect(await filled(full)).toBeCloseTo(0.88, 2)
+  expect(await filled(spent)).toBe(0)
+})
+
+/** The share of a usage bar's track that its fill covers. */
+function filled(track: Locator) {
+  return track.evaluate((element) => {
+    const bar = element.firstElementChild
+
+    if (!(bar instanceof HTMLElement)) return Number.NaN
+
+    return bar.getBoundingClientRect().width / element.getBoundingClientRect().width
+  })
+}
+
 function mark(locator: Locator) {
   return locator.evaluate((element) => element.setAttribute("data-e2e-mounted", "original"))
 }

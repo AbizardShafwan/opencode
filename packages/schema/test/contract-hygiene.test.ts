@@ -15,6 +15,7 @@ import { Pty } from "../src/pty.js"
 import { Session } from "../src/session.js"
 import { SessionMessage } from "../src/session-message.js"
 import { SessionInbox } from "../src/session-inbox.js"
+import { Usage } from "../src/usage.js"
 import { FileDiff } from "../src/file-diff.js"
 import { Money } from "../src/money.js"
 import { Skill } from "../src/skill.js"
@@ -210,6 +211,12 @@ describe("contract hygiene", () => {
       SessionInbox.Compaction,
       SessionInbox.Move,
       SessionInbox.Info,
+      Usage.Source,
+      Usage.Window,
+      Usage.Balance,
+      Usage.Group,
+      Usage.Info,
+      Usage.Result,
       Vcs.Branch,
       Vcs.Info,
     ].map((schema) => schema.ast.annotations?.identifier)

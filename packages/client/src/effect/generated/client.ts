@@ -281,6 +281,8 @@ import type {
   ConfigShellsOutput,
   ConfigUpdateInput,
   ConfigUpdateOutput,
+  UsageReadInput,
+  UsageReadOutput,
 } from "../api/api.js"
 import { ClientError } from "./client-error.js"
 
@@ -1687,6 +1689,15 @@ const adaptGroupConfig = (raw: RawClient["server.config"]) => ({
   update: EndpointConfigUpdate(raw),
 })
 
+const EndpointUsageRead = (raw: RawClient["server.usage"]) => (input: UsageReadInput) =>
+  preserveEffect<UsageReadOutput>()(
+    raw["usage.read"]({ query: { location: input["location"], providerID: input["providerID"] } }).pipe(
+      Effect.mapError(mapClientError),
+    ),
+  )
+
+const adaptGroupUsage = (raw: RawClient["server.usage"]) => ({ read: EndpointUsageRead(raw) })
+
 const adaptClient = (raw: RawClient) => ({
   server: adaptGroupServer(raw["server.server"]),
   location: adaptGroupLocation(raw["server.location"]),
@@ -1719,6 +1730,7 @@ const adaptClient = (raw: RawClient) => ({
   migration: adaptGroupMigration(raw["server.migration"]),
   websearch: adaptGroupWebsearch(raw["server.websearch"]),
   config: adaptGroupConfig(raw["server.config"]),
+  usage: adaptGroupUsage(raw["server.usage"]),
 })
 
 export const make = (options?: { readonly baseUrl?: URL | string }) =>

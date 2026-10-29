@@ -279,6 +279,8 @@ import type {
   ConfigShellsOutput,
   ConfigUpdateInput,
   ConfigUpdateOutput,
+  UsageReadInput,
+  UsageReadOutput,
 } from "./types.js"
 import { ClientError } from "./client-error.js"
 
@@ -2336,6 +2338,20 @@ export function make(options: ClientOptions) {
             successStatus: 204,
             declaredStatuses: [400, 401, 404],
             empty: true,
+          },
+          requestOptions,
+        ),
+    },
+    usage: {
+      read: (input: UsageReadInput, requestOptions?: RequestOptions) =>
+        request<UsageReadOutput>(
+          {
+            method: "GET",
+            path: `/api/usage`,
+            query: { location: input["location"], providerID: input["providerID"] },
+            successStatus: 200,
+            declaredStatuses: [400, 401, 404, 503],
+            empty: false,
           },
           requestOptions,
         ),
