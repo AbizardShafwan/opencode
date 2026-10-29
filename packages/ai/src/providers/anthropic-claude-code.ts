@@ -212,6 +212,7 @@ export type Input = RouteDefaultsInput & {
  */
 export const route = (input: Input) => {
   const { baseURL, authToken, ...defaults } = input
+  const userAgent = `claude-cli/${CLAUDE_CODE_VERSION}`
   return Route.make({
     defaults,
     id: "anthropic-claude-code",
@@ -219,12 +220,13 @@ export const route = (input: Input) => {
     providerMetadataKey: "anthropic",
     protocol,
     endpoint: Endpoint.path(() => "/messages?beta=true", { baseURL }),
-    auth: Auth.bearer(authToken),
+    // Authentication runs after header merging, so the shared Session user-agent cannot replace this identity.
+    auth: Auth.bearer(authToken).andThen(Auth.headers({ "user-agent": userAgent })),
     headers: () => ({
       "anthropic-version": "2023-06-01",
       "anthropic-beta": `${OAUTH_BETA},${CLAUDE_CODE_BETA},${FINE_GRAINED_TOOL_STREAMING_BETA}`,
       "x-app": "cli",
-      "user-agent": `claude-cli/${CLAUDE_CODE_VERSION}`,
+      "user-agent": userAgent,
       "anthropic-dangerous-direct-browser-access": "true",
       accept: "application/json",
     }),
