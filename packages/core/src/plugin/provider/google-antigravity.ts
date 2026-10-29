@@ -2,13 +2,14 @@ import type { IntegrationOAuthMethodRegistration } from "@opencode/plugin/effect
 import { define } from "@opencode/plugin/effect/plugin"
 import { createHash, randomBytes } from "node:crypto"
 import type { Server, ServerResponse } from "node:http"
-import { Clock, Deferred, Effect, Option, Schema, Stream } from "effect"
+import { Clock, Deferred, Effect, Option, Schema, Semaphore, Stream } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http"
 import { isRecord } from "@opencode/ai/utils/record"
 import { Bus } from "../../bus.js"
 import { Credential } from "../../credential.js"
 import { Form } from "../../form.js"
 import { Integration } from "../../integration.js"
+import { IntegrationConnection } from "../../integration/connection.js"
 import { OauthCallbackPage } from "../../oauth/page.js"
 import { Provider } from "../../provider.js"
 import {
@@ -31,7 +32,7 @@ import {
   unwrapResponse,
   wrapRequest,
 } from "../../google-antigravity/client.js"
-import { models } from "../../google-antigravity/models.js"
+import { AvailableModels, models, supportedInventory } from "../../google-antigravity/models.js"
 
 const integrationID = Integration.ID.make("google")
 const methodID = Integration.MethodID.make(METHOD_ID)
@@ -345,9 +346,14 @@ export const GoogleAntigravityPlugin = define({
   effect: Effect.fn(function* (ctx) {
     const client = yield* HttpClient.HttpClient
     const bus = yield* Bus.Service
-    const loaded: { active: boolean; projectId: string | undefined } = {
+    const loading = Semaphore.makeUnsafe(1)
+    const loaded: {
+      active: boolean
+      projectId?: string
+      models?: typeof AvailableModels.Type
+      connection?: Effect.Success<ReturnType<typeof ctx.integration.connection.active>>
+    } = {
       active: false,
-      projectId: undefined,
     }
 
     const load = Effect.fn("GoogleAntigravityPlugin.load")(function* () {
@@ -355,8 +361,50 @@ export const GoogleAntigravityPlugin = define({
       const credential = connection
         ? yield* ctx.integration.connection.resolve(connection).pipe(Effect.orElseSucceed(() => undefined))
         : undefined
-      loaded.active = credential?.type === "oauth" && credential.methodID === methodID
-      loaded.projectId = credential && loaded.active ? text(credential.metadata?.projectId) : undefined
+      if (credential?.type !== "oauth" || credential.methodID !== methodID) {
+        loaded.active = false
+        loaded.projectId = undefined
+        loaded.models = undefined
+        loaded.connection = undefined
+        return
+      }
+      const projectId = text(credential.metadata?.projectId)
+      const remote = yield* Effect.gen(function* () {
+        for (const endpoint of [ENDPOINT, "https://cloudcode-pa.googleapis.com"]) {
+          const result = yield* client
+            .execute(
+              HttpClientRequest.post(`${endpoint}/v1internal:fetchAvailableModels`).pipe(
+                HttpClientRequest.setHeader("authorization", `Bearer ${credential.access}`),
+                HttpClientRequest.setHeader("user-agent", USER_AGENT),
+                HttpClientRequest.bodyJsonUnsafe(projectId ? { project: projectId } : {}),
+              ),
+            )
+            .pipe(
+              Effect.flatMap((response) =>
+                response.status >= 200 && response.status < 300
+                  ? HttpClientResponse.schemaBodyJson(AvailableModels)(response)
+                  : Stream.runDrain(response.stream).pipe(
+                      Effect.andThen(Effect.fail(new Error(`Model discovery returned HTTP ${response.status}`))),
+                    ),
+              ),
+              Effect.timeout("5 seconds"),
+              Effect.orElseSucceed(() => undefined),
+            )
+          if (result) return supportedInventory(result)
+        }
+        return undefined
+      })
+      if (
+        IntegrationConnection.key(connection) !==
+        IntegrationConnection.key(yield* ctx.integration.connection.active(integrationID))
+      )
+        return
+      const sameAccount = IntegrationConnection.key(connection) === IntegrationConnection.key(loaded.connection)
+      loaded.active = true
+      loaded.projectId = projectId
+      loaded.models = remote ?? (sameAccount ? loaded.models : undefined)
+      loaded.connection = connection
+      if (!remote) yield* Effect.logWarning("Failed to discover Google Antigravity models for the active account")
     })
 
     yield* ctx.integration.transform((editor) => {
@@ -366,7 +414,11 @@ export const GoogleAntigravityPlugin = define({
       if (!loaded.active) return
       const provider = evt.get(Provider.ID.google)
       if (!provider) return
-      evt.models.set(Provider.ID.google, models(provider.models))
+      evt.add({
+        info: provider.provider,
+        models: loaded.models ? models(provider.models, loaded.models) : [],
+        sourceConnection: loaded.connection,
+      })
     })
     yield* ctx.session.hook(
       "http.request",
@@ -400,6 +452,7 @@ export const GoogleAntigravityPlugin = define({
                 project,
                 modelID: evt.model.id,
                 sessionID: evt.sessionID,
+                availableModels: loaded.models?.models,
               }),
             ),
             signal: evt.request.signal,
@@ -417,12 +470,12 @@ export const GoogleAntigravityPlugin = define({
       { providerID: Provider.ID.google },
     )
 
+    const refresh = () => loading.withPermit(load().pipe(Effect.andThen(ctx.provider.reload())))
     yield* bus.subscribe(Credential.Event.Switched).pipe(
       Stream.filter((event) => event.data.integrationID === integrationID),
-      Stream.runForEach(() => load().pipe(Effect.andThen(ctx.provider.reload()))),
+      Stream.runForEach(refresh),
       Effect.forkScoped({ startImmediately: true }),
     )
-    yield* load()
-    yield* ctx.provider.reload()
+    yield* refresh()
   }),
 })

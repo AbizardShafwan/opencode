@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { Effect } from "effect"
+import { Deferred, Effect, Fiber, Schema } from "effect"
+import { TestClock } from "effect/testing"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http"
 import { Model } from "@opencode/core/model"
 import { Model as ModelSchema } from "@opencode/schema/model"
@@ -32,6 +33,7 @@ import {
 } from "@opencode/core/google-antigravity/client"
 import { testEffect } from "../lib/effect"
 import { PluginTestLayer } from "./fixture"
+import { GoogleAntigravityModels } from "@opencode/core/google-antigravity/models"
 
 const it = testEffect(PluginTestLayer)
 
@@ -57,8 +59,11 @@ const mock = (responses: ReadonlyArray<unknown>) => {
         headers: web.headers,
         body: yield* Effect.promise(() => web.text()),
       })
-      const body = responses[Math.min(calls.length - 1, responses.length - 1)]
-      return HttpClientResponse.fromWeb(request, Response.json(body))
+      const body = responses[Math.min(calls.length - 1, responses.length - 1)] ?? { models: {} }
+      return HttpClientResponse.fromWeb(
+        request,
+        body instanceof Response ? new Response(null, { status: body.status }) : Response.json(body),
+      )
     }),
   )
   return { http, calls }
@@ -92,6 +97,86 @@ function until<A, E>(
 }
 
 describe("Antigravity model routing", () => {
+  test("derives only advertised text models, including unfamiliar model families", () => {
+    const available = Schema.decodeUnknownSync(GoogleAntigravityModels.AvailableModels)({
+      models: {
+        argon: { displayName: "Argon", supportsImages: false, supportsThinking: false },
+        "gemini-3.8-flash-tiered": { supportsImages: true, supportsThinking: true },
+        "gemini-3.6-flash-low": { supportsThinking: true },
+        "claude-opus-4-6": { supportsThinking: false },
+        tab_hidden: {},
+        chat_hidden: {},
+        internal: { isInternal: true },
+        "gemini-3-pro-image": {},
+        "invalid/id": {},
+      },
+    })
+    const result = GoogleAntigravityModels.models(new Map(), GoogleAntigravityModels.supportedInventory(available))
+    expect(result.map((model) => String(model.id))).toEqual([
+      "argon",
+      "gemini-3.8-flash",
+      "gemini-3.6-flash",
+      "claude-opus-4-6",
+    ])
+    expect(result[0]).toMatchObject({
+      id: "argon",
+      modelID: "argon",
+      name: "Argon",
+      package: "@opencode/ai/providers/google",
+      capabilities: { input: ["text"] },
+      variants: [],
+    })
+    expect(result[1]?.variants.map((variant) => String(variant.id))).toEqual(["low", "medium", "high"])
+    expect(result[2]?.variants.map((variant) => String(variant.id))).toEqual(["low"])
+    expect(result[3]?.variants).toEqual([])
+    expect(GoogleAntigravityModels.models(new Map(), { models: {} })).toEqual([])
+  })
+
+  test("uses an advertised runtime and enum instead of static routing", () => {
+    expect(
+      wrapRequest(
+        { contents: [] },
+        {
+          project: "p1",
+          modelID: "claude-opus-4-6",
+          sessionID: "ses_1",
+          availableModels: { "claude-opus-4-6": { model: "MODEL_FROM_ACCOUNT" } },
+        },
+      ),
+    ).toMatchObject({
+      model: "claude-opus-4-6",
+      request: { labels: { model_enum: "MODEL_FROM_ACCOUNT" } },
+    })
+  })
+
+  test("routes only to available effort variants and rejects unavailable models", () => {
+    const available = GoogleAntigravityModels.supportedInventory({
+      models: { "gemini-3.6-flash-low": {}, "gemini-3.6-flash-high": { isInternal: true } },
+    })
+    expect(
+      wrapRequest(
+        { contents: [] },
+        {
+          project: "p1",
+          modelID: "gemini-3.6-flash",
+          sessionID: "ses_1",
+          availableModels: available.models,
+        },
+      ),
+    ).toMatchObject({ model: "gemini-3.6-flash-low" })
+    expect(() =>
+      wrapRequest(
+        { contents: [] },
+        {
+          project: "p1",
+          modelID: "argon",
+          sessionID: "ses_1",
+          availableModels: {},
+        },
+      ),
+    ).toThrow("not available for this account")
+  })
+
   test("selects the runtime model for each thinking effort", () => {
     expect(runtimeModel("gemini-3.8-flash", { thinkingLevel: "high" })).toBe("gemini-3.8-flash-tiered")
     expect(runtimeModel("gemini-3.7-flash", undefined)).toBe("gemini-3.7-flash-tiered")
@@ -238,9 +323,9 @@ describe("Cloud Code Assist stream decoding", () => {
 describe("Antigravity OAuth", () => {
   test("accepts the loopback callback and rejects a mismatched state", () => {
     expect(callbackCode("http://localhost:51121/oauth-callback?code=abc&state=s1", "s1")).toBe("abc")
-    expect(() =>
-      callbackCode("http://localhost:51121/oauth-callback?code=abc&state=s2", "s1"),
-    ).toThrow("OAuth state mismatch")
+    expect(() => callbackCode("http://localhost:51121/oauth-callback?code=abc&state=s2", "s1")).toThrow(
+      "OAuth state mismatch",
+    )
   })
 
   test("finds the project in each documented response shape", () => {
@@ -272,6 +357,7 @@ describe("Antigravity OAuth", () => {
         tokens,
         { email: "antigravity@example.com" },
         { cloudaicompanionProject: "project-123" },
+        { models: {} },
       ])
       yield* addPlugin(http)
       const integrations = yield* Integration.Service
@@ -308,10 +394,15 @@ describe("Antigravity OAuth", () => {
       })
       expect((yield* integrations.get(integrationID))?.connections).toHaveLength(1)
 
+      yield* until(
+        Effect.sync(() => calls.length),
+        (length) => length >= 4,
+      )
       expect(calls.map((call) => call.url)).toEqual([
         "https://oauth2.googleapis.com/token",
         "https://www.googleapis.com/oauth2/v1/userinfo?alt=json",
         "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
+        "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
       ])
       expect(calls[0]?.headers.get("content-type")).toContain("application/x-www-form-urlencoded")
       expect(new URLSearchParams(calls[0]?.body ?? "").get("code")).toBe("auth-code")
@@ -325,6 +416,7 @@ describe("Antigravity OAuth", () => {
         tokens,
         { email: "antigravity@example.com" },
         { cloudaicompanionProject: "project-123" },
+        { models: {} },
       ])
       yield* addPlugin(http)
       const integrations = yield* Integration.Service
@@ -357,7 +449,7 @@ describe("Antigravity OAuth", () => {
     }),
   )
 
-  it.effect("switches the Google catalog to the Antigravity models while the account is active", () =>
+  it.effect("discovers the active account's models and replaces them on account switches", () =>
     Effect.gen(function* () {
       const providers = yield* Provider.Service
       const credentials = yield* Credential.Service
@@ -390,27 +482,78 @@ describe("Antigravity OAuth", () => {
           metadata: { projectId: "project-123" },
         }),
       })
-      const { http } = mock([])
+      const { http, calls } = mock([
+        { models: { "gemini-3.8-flash-tiered": {}, argon: { displayName: "Argon" }, "claude-sonnet-4-6": {} } },
+        { models: [] },
+        { models: { "second-account-model": { displayName: "Second account model" } } },
+        new Response("unavailable", { status: 503 }),
+      ])
       yield* addPlugin(http)
 
       const ids = (yield* models.all())
         .filter((model) => model.providerID === Provider.ID.google)
         .map((model) => String(model.id))
-      expect(ids).toEqual([
-        "gemini-3.8-flash",
-        "gemini-3.7-flash",
-        "gemini-3.6-flash",
-        "gemini-3.5-flash",
-        "gemini-3.1-pro",
-        "claude-sonnet-4-6",
-        "claude-opus-4-6",
-        "gpt-oss-120b",
-      ])
+      expect(ids).toEqual(["gemini-3.8-flash", "argon", "claude-sonnet-4-6"])
       expect(yield* models.get(Provider.ID.google, ModelSchema.ID.make("claude-sonnet-4-6"))).toMatchObject({
         providerID: Provider.ID.google,
         package: "@opencode/ai/providers/google",
         enabled: true,
       })
+      expect(calls[0]?.url).toEndWith("/v1internal:fetchAvailableModels")
+      expect(calls[0]?.headers.get("authorization")).toBe(`Bearer ${tokens.access_token}`)
+      expect(JSON.parse(calls[0]?.body ?? "{}")).toEqual({ project: "project-123" })
+
+      yield* credentials.create({
+        integrationID,
+        value: Credential.OAuth.make({
+          type: "oauth",
+          methodID,
+          access: "second-token",
+          refresh: "second-refresh",
+          expires: Date.now() + 3_600_000,
+          metadata: { projectId: "second-project" },
+        }),
+      })
+      yield* until(models.all(), (values) => values.some((model) => model.id === "second-account-model"))
+      expect(
+        (yield* models.all())
+          .filter((model) => model.providerID === Provider.ID.google)
+          .map((model) => String(model.id)),
+      ).toEqual(["second-account-model"])
+      expect(calls[1]?.headers.get("authorization")).toBe("Bearer second-token")
+      expect(JSON.parse(calls[1]?.body ?? "{}")).toEqual({ project: "second-project" })
+      expect(calls[2]?.url).toBe("https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels")
+      expect(calls[2]?.headers.get("authorization")).toBe("Bearer second-token")
+
+      // A failed discovery for a different account must not reuse the previous account's inventory.
+      yield* credentials.create({
+        integrationID,
+        value: Credential.OAuth.make({
+          type: "oauth",
+          methodID,
+          access: "third-token",
+          refresh: "third-refresh",
+          expires: Date.now() + 3_600_000,
+          metadata: { projectId: "third-project" },
+        }),
+      })
+      yield* until(
+        Effect.sync(() => calls.length),
+        (length) => length >= 5,
+      )
+      yield* until(models.all(), (values) => !values.some((model) => model.providerID === Provider.ID.google))
+      expect(calls.slice(3).map((call) => call.url)).toEqual([
+        "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+        "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+      ])
+
+      yield* credentials.create({ integrationID, value: Credential.Key.make({ type: "key", key: "api-key" }) })
+      yield* until(models.all(), (values) => values.some((model) => model.id === "gemini-3.8-flash"))
+      expect(
+        (yield* models.all())
+          .filter((model) => model.providerID === Provider.ID.google)
+          .map((model) => String(model.id)),
+      ).toEqual(["gemini-3.8-flash"])
     }),
   )
 
@@ -440,11 +583,58 @@ describe("Antigravity OAuth", () => {
         integrationID,
         value: Credential.Key.make({ type: "key", key: "google-api-key" }),
       })
-      const { http } = mock([])
+      const { http, calls } = mock([])
       yield* addPlugin(http)
 
-      expect((yield* models.all()).filter((model) => model.providerID === Provider.ID.google).map((model) => model.id)).toEqual([
-        ModelSchema.ID.make("gemini-3.8-flash"),
+      expect(
+        (yield* models.all()).filter((model) => model.providerID === Provider.ID.google).map((model) => model.id),
+      ).toEqual([ModelSchema.ID.make("gemini-3.8-flash")])
+      expect(calls).toEqual([])
+    }),
+  )
+
+  it.effect("cancels a timed-out discovery before trying the fallback endpoint", () =>
+    Effect.gen(function* () {
+      const credentials = yield* Credential.Service
+      yield* credentials.create({
+        integrationID,
+        value: Credential.OAuth.make({
+          type: "oauth",
+          methodID,
+          access: tokens.access_token,
+          refresh: tokens.refresh_token,
+          expires: Date.now() + 3_600_000,
+          metadata: { projectId: "project-123" },
+        }),
+      })
+      const started = yield* Deferred.make<void>()
+      const calls: string[] = []
+      let cancelled = false
+      const http = HttpClient.make((request) =>
+        Effect.gen(function* () {
+          calls.push(request.url)
+          if (request.url.startsWith("https://daily-cloudcode-pa.googleapis.com")) {
+            yield* Deferred.succeed(started, undefined)
+            return yield* Effect.never.pipe(
+              Effect.onInterrupt(() =>
+                Effect.sync(() => {
+                  cancelled = true
+                }),
+              ),
+            )
+          }
+          return HttpClientResponse.fromWeb(request, Response.json({ models: {} }))
+        }),
+      )
+      const loading = yield* addPlugin(http).pipe(Effect.forkChild({ startImmediately: true }))
+      yield* Deferred.await(started)
+      yield* Effect.yieldNow
+      yield* TestClock.adjust("5 seconds")
+      yield* Fiber.join(loading)
+      expect(cancelled).toBe(true)
+      expect(calls).toEqual([
+        "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+        "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
       ])
     }),
   )
@@ -463,7 +653,7 @@ describe("Antigravity OAuth", () => {
           metadata: { projectId: "project-123" },
         }),
       })
-      const { http } = mock([])
+      const { http } = mock([{ models: { argon: { displayName: "Argon", model: "MODEL_ARGON" } } }])
       yield* addPlugin(http)
 
       const session = Session.Info.make({
@@ -474,7 +664,7 @@ describe("Antigravity OAuth", () => {
         time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0) },
         location: Location.Ref.make({ directory: AbsolutePath.make("/project") }),
       })
-      const model = SessionRunnerModel.resolved(Gemini.route.model({ id: "gemini-3.8-flash", provider: "google" }), {
+      const model = SessionRunnerModel.resolved(Gemini.route.model({ id: "argon", provider: "google" }), {
         capabilities: { tools: true, input: ["text", "image"], output: ["text"] },
         cost: [],
         limit: { context: 1_048_576, output: 65_536 },
@@ -493,7 +683,7 @@ describe("Antigravity OAuth", () => {
       let captured: { url: string; headers: Headers; body: string } | undefined
       const result = yield* middleware(
         HttpClientRequest.post(
-          "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse",
+          "https://generativelanguage.googleapis.com/v1beta/models/argon:streamGenerateContent?alt=sse",
         ).pipe(
           HttpClientRequest.setHeader("x-goog-api-key", tokens.access_token),
           HttpClientRequest.setHeader("content-type", "application/json"),
@@ -522,12 +712,12 @@ describe("Antigravity OAuth", () => {
       expect(captured?.headers.get("x-goog-api-key")).toBeNull()
       expect(JSON.parse(captured?.body ?? "{}")).toMatchObject({
         project: "project-123",
-        model: "gemini-3.8-flash-tiered",
+        model: "argon",
         requestType: "agent",
         userAgent: "antigravity",
         request: {
           contents: [{ role: "user", parts: [{ text: "hi" }] }],
-          generationConfig: { thinkingConfig: { includeThoughts: true, thinkingBudget: -1 } },
+          labels: { model_enum: "MODEL_ARGON" },
         },
       })
       expect(yield* result.text).toContain('"candidates"')

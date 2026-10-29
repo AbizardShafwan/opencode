@@ -145,6 +145,15 @@ export function runtimeModel(modelID: string, thinking: Thinking | undefined): s
   return routed[effort] ?? routed.high ?? modelID
 }
 
+/** Keep existing public IDs stable when availability advertises their runtime variants. */
+export function publicModelID(runtime: string): string {
+  return (
+    Object.entries(FIXED).find(([, value]) => value === runtime)?.[0] ??
+    Object.entries(ROUTED).find(([, values]) => Object.values(values).includes(runtime))?.[0] ??
+    runtime
+  )
+}
+
 /**
  * Cloud Code Assist models use explicit budgets rather than the public API's
  * `thinkingLevel`. Values mirror the reference Antigravity adapters.
@@ -220,12 +229,22 @@ export interface WrapInput {
   readonly project: string
   readonly modelID: string
   readonly sessionID: string
+  readonly availableModels?: Readonly<Record<string, { readonly model?: string }>>
 }
 
 /** Build the Cloud Code Assist request envelope around a Gemini generateContent body. */
 export function wrapRequest(body: Json, input: WrapInput): Json {
   const thinking = thinkingOf(body)
-  const runtime = runtimeModel(input.modelID, thinking)
+  const preferred = runtimeModel(input.modelID, thinking)
+  const available = input.availableModels
+  const runtime =
+    !available || available[preferred]
+      ? preferred
+      : available[input.modelID]
+        ? input.modelID
+        : (Object.keys(available).find((id) => publicModelID(id) === input.modelID) ?? preferred)
+  if (available && !available[runtime])
+    throw new Error(`Google Antigravity model ${input.modelID} is not available for this account`)
   const generation = isRecord(body.generationConfig) ? body.generationConfig : undefined
   const request: Json = { ...body }
 
@@ -249,7 +268,7 @@ export function wrapRequest(body: Json, input: WrapInput): Json {
   const step = Math.max(1, contents.length)
   const claude = runtime.startsWith("claude-") || input.modelID.startsWith("claude-")
   const nonGemini = claude || runtime.startsWith("gpt-oss-") || input.modelID.startsWith("gpt-oss-")
-  const modelEnum = MODEL_ENUMS[runtime] ?? MODEL_ENUMS[input.modelID]
+  const modelEnum = available?.[runtime]?.model ?? MODEL_ENUMS[runtime] ?? MODEL_ENUMS[input.modelID]
 
   request.sessionId = session
   request.labels = {
