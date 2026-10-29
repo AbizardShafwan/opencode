@@ -1,5 +1,5 @@
 import { Effect } from "effect"
-import { LLMRequest, ProviderID, type LLMEvent, type ToolDefinition } from "../schema/index.js"
+import { LLMRequest, ProviderID, type LLMEvent } from "../schema/index.js"
 import { AnthropicMessages } from "../protocols/anthropic-messages.js"
 import * as ProviderShared from "../protocols/shared.js"
 import { Auth } from "../route/auth.js"
@@ -16,9 +16,10 @@ export const id = ProviderID.make("anthropic")
 export const SYSTEM_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude."
 
 /** Compatibility values mirrored from the reference Claude Code client. */
-const CLAUDE_CODE_VERSION = "2.1.75"
+const CLAUDE_CODE_VERSION = "2.1.295"
 const OAUTH_BETA = "oauth-2025-04-20"
 const CLAUDE_CODE_BETA = "claude-code-20250219"
+const FINE_GRAINED_TOOL_STREAMING_BETA = "fine-grained-tool-streaming-2025-05-14"
 
 /**
  * Anthropic requires its first-party tool names in canonical casing on OAuth
@@ -46,46 +47,92 @@ const CLAUDE_CODE_TOOL_NAMES = [
 ] as const
 
 const CANONICAL_TOOL_NAMES = new Map(CLAUDE_CODE_TOOL_NAMES.map((name) => [name.toLowerCase(), name]))
+const MCP_ALIAS_PREFIX = "mcp__memyr__"
+const MAX_TOOL_NAME_LENGTH = 128
 
 type ToolNames = {
-  /** Lowercased request name → canonical wire name. */
+  /** Exact request name → wire name. */
   readonly toWire: ReadonlyMap<string, string>
-  /** Lowercased canonical wire name → request name. */
+  /** Lowercased wire name → request name. */
   readonly fromWire: ReadonlyMap<string, string>
 }
 
 /**
- * Build a reversible name map for one request. A canonical name is only used
- * when exactly one offered tool claims it, so two tools differing only by case
- * cannot be silently dispatched to each other.
+ * Build a reversible name map for one request. Claude Code tools keep their
+ * canonical casing. Every other flat tool is advertised under an MCP-style
+ * alias, the shape Anthropic accepts for third-party tool definitions on a
+ * subscription connection. Names already using that shape pass through.
  */
 export function toolNames(request: LLMRequest): ToolNames {
-  const tools: ReadonlyArray<ToolDefinition> = ProviderShared.flattenToolRequest(request).tools
+  const flattened = ProviderShared.flattenToolRequest(request)
+  const names = new Set(flattened.tools.map((tool) => tool.name))
+  for (const message of flattened.request.messages) {
+    for (const part of message.content) {
+      if (part.type === "tool-call" || part.type === "tool-result") names.add(part.name)
+    }
+  }
+  if (request.toolChoice?.type === "tool" && request.toolChoice.name) names.add(request.toolChoice.name)
+
   const claimed = new Map<string, number>()
-  for (const tool of tools) {
-    const canonical = CANONICAL_TOOL_NAMES.get(tool.name.toLowerCase())
+  for (const name of names) {
+    const canonical = CANONICAL_TOOL_NAMES.get(name.toLowerCase())
     if (canonical) claimed.set(canonical, (claimed.get(canonical) ?? 0) + 1)
   }
 
   const toWire = new Map<string, string>()
   const fromWire = new Map<string, string>()
-  for (const tool of tools) {
-    const canonical = CANONICAL_TOOL_NAMES.get(tool.name.toLowerCase())
+  const taken = new Set<string>()
+  const ordered = Array.from(names).sort()
+  for (const name of ordered) {
+    const canonical = CANONICAL_TOOL_NAMES.get(name.toLowerCase())
     if (!canonical || claimed.get(canonical) !== 1) continue
-    toWire.set(tool.name.toLowerCase(), canonical)
-    fromWire.set(canonical.toLowerCase(), tool.name)
+    toWire.set(name, canonical)
+    fromWire.set(canonical.toLowerCase(), name)
+    taken.add(canonical.toLowerCase())
+  }
+  for (const name of ordered) {
+    if (toWire.has(name)) continue
+    const wire = validMCPName(name) && !taken.has(name.toLowerCase()) ? name : reserveAlias(name, taken)
+    toWire.set(name, wire)
+    fromWire.set(wire.toLowerCase(), name)
   }
   return { toWire, fromWire }
 }
 
-const wireName = (name: string, names: ToolNames) => names.toWire.get(name.toLowerCase()) ?? name
+const validMCPName = (name: string) =>
+  name.startsWith("mcp__") && name.length <= MAX_TOOL_NAME_LENGTH && /^[a-zA-Z0-9_-]+$/.test(name)
+
+const sanitizeAlias = (name: string) => {
+  const value = name
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+  return value || "tool"
+}
+
+const reserveAlias = (name: string, taken: Set<string>) => {
+  const base = `${MCP_ALIAS_PREFIX}${sanitizeAlias(name)}`
+  let candidate = base.slice(0, MAX_TOOL_NAME_LENGTH)
+  let suffix = 2
+  while (taken.has(candidate.toLowerCase())) {
+    const ending = `_${suffix}`
+    candidate = `${base.slice(0, MAX_TOOL_NAME_LENGTH - ending.length)}${ending}`
+    suffix += 1
+  }
+  taken.add(candidate.toLowerCase())
+  return candidate
+}
+
+const wireName = (name: string, names: ToolNames) => names.toWire.get(name) ?? name
 const requestName = (name: string, names: ToolNames) => names.fromWire.get(name.toLowerCase()) ?? name
 
 type Body = AnthropicMessages.AnthropicMessagesBody
 
 function subscriptionBody(request: LLMRequest, body: Body): Body {
   const names = toolNames(request)
-  const system = body.system ?? []
+  const system = (body.system ?? []).map((block, index) =>
+    index === 0 ? { ...block, text: block.text.replace(/^You are Memyr,/, "You are the CLI,") } : block,
+  )
   const hasIdentity = system[0]?.text.trimStart().startsWith(SYSTEM_IDENTITY)
   return {
     ...body,
@@ -175,9 +222,10 @@ export const route = (input: Input) => {
     auth: Auth.bearer(authToken),
     headers: () => ({
       "anthropic-version": "2023-06-01",
-      "anthropic-beta": `${OAUTH_BETA},${CLAUDE_CODE_BETA}`,
+      "anthropic-beta": `${OAUTH_BETA},${CLAUDE_CODE_BETA},${FINE_GRAINED_TOOL_STREAMING_BETA}`,
       "x-app": "cli",
       "user-agent": `claude-cli/${CLAUDE_CODE_VERSION}`,
+      "anthropic-dangerous-direct-browser-access": "true",
       accept: "application/json",
     }),
     transport: AnthropicMessages.transport<AnthropicMessages.AnthropicMessagesBody>(),

@@ -133,7 +133,7 @@ describe("Anthropic subscription authentication", () => {
       expect(calls).toHaveLength(1)
       expect(calls[0]!.url).toBe(tokenURL)
       expect(calls[0]!.headers.get("content-type")).toContain("application/json")
-      expect(calls[0]!.headers.get("user-agent")).toBe("claude-cli/2.1.75")
+      expect(calls[0]!.headers.get("user-agent")).toBe("claude-cli/2.1.295")
       const body = JSON.parse(calls[0]!.body)
       expect(body).toMatchObject({
         grant_type: "authorization_code",
