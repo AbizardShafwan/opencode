@@ -25,7 +25,7 @@ const scopes = [
   "user:mcp_servers",
   "user:file_upload",
 ].join(" ")
-const claudeCodeVersion = "2.1.75"
+const claudeCodeVersion = "2.1.295"
 
 const Account = Schema.Struct({
   uuid: Schema.optional(Schema.String),

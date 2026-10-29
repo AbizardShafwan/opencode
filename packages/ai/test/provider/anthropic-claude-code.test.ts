@@ -20,6 +20,8 @@ const tools = [
   ToolDefinition.make({ name: "read", description: "Read a file", inputSchema: { type: "object" } }),
   ToolDefinition.make({ name: "grep", description: "Search files", inputSchema: { type: "object" } }),
   ToolDefinition.make({ name: "custom_tool", description: "Custom", inputSchema: { type: "object" } }),
+  ToolDefinition.make({ name: "execute", description: "Run code", inputSchema: { type: "object" } }),
+  ToolDefinition.make({ name: "patch", description: "Patch a file", inputSchema: { type: "object" } }),
 ]
 
 const request = LLM.request({
@@ -47,7 +49,9 @@ describe("Anthropic Claude Code subscription route", () => {
       expect(prepared.body.tools).toEqual([
         { name: "Read", description: "Read a file", input_schema: { type: "object" } },
         { name: "Grep", description: "Search files", input_schema: { type: "object" } },
-        { name: "custom_tool", description: "Custom", input_schema: { type: "object" } },
+        { name: "mcp__memyr__custom_tool", description: "Custom", input_schema: { type: "object" } },
+        { name: "mcp__memyr__execute", description: "Run code", input_schema: { type: "object" } },
+        { name: "mcp__memyr__patch", description: "Patch a file", input_schema: { type: "object" } },
       ])
       expect(prepared.body.tool_choice).toEqual({ type: "tool", name: "Read" })
       expect(prepared.body.messages).toMatchObject([
@@ -72,7 +76,7 @@ describe("Anthropic Claude Code subscription route", () => {
     }),
   )
 
-  it.effect("leaves ambiguous case variants untouched", () =>
+  it.effect("aliases ambiguous case variants instead of leaving flat names", () =>
     Effect.gen(function* () {
       const prepared = yield* compileRequest(
         LLMRequest.update(request, {
@@ -83,7 +87,20 @@ describe("Anthropic Claude Code subscription route", () => {
         }),
       )
 
-      expect(prepared.body.tools?.map((tool) => tool.name)).toEqual(["read", "Read"])
+      expect(prepared.body.tools?.map((tool) => tool.name)).toEqual(["mcp__memyr__read_2", "mcp__memyr__read"])
+    }),
+  )
+
+  it.effect("neutralizes the Memyr identity line on the subscription wire", () =>
+    Effect.gen(function* () {
+      const prepared = yield* compileRequest(
+        LLMRequest.update(request, { system: [{ type: "text", text: "You are Memyr, a coding agent." }] }),
+      )
+
+      expect(prepared.body.system).toEqual([
+        { type: "text", text: AnthropicClaudeCode.SYSTEM_IDENTITY },
+        { type: "text", text: "You are the CLI, a coding agent." },
+      ])
     }),
   )
 
@@ -93,9 +110,10 @@ describe("Anthropic Claude Code subscription route", () => {
       const deployment = route.headers!({ request })
       expect(deployment).toEqual({
         "anthropic-version": "2023-06-01",
-        "anthropic-beta": "oauth-2025-04-20,claude-code-20250219",
+        "anthropic-beta": "oauth-2025-04-20,claude-code-20250219,fine-grained-tool-streaming-2025-05-14",
         "x-app": "cli",
-        "user-agent": "claude-cli/2.1.75",
+        "user-agent": "claude-cli/2.1.295",
+        "anthropic-dangerous-direct-browser-access": "true",
         accept: "application/json",
       })
 
@@ -206,10 +224,46 @@ describe("Anthropic Claude Code subscription route", () => {
       expect(JSON.parse(sent.body).tools).toMatchObject([{ name: "Read" }])
       expect(sent.headers.get("authorization")).toBe("Bearer sk-ant-oat-test")
       expect(sent.headers.get("x-app")).toBe("cli")
-      expect(sent.headers.get("user-agent")).toBe("claude-cli/2.1.75")
+      expect(sent.headers.get("user-agent")).toBe("claude-cli/2.1.295")
       expect(sent.headers.get("anthropic-beta")).toContain("oauth-2025-04-20")
       expect(sent.headers.get("anthropic-beta")).toContain("claude-code-20250219")
+      expect(sent.headers.get("anthropic-beta")).toContain("fine-grained-tool-streaming-2025-05-14")
       expect(sent.headers.get("anthropic-beta")).toContain("interleaved-thinking-2025-05-14")
+    }),
+  )
+
+  it.effect("round-trips an aliased CodeMode tool to its request name", () =>
+    Effect.gen(function* () {
+      const calls: Call[] = []
+      const body = sseEvents(
+        { type: "message_start", message: { usage: { input_tokens: 5 } } },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "tool_use", id: "call_1", name: "mcp__memyr__execute" },
+        },
+        { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '{"code":"1"}' } },
+        { type: "content_block_stop", index: 0 },
+        { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 1 } },
+        { type: "message_stop" },
+      )
+      const response = yield* LLMClient.generate(
+        LLMRequest.update(request, {
+          tools: [ToolDefinition.make({ name: "execute", description: "Run code", inputSchema: { type: "object" } })],
+        }),
+      ).pipe(
+        Effect.provide(
+          dynamicResponse((input) =>
+            Effect.gen(function* () {
+              yield* observe(calls, input)
+              return input.respond(body, { headers: { "content-type": "text/event-stream" } })
+            }),
+          ),
+        ),
+      )
+
+      expect(response.toolCalls).toMatchObject([{ type: "tool-call", name: "execute" }])
+      expect(JSON.parse(calls[0]!.body).tools).toMatchObject([{ name: "mcp__memyr__execute" }])
     }),
   )
 })
