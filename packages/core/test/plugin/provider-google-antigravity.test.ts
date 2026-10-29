@@ -22,8 +22,12 @@ import { Agent } from "@opencode/schema/agent"
 import { Money } from "@opencode/schema/money"
 import { DateTime } from "effect"
 import {
+  DEFAULT_CLIENT_ID,
+  DEFAULT_CLIENT_SECRET,
   METHOD_ID,
   callbackCode,
+  clientID,
+  clientSecret,
   projectIdFromPayload,
   runtimeModel,
   thinkingFor,
@@ -101,9 +105,51 @@ describe("Antigravity model routing", () => {
     const available = Schema.decodeUnknownSync(GoogleAntigravityModels.AvailableModels)({
       models: {
         argon: { displayName: "Argon", supportsImages: false, supportsThinking: false },
+        "gemini-4-argon-high": { displayName: "Gemini 4 Argon (High)", supportsImages: true, supportsThinking: true },
+        "gemini-4-argon-medium": {
+          displayName: "Gemini 4 Argon (Medium)",
+          supportsImages: true,
+          supportsThinking: true,
+        },
+        "gemini-4-argon-low": { displayName: "Gemini 4 Argon (Low)", supportsImages: true, supportsThinking: true },
+        "claude-opus-5-5-low": { displayName: "Claude Opus 5.5 (Low)", supportsImages: true, supportsThinking: true },
+        "claude-opus-5-5-high": { displayName: "Claude Opus 5.5 (High)", supportsImages: true, supportsThinking: true },
+        "claude-opus-5-5-medium": {
+          displayName: "Claude Opus 5.5 (Medium)",
+          supportsImages: true,
+          supportsThinking: true,
+        },
+        "claude-sonnet-5-5-medium": {
+          displayName: "Claude Sonnet 5.5 (Medium)",
+          supportsImages: true,
+          supportsThinking: true,
+        },
+        "claude-sonnet-5-5-low": {
+          displayName: "Claude Sonnet 5.5 (Low)",
+          supportsImages: true,
+          supportsThinking: true,
+        },
+        "claude-sonnet-5-5-high": {
+          displayName: "Claude Sonnet 5.5 (High)",
+          supportsImages: true,
+          supportsThinking: true,
+        },
         "gemini-3.8-flash-tiered": { supportsImages: true, supportsThinking: true },
+        "gemini-3.8-flash-low": { displayName: "Gemini 3.8 Flash (Low)", supportsImages: true, supportsThinking: true },
+        "gemini-3.8-flash-medium": {
+          displayName: "Gemini 3.8 Flash (Medium)",
+          supportsImages: true,
+          supportsThinking: true,
+        },
+        "gemini-3.8-flash-high": {
+          displayName: "Gemini 3.8 Flash (High)",
+          supportsImages: true,
+          supportsThinking: true,
+        },
         "gemini-3.6-flash-low": { supportsThinking: true },
         "claude-opus-4-6": { supportsThinking: false },
+        "future-model-high": { displayName: "Future Model (High)", supportsThinking: true },
+        "future-model-low": { displayName: "Future Model (Low)", supportsThinking: true },
         tab_hidden: {},
         chat_hidden: {},
         internal: { isInternal: true },
@@ -114,9 +160,13 @@ describe("Antigravity model routing", () => {
     const result = GoogleAntigravityModels.models(new Map(), GoogleAntigravityModels.supportedInventory(available))
     expect(result.map((model) => String(model.id))).toEqual([
       "argon",
+      "gemini-4-argon",
+      "claude-opus-5-5",
+      "claude-sonnet-5-5",
       "gemini-3.8-flash",
       "gemini-3.6-flash",
       "claude-opus-4-6",
+      "future-model",
     ])
     expect(result[0]).toMatchObject({
       id: "argon",
@@ -126,9 +176,39 @@ describe("Antigravity model routing", () => {
       capabilities: { input: ["text"] },
       variants: [],
     })
+    expect(result[1]).toMatchObject({
+      id: "gemini-4-argon",
+      modelID: "gemini-4-argon",
+      name: "Gemini 4 Argon",
+      capabilities: { input: ["text", "image"] },
+    })
     expect(result[1]?.variants.map((variant) => String(variant.id))).toEqual(["low", "medium", "high"])
-    expect(result[2]?.variants.map((variant) => String(variant.id))).toEqual(["low"])
-    expect(result[3]?.variants).toEqual([])
+    expect(result[2]).toMatchObject({
+      id: "claude-opus-5-5",
+      modelID: "claude-opus-5-5",
+      name: "Claude Opus 5.5",
+      limit: { context: 250_000, output: 64_000 },
+    })
+    expect(result[2]?.variants.map((variant) => String(variant.id))).toEqual(["low", "medium", "high"])
+    expect(result[3]).toMatchObject({
+      id: "claude-sonnet-5-5",
+      modelID: "claude-sonnet-5-5",
+      name: "Claude Sonnet 5.5",
+      limit: { context: 200_000, output: 64_000 },
+    })
+    expect(result[3]?.variants.map((variant) => String(variant.id))).toEqual(["low", "medium", "high"])
+    expect(result[4]).toMatchObject({
+      id: "gemini-3.8-flash",
+      name: "Gemini 3.8 Flash",
+    })
+    expect(result[4]?.variants.map((variant) => String(variant.id))).toEqual(["low", "medium", "high"])
+    expect(result[5]?.variants.map((variant) => String(variant.id))).toEqual(["low"])
+    expect(result[6]?.variants).toEqual([])
+    expect(result[7]).toMatchObject({
+      id: "future-model",
+      name: "Future Model",
+    })
+    expect(result[7]?.variants.map((variant) => String(variant.id))).toEqual(["low", "high"])
     expect(GoogleAntigravityModels.models(new Map(), { models: {} })).toEqual([])
   })
 
@@ -151,7 +231,15 @@ describe("Antigravity model routing", () => {
 
   test("routes only to available effort variants and rejects unavailable models", () => {
     const available = GoogleAntigravityModels.supportedInventory({
-      models: { "gemini-3.6-flash-low": {}, "gemini-3.6-flash-high": { isInternal: true } },
+      models: {
+        "gemini-3.6-flash-low": {},
+        "gemini-3.6-flash-high": { isInternal: true },
+        "gemini-4-argon-low": { model: "MODEL_ARGON_LOW" },
+        "gemini-4-argon-medium": { model: "MODEL_ARGON_MEDIUM" },
+        "gemini-4-argon-high": { model: "MODEL_ARGON_HIGH" },
+        "claude-opus-5-5-low": { model: "MODEL_OPUS_LOW" },
+        "claude-opus-5-5-high": { model: "MODEL_OPUS_HIGH" },
+      },
     })
     expect(
       wrapRequest(
@@ -164,6 +252,71 @@ describe("Antigravity model routing", () => {
         },
       ),
     ).toMatchObject({ model: "gemini-3.6-flash-low" })
+    expect(
+      wrapRequest(
+        { contents: [] },
+        {
+          project: "p1",
+          modelID: "gemini-4-argon",
+          sessionID: "ses_1",
+          availableModels: available.models,
+        },
+      ),
+    ).toMatchObject({
+      model: "gemini-4-argon-high",
+      request: { labels: { model_enum: "MODEL_ARGON_HIGH" } },
+    })
+    expect(
+      wrapRequest(
+        { contents: [], generationConfig: { thinkingConfig: { includeThoughts: true, thinkingLevel: "low" } } },
+        {
+          project: "p1",
+          modelID: "gemini-4-argon",
+          sessionID: "ses_1",
+          availableModels: available.models,
+        },
+      ),
+    ).toMatchObject({
+      model: "gemini-4-argon-low",
+      request: {
+        generationConfig: { thinkingConfig: { includeThoughts: true, thinkingBudget: 1000 } },
+        labels: { model_enum: "MODEL_ARGON_LOW" },
+      },
+    })
+    expect(
+      wrapRequest(
+        { contents: [], generationConfig: { thinkingConfig: { includeThoughts: true, thinkingLevel: "medium" } } },
+        {
+          project: "p1",
+          modelID: "gemini-4-argon",
+          sessionID: "ses_1",
+          availableModels: available.models,
+        },
+      ),
+    ).toMatchObject({
+      model: "gemini-4-argon-medium",
+      request: {
+        generationConfig: { thinkingConfig: { includeThoughts: true, thinkingBudget: 4000 } },
+        labels: { model_enum: "MODEL_ARGON_MEDIUM" },
+      },
+    })
+    expect(
+      wrapRequest(
+        { contents: [], generationConfig: { thinkingConfig: { includeThoughts: true, thinkingLevel: "low" } } },
+        {
+          project: "p1",
+          modelID: "claude-opus-5-5",
+          sessionID: "ses_1",
+          availableModels: available.models,
+        },
+      ),
+    ).toMatchObject({
+      model: "claude-opus-5-5-low",
+      request: {
+        generationConfig: { thinkingConfig: { includeThoughts: true, thinkingBudget: 1024 } },
+        labels: { model_enum: "MODEL_OPUS_LOW", used_claude: "true" },
+      },
+    })
     expect(() =>
       wrapRequest(
         { contents: [] },
@@ -178,6 +331,10 @@ describe("Antigravity model routing", () => {
   })
 
   test("selects the runtime model for each thinking effort", () => {
+    expect(runtimeModel("gemini-4-argon", { thinkingLevel: "low" })).toBe("gemini-4-argon-low")
+    expect(runtimeModel("gemini-4-argon", { thinkingLevel: "medium" })).toBe("gemini-4-argon-medium")
+    expect(runtimeModel("gemini-4-argon", { thinkingLevel: "high" })).toBe("gemini-4-argon-high")
+    expect(runtimeModel("claude-opus-5-5", { thinkingLevel: "low" })).toBe("claude-opus-5-5-low")
     expect(runtimeModel("gemini-3.8-flash", { thinkingLevel: "high" })).toBe("gemini-3.8-flash-tiered")
     expect(runtimeModel("gemini-3.7-flash", undefined)).toBe("gemini-3.7-flash-tiered")
     expect(runtimeModel("gemini-3.6-flash", { thinkingLevel: "low" })).toBe("gemini-3.6-flash-low")
@@ -193,6 +350,18 @@ describe("Antigravity model routing", () => {
   })
 
   test("translates thinking levels into Antigravity budgets", () => {
+    expect(thinkingFor("gemini-4-argon-low", { thinkingLevel: "low" })).toEqual({
+      includeThoughts: true,
+      thinkingBudget: 1000,
+    })
+    expect(thinkingFor("gemini-4-argon-medium", { thinkingLevel: "medium" })).toEqual({
+      includeThoughts: true,
+      thinkingBudget: 4000,
+    })
+    expect(thinkingFor("gemini-4-argon-high", { thinkingLevel: "high" })).toEqual({
+      includeThoughts: true,
+      thinkingBudget: -1,
+    })
     expect(thinkingFor("gemini-3.6-flash-low", { thinkingLevel: "low" })).toEqual({
       includeThoughts: true,
       thinkingBudget: 1000,
@@ -321,6 +490,19 @@ describe("Cloud Code Assist stream decoding", () => {
 })
 
 describe("Antigravity OAuth", () => {
+  test("resolves the shared desktop OAuth client defaults and honors non-blank environment overrides", () => {
+    expect(DEFAULT_CLIENT_ID).toBe("1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com")
+    expect(DEFAULT_CLIENT_SECRET).toBe("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")
+    expect(clientID({})).toBe(DEFAULT_CLIENT_ID)
+    expect(clientSecret({})).toBe(DEFAULT_CLIENT_SECRET)
+    expect(clientID({ ANTIGRAVITY_CLIENT_ID: "" })).toBe(DEFAULT_CLIENT_ID)
+    expect(clientID({ ANTIGRAVITY_CLIENT_ID: "   " })).toBe(DEFAULT_CLIENT_ID)
+    expect(clientSecret({ ANTIGRAVITY_CLIENT_SECRET: "" })).toBe(DEFAULT_CLIENT_SECRET)
+    expect(clientSecret({ ANTIGRAVITY_CLIENT_SECRET: " \t\n " })).toBe(DEFAULT_CLIENT_SECRET)
+    expect(clientID({ ANTIGRAVITY_CLIENT_ID: "  custom-client-id  " })).toBe("custom-client-id")
+    expect(clientSecret({ ANTIGRAVITY_CLIENT_SECRET: "  custom-client-secret  " })).toBe("custom-client-secret")
+  })
+
   test("accepts the loopback callback and rejects a mismatched state", () => {
     expect(callbackCode("http://localhost:51121/oauth-callback?code=abc&state=s1", "s1")).toBe("abc")
     expect(() => callbackCode("http://localhost:51121/oauth-callback?code=abc&state=s2", "s1")).toThrow(
@@ -372,6 +554,7 @@ describe("Antigravity OAuth", () => {
       const authorization = new URL(attempt.url)
       expect(authorization.origin).toBe("https://accounts.google.com")
       expect(authorization.pathname).toBe("/o/oauth2/v2/auth")
+      expect(authorization.searchParams.get("client_id")).toBe(DEFAULT_CLIENT_ID)
       expect(authorization.searchParams.get("redirect_uri")).toBe("http://localhost:51121/oauth-callback")
       expect(authorization.searchParams.get("code_challenge_method")).toBe("S256")
       expect(authorization.searchParams.get("access_type")).toBe("offline")
@@ -405,8 +588,63 @@ describe("Antigravity OAuth", () => {
         "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
       ])
       expect(calls[0]?.headers.get("content-type")).toContain("application/x-www-form-urlencoded")
-      expect(new URLSearchParams(calls[0]?.body ?? "").get("code")).toBe("auth-code")
+      const tokenForm = new URLSearchParams(calls[0]?.body ?? "")
+      expect(tokenForm.get("code")).toBe("auth-code")
+      expect(tokenForm.get("client_id")).toBe(DEFAULT_CLIENT_ID)
+      expect(tokenForm.get("client_secret")).toBe(DEFAULT_CLIENT_SECRET)
       expect(calls[2]?.headers.get("authorization")).toBe(`Bearer ${tokens.access_token}`)
+    }),
+  )
+
+  it.effect("honors ANTIGRAVITY_CLIENT_ID and ANTIGRAVITY_CLIENT_SECRET overrides and treats blank overrides as unset", () =>
+    Effect.gen(function* () {
+      const previousID = process.env.ANTIGRAVITY_CLIENT_ID
+      const previousSecret = process.env.ANTIGRAVITY_CLIENT_SECRET
+      const restore = Effect.sync(() => {
+        if (previousID === undefined) delete process.env.ANTIGRAVITY_CLIENT_ID
+        else process.env.ANTIGRAVITY_CLIENT_ID = previousID
+        if (previousSecret === undefined) delete process.env.ANTIGRAVITY_CLIENT_SECRET
+        else process.env.ANTIGRAVITY_CLIENT_SECRET = previousSecret
+      })
+      return yield* Effect.gen(function* () {
+        const { http, calls } = mock([
+          tokens,
+          { email: "antigravity@example.com" },
+          { cloudaicompanionProject: "project-123" },
+          { models: {} },
+        ])
+        yield* addPlugin(http)
+        const integrations = yield* Integration.Service
+
+        process.env.ANTIGRAVITY_CLIENT_ID = "   "
+        process.env.ANTIGRAVITY_CLIENT_SECRET = ""
+        const blankAttempt = yield* integrations.oauth.connect({
+          integrationID,
+          methodID,
+          answer: { mode: "code" },
+        })
+        expect(new URL(blankAttempt.url).searchParams.get("client_id")).toBe(DEFAULT_CLIENT_ID)
+
+        process.env.ANTIGRAVITY_CLIENT_ID = " custom-client.apps.googleusercontent.com "
+        process.env.ANTIGRAVITY_CLIENT_SECRET = " custom-secret "
+        const customAttempt = yield* integrations.oauth.connect({
+          integrationID,
+          methodID,
+          answer: { mode: "code" },
+        })
+        const authorization = new URL(customAttempt.url)
+        expect(authorization.searchParams.get("client_id")).toBe("custom-client.apps.googleusercontent.com")
+        const state = required(authorization.searchParams.get("state"))
+        yield* integrations.oauth.complete({
+          integrationID,
+          attemptID: customAttempt.attemptID,
+          code: `http://localhost:51121/oauth-callback?code=override-code&state=${encodeURIComponent(state)}`,
+        })
+
+        const tokenForm = new URLSearchParams(calls[0]?.body ?? "")
+        expect(tokenForm.get("client_id")).toBe("custom-client.apps.googleusercontent.com")
+        expect(tokenForm.get("client_secret")).toBe("custom-secret")
+      }).pipe(Effect.ensuring(restore))
     }),
   )
 

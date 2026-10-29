@@ -16,8 +16,6 @@ import {
   AUTH_URL,
   CALLBACK_PATH,
   CALLBACK_PORT,
-  CLIENT_ID,
-  CLIENT_SECRET,
   ENDPOINT,
   METHOD_ID,
   REDIRECT_URI,
@@ -26,6 +24,8 @@ import {
   USER_AGENT,
   USERINFO_URL,
   callbackCode,
+  clientID,
+  clientSecret,
   isAntigravityRequest,
   projectIdFromPayload,
   stableId,
@@ -70,7 +70,7 @@ const token = Effect.fn("GoogleAntigravityPlugin.token")(function* (
 ) {
   const request = HttpClientRequest.post(TOKEN_URL).pipe(
     HttpClientRequest.setHeader("content-type", "application/x-www-form-urlencoded"),
-    HttpClientRequest.bodyUrlParams({ ...form, client_id: CLIENT_ID, client_secret: CLIENT_SECRET }),
+    HttpClientRequest.bodyUrlParams({ ...form, client_id: clientID(), client_secret: clientSecret() }),
   )
   const response = yield* client
     .execute(request)
@@ -157,7 +157,7 @@ const exchange = Effect.fn("GoogleAntigravityPlugin.exchange")(function* (
 
 function authorizeURL(challenge: string, state: string) {
   return `${AUTH_URL}?${new URLSearchParams({
-    client_id: CLIENT_ID,
+    client_id: clientID(),
     response_type: "code",
     redirect_uri: REDIRECT_URI,
     scope: SCOPES.join(" "),

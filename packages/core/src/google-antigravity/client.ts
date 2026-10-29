@@ -10,9 +10,21 @@
 import { createHash } from "node:crypto"
 import { isRecord } from "@opencode/ai/utils/record"
 
-export const CLIENT_ID = process.env.ANTIGRAVITY_CLIENT_ID?.trim() ?? ""
+export const DEFAULT_CLIENT_ID = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
 
-export const CLIENT_SECRET = process.env.ANTIGRAVITY_CLIENT_SECRET?.trim() ?? ""
+export const DEFAULT_CLIENT_SECRET = "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"
+
+export function clientID(env: NodeJS.ProcessEnv = process.env): string {
+  return env.ANTIGRAVITY_CLIENT_ID?.trim() || DEFAULT_CLIENT_ID
+}
+
+export function clientSecret(env: NodeJS.ProcessEnv = process.env): string {
+  return env.ANTIGRAVITY_CLIENT_SECRET?.trim() || DEFAULT_CLIENT_SECRET
+}
+
+export const CLIENT_ID = clientID()
+
+export const CLIENT_SECRET = clientSecret()
 
 export const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 export const TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -44,12 +56,17 @@ export type Thinking = {
 
 type Json = Record<string, unknown>
 
+export const EFFORT_ORDER = ["minimal", "low", "medium", "high"] as const
+
 export type PublicModelID =
+  | "gemini-4-argon"
   | "gemini-3.8-flash"
   | "gemini-3.7-flash"
   | "gemini-3.6-flash"
   | "gemini-3.5-flash"
   | "gemini-3.1-pro"
+  | "claude-sonnet-5-5"
+  | "claude-opus-5-5"
   | "claude-sonnet-4-6"
   | "claude-opus-4-6"
   | "gpt-oss-120b"
@@ -135,14 +152,79 @@ function effortOf(thinking: Thinking | undefined) {
   return "high"
 }
 
+const RUNTIME_SUFFIX = /-(extra-low|minimal|low|medium|high|tiered|thinking)$/i
+const EFFORT_SUFFIX = /-(extra-low|minimal|low|medium|high)$/i
+
+export function isRoutedModel(modelID: string): boolean {
+  return modelID in ROUTED
+}
+
+export function runtimeForEffort(modelID: string, effort: string): readonly string[] {
+  const routed = ROUTED[modelID]
+  if (routed) {
+    const target = routed[effort]
+    return target ? [target] : []
+  }
+  if (effort === "low") return [`${modelID}-low`, `${modelID}-extra-low`]
+  return [`${modelID}-${effort}`]
+}
+
+function runtimeEffort(runtime: string): string | undefined {
+  const suffix = EFFORT_SUFFIX.exec(runtime)?.[1]?.toLowerCase()
+  if (suffix) return suffix === "extra-low" ? "low" : suffix
+  for (const values of Object.values(ROUTED)) {
+    for (const effort of ["high", "medium", "low", "minimal"] as const) {
+      if (values[effort] === runtime) return effort
+    }
+  }
+  return undefined
+}
+
 /** Resolve a public model ID to the runtime ID Cloud Code Assist expects. */
 export function runtimeModel(modelID: string, thinking: Thinking | undefined): string {
   const fixed = FIXED[modelID]
   if (fixed) return fixed
+  const effort = effortOf(thinking)
   const routed = ROUTED[modelID]
-  if (!routed) return modelID
-  const effort = effortOf(thinking) ?? "high"
-  return routed[effort] ?? routed.high ?? modelID
+  if (routed) {
+    const selected = effort ?? "high"
+    return routed[selected] ?? routed.high ?? modelID
+  }
+  if (!effort || effort === "off") return modelID
+  return `${modelID}-${effort}`
+}
+
+/** Resolve a public model ID against the active account's advertised runtime inventory. */
+export function resolveRuntime(
+  modelID: string,
+  thinking: Thinking | undefined,
+  available?: Readonly<Record<string, unknown>>,
+): string {
+  const preferred = runtimeModel(modelID, thinking)
+  if (!available) return preferred
+  const effort = effortOf(thinking)
+  if (effort === "off") {
+    for (const candidate of [modelID, preferred]) {
+      if (available[candidate]) return candidate
+    }
+  }
+  const target = effort && effort !== "off" ? effort : "high"
+  const candidates = [
+    ...runtimeForEffort(modelID, target),
+    preferred,
+    ...(FIXED[modelID] ? [FIXED[modelID]] : []),
+    `${modelID}-tiered`,
+    `${modelID}-thinking`,
+    modelID,
+    ...runtimeForEffort(modelID, "high"),
+    ...runtimeForEffort(modelID, "medium"),
+    ...runtimeForEffort(modelID, "low"),
+    ...runtimeForEffort(modelID, "minimal"),
+  ]
+  for (const candidate of candidates) {
+    if (available[candidate]) return candidate
+  }
+  return Object.keys(available).find((id) => publicModelID(id) === modelID) ?? preferred
 }
 
 /** Keep existing public IDs stable when availability advertises their runtime variants. */
@@ -150,7 +232,7 @@ export function publicModelID(runtime: string): string {
   return (
     Object.entries(FIXED).find(([, value]) => value === runtime)?.[0] ??
     Object.entries(ROUTED).find(([, values]) => Object.values(values).includes(runtime))?.[0] ??
-    runtime
+    runtime.replace(RUNTIME_SUFFIX, "")
   )
 }
 
@@ -159,17 +241,19 @@ export function publicModelID(runtime: string): string {
  * `thinkingLevel`. Values mirror the reference Antigravity adapters.
  */
 export function thinkingFor(runtime: string, thinking: Thinking | undefined): Thinking | undefined {
-  const effort = effortOf(thinking)
+  const effort = effortOf(thinking) ?? runtimeEffort(runtime)
   if (thinking && (effort === "off" || thinking.includeThoughts === false))
     return { includeThoughts: false, thinkingBudget: 0 }
   if (runtime.startsWith("claude-")) return { includeThoughts: true, thinkingBudget: 1024 }
   if (runtime.startsWith("gpt-oss-")) return { includeThoughts: true, thinkingBudget: 8192 }
-  if (/^gemini-3\.(8|7|6)-flash/.test(runtime))
+  if (/^gemini-(?:4-|3\.(?:8|7|6)-flash)/.test(runtime))
     return { includeThoughts: true, thinkingBudget: budget(effort, 4000, 1000, -1) }
   if (runtime.startsWith("gemini-3.5-flash") || runtime === "gemini-3-flash-agent")
     return { includeThoughts: true, thinkingBudget: budget(effort, 4000, 1000, 10000) }
   if (runtime.startsWith("gemini-3.1-pro") || runtime === "gemini-pro-agent")
     return { includeThoughts: true, thinkingBudget: budget(effort, 1001, 1001, 10001) }
+  if (runtime.startsWith("gemini-") && thinking?.thinkingLevel !== undefined)
+    return { includeThoughts: true, thinkingBudget: budget(effort, 4000, 1000, -1) }
   return thinking
 }
 
@@ -235,14 +319,8 @@ export interface WrapInput {
 /** Build the Cloud Code Assist request envelope around a Gemini generateContent body. */
 export function wrapRequest(body: Json, input: WrapInput): Json {
   const thinking = thinkingOf(body)
-  const preferred = runtimeModel(input.modelID, thinking)
   const available = input.availableModels
-  const runtime =
-    !available || available[preferred]
-      ? preferred
-      : available[input.modelID]
-        ? input.modelID
-        : (Object.keys(available).find((id) => publicModelID(id) === input.modelID) ?? preferred)
+  const runtime = resolveRuntime(input.modelID, thinking, available)
   if (available && !available[runtime])
     throw new Error(`Google Antigravity model ${input.modelID} is not available for this account`)
   const generation = isRecord(body.generationConfig) ? body.generationConfig : undefined

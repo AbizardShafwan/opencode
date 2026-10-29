@@ -4,7 +4,14 @@ import { Model } from "@opencode/schema/model"
 import { Provider } from "@opencode/schema/provider"
 import { Variant } from "../variant.js"
 import { Schema } from "effect"
-import { publicModelID, runtimeModel, type PublicModelID } from "./client.js"
+import {
+  EFFORT_ORDER,
+  isRoutedModel,
+  publicModelID,
+  resolveRuntime,
+  runtimeForEffort,
+  type PublicModelID,
+} from "./client.js"
 
 export const AvailableModels = Schema.Struct({
   models: Schema.Record(
@@ -21,6 +28,8 @@ export const AvailableModels = Schema.Struct({
   ),
 })
 
+type RemoteModel = (typeof AvailableModels.Type)["models"][string]
+
 type Entry = {
   readonly id: PublicModelID
   readonly base?: string
@@ -32,6 +41,14 @@ type Entry = {
 }
 
 const catalog: readonly Entry[] = [
+  {
+    id: "gemini-4-argon",
+    name: "Gemini 4 Argon",
+    context: 1_048_576,
+    output: 32_768,
+    input: ["text", "image"],
+    efforts: ["low", "medium", "high"],
+  },
   {
     id: "gemini-3.8-flash",
     context: 1_048_576,
@@ -70,6 +87,22 @@ const catalog: readonly Entry[] = [
     efforts: ["low", "high"],
   },
   {
+    id: "claude-sonnet-5-5",
+    name: "Claude Sonnet 5.5",
+    context: 200_000,
+    output: 64_000,
+    input: ["text", "image"],
+    efforts: ["low", "medium", "high"],
+  },
+  {
+    id: "claude-opus-5-5",
+    name: "Claude Opus 5.5",
+    context: 250_000,
+    output: 64_000,
+    input: ["text", "image"],
+    efforts: ["low", "medium", "high"],
+  },
+  {
     id: "claude-sonnet-4-6",
     name: "Claude Sonnet 4.6 (Antigravity)",
     context: 200_000,
@@ -95,6 +128,13 @@ const catalog: readonly Entry[] = [
   },
 ]
 
+const DISPLAY_SUFFIX = /\s*\((?:extra[- ]low|minimal|low|medium|high|tiered|thinking)\)\s*$/i
+
+function familyName(value: string | undefined): string | undefined {
+  const trimmed = value?.replace(DISPLAY_SUFFIX, "").trim()
+  return trimmed || undefined
+}
+
 export function supportedInventory(available: typeof AvailableModels.Type): typeof AvailableModels.Type {
   // The Gemini text/tool transport cannot serve tab completion or image generation.
   return {
@@ -117,7 +157,8 @@ export function supportedInventory(available: typeof AvailableModels.Type): type
 export function models(source: ReadonlyMap<string, Model.Info>, available: typeof AvailableModels.Type): Model.Info[] {
   const groups = Map.groupBy(Object.entries(available.models), ([id]) => publicModelID(id))
   return Array.from(groups, ([id, runtimes]) => {
-    const remote = runtimes.find(([runtime]) => runtime === runtimeModel(id, undefined))?.[1] ?? runtimes[0]![1]
+    const defaultRuntime = resolveRuntime(id, undefined, Object.fromEntries(runtimes))
+    const remote = runtimes.find(([runtime]) => runtime === defaultRuntime)?.[1] ?? runtimes[0]![1]
     const entry = catalog.find((entry) => entry.id === id)
     const template = source.get(id) ?? (entry && source.get(entry.base ?? entry.id))
     const base = template ?? (entry ? synthetic(entry) : Model.Info.default(Provider.ID.google, Model.ID.make(id)))
@@ -125,7 +166,12 @@ export function models(source: ReadonlyMap<string, Model.Info>, available: typeo
       ...base,
       id: Model.ID.make(id),
       modelID: Model.ID.make(id),
-      name: remote.displayName || remote.label || remote.modelName || entry?.name || base.name,
+      name:
+        familyName(remote.displayName) ||
+        familyName(remote.label) ||
+        familyName(remote.modelName) ||
+        entry?.name ||
+        base.name,
       package: "@opencode/ai/providers/google",
       enabled: true,
       capabilities: {
@@ -139,18 +185,35 @@ export function models(source: ReadonlyMap<string, Model.Info>, available: typeo
       },
       variants: [],
     }
-    const efforts =
-      remote.supportsThinking === false
-        ? []
-        : entry
-          ? entry.efforts.filter((effort) =>
-              runtimes.some(([runtime]) => runtimeModel(entry.id, { thinkingLevel: effort }) === runtime),
-            )
-          : remote.supportsThinking
-            ? ["high"]
-            : []
+    const efforts = effortsFor(id, entry, remote, runtimes)
     return { ...model, variants: Variant.resolve(model, [{ type: "effort", values: [...efforts] }]) }
   })
+}
+
+function effortsFor(
+  id: string,
+  entry: Entry | undefined,
+  remote: RemoteModel,
+  runtimes: ReadonlyArray<readonly [string, RemoteModel]>,
+): readonly string[] {
+  if (runtimes.every(([, item]) => item.supportsThinking === false)) return []
+  const allowed = isRoutedModel(id) && entry ? entry.efforts : EFFORT_ORDER
+  const discovered = EFFORT_ORDER.filter(
+    (effort) =>
+      allowed.includes(effort) &&
+      runtimes.some(
+        ([runtime, item]) => item.supportsThinking !== false && runtimeForEffort(id, effort).includes(runtime),
+      ),
+  )
+  if (discovered.length > 0 || isRoutedModel(id)) return discovered
+  if (entry) return entry.efforts
+  if (runtimes.some(([runtime]) => /-tiered$/i.test(runtime))) return ["low", "medium", "high"]
+  if (
+    remote.supportsThinking ||
+    runtimes.some(([runtime, item]) => item.supportsThinking || /-thinking$/i.test(runtime))
+  )
+    return ["high"]
+  return []
 }
 
 function synthetic(entry: Entry): Model.Info {
