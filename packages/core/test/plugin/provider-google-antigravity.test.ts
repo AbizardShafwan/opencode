@@ -970,4 +970,78 @@ describe("Antigravity OAuth", () => {
       ),
     ),
   )
+
+  it.effect("inherits pricing from standard Google and Google Vertex models", () =>
+    Effect.gen(function* () {
+      const providers = yield* Provider.Service
+      const credentials = yield* Credential.Service
+      const models = yield* Model.Service
+      const geminiCost = [
+        {
+          input: Money.USDPerMillionTokens.make(0.75),
+          output: Money.USDPerMillionTokens.make(3.75),
+          cache: { read: Money.USDPerMillionTokens.make(0.075), write: Money.USDPerMillionTokens.zero },
+        },
+      ]
+      const claudeCost = [
+        {
+          input: Money.USDPerMillionTokens.make(3),
+          output: Money.USDPerMillionTokens.make(15),
+          cache: { read: Money.USDPerMillionTokens.make(0.3), write: Money.USDPerMillionTokens.make(3.75) },
+        },
+      ]
+      yield* providers.transform((editor) => {
+        editor.add({
+          info: {
+            id: Provider.ID.google,
+            integrationID,
+            name: "Google",
+            activation: "auto",
+            package: "@opencode/ai/providers/google",
+          },
+          models: [
+            {
+              ...ModelSchema.Info.default(Provider.ID.google, ModelSchema.ID.make("gemini-3.8-flash")),
+              package: "@opencode/ai/providers/google",
+              cost: geminiCost,
+            },
+          ],
+        })
+        editor.add({
+          info: {
+            id: Provider.ID.googleVertex,
+            integrationID: Integration.ID.make("google-vertex"),
+            name: "Google Vertex",
+            activation: "auto",
+            package: "@opencode/ai/providers/google-vertex",
+          },
+          models: [
+            {
+              ...ModelSchema.Info.default(Provider.ID.googleVertex, ModelSchema.ID.make("claude-sonnet-4-6@default")),
+              package: "@opencode/ai/providers/google-vertex",
+              cost: claudeCost,
+            },
+          ],
+        })
+      })
+      yield* credentials.create({
+        integrationID,
+        value: Credential.OAuth.make({
+          type: "oauth",
+          methodID,
+          access: tokens.access_token,
+          refresh: tokens.refresh_token,
+          expires: Date.now() + 3_600_000,
+          metadata: { projectId: "project-123" },
+        }),
+      })
+      const { http } = mock([{ models: { "gemini-3.8-flash-tiered": {}, "claude-sonnet-4-6": {} } }])
+      yield* addPlugin(http)
+
+      const gemini = yield* models.get(Provider.ID.google, ModelSchema.ID.make("gemini-3.8-flash"))
+      const claude = yield* models.get(Provider.ID.google, ModelSchema.ID.make("claude-sonnet-4-6"))
+      expect(gemini?.cost).toEqual(geminiCost)
+      expect(claude?.cost).toEqual(claudeCost)
+    }),
+  )
 })
