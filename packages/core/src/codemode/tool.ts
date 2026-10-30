@@ -12,8 +12,10 @@ import type {
 } from "@opencode/schema/tool"
 import { Context, Effect, Ref, Schema, Semaphore } from "effect"
 import { definition, normalizedName } from "../tool/runtime.js"
+import { Permission } from "../permission.js"
 import { CodeModeCatalog } from "./catalog.js"
-import { CodeModeWeb } from "./web.js"
+import { CodeModeExecution } from "./execution.js"
+import { CodeModeFetch } from "./fetch.js"
 
 const ExecuteFile = Schema.Struct({
   data: Schema.String,
@@ -80,6 +82,7 @@ const description = [
 export const create = (
   inventory: Inventory,
   executeTool: (name: string, tool: Info, input: unknown, context: ToolContext) => Effect.Effect<Result, Error>,
+  permission: Permission.Interface,
 ) => {
   return {
     name: "execute",
@@ -117,6 +120,8 @@ export const create = (
                 }),
               hooks: progressHooks(record),
             }),
+            Effect.provideService(CodeModeExecution.Service, context),
+            Effect.provideService(Permission.Service, permission),
           )
         const toolCalls = yield* Ref.get(calls)
         const collected = (yield* Ref.get(files))
@@ -178,7 +183,7 @@ function progressHooks(record: (update: (items: Array<ExecuteCall>) => Array<Exe
     "extension.before": (call) => {
       switch (call.name) {
         case "fetch":
-          return start(call, { tool: call.name, status: "running", input: CodeModeWeb.display(call.args) })
+          return start(call, { tool: call.name, status: "running", input: CodeModeFetch.display(call.args) })
         default:
           return Effect.void
       }
@@ -232,7 +237,7 @@ function renderCatalog(root: CatalogNode): ReadonlyArray<CodeModeCatalog.Tool | 
 
 // Inventories are immutable snapshots, so tool definitions, schemas, and the search index are built
 // once per inventory and shared by its catalog and every execution.
-const runtimes = new WeakMap<Inventory, CodeMode.Runtime<Run>>()
+const runtimes = new WeakMap<Inventory, CodeMode.Runtime<Run | CodeModeExecution.Service | Permission.Service>>()
 
 function runtime(inventory: Inventory) {
   const cached = runtimes.get(inventory)
@@ -250,9 +255,9 @@ function runtime(inventory: Inventory) {
     })
   }
   const tools = renderTools(root)
-  const created = CodeMode.make<typeof tools, [typeof CodeModeWeb.extension]>({
+  const created = CodeMode.make<typeof tools, [typeof CodeModeFetch.extension]>({
     tools,
-    extensions: [CodeModeWeb.extension],
+    extensions: [CodeModeFetch.extension],
     hooks: runHooks,
   })
   runtimes.set(inventory, created)
