@@ -414,9 +414,10 @@ export const GoogleAntigravityPlugin = define({
       if (!loaded.active) return
       const provider = evt.get(Provider.ID.google)
       if (!provider) return
+      const vertex = evt.get(Provider.ID.googleVertex)
       evt.add({
         info: provider.provider,
-        models: loaded.models ? models(provider.models, loaded.models) : [],
+        models: loaded.models ? models([provider.models, vertex?.models], loaded.models) : [],
         sourceConnection: loaded.connection,
       })
     })

@@ -366,6 +366,7 @@ function SessionScreenContent(props: {
           <ActiveSessionComposerRegion
             session={session}
             view={props.view()}
+            screen={props.screen}
             model={model}
             suggestionBoundary={timeline.scroller}
           />

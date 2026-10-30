@@ -41,8 +41,18 @@ import { ExtensionSlot } from "../src/runtime/extension/render"
 import { persistedHandle } from "../src/runtime/extension/stores"
 import { LanguageProvider } from "../src/runtime/i18n/language"
 import { GuiExtensionsSettings } from "../src/runtime/extension/settings-page-dev"
+import { SessionExtensionPills } from "../src/session/composer/extension-pills"
 
-export { bindExtension, useExtension, Contract, createKeyed, Panel, Slot, Store } from "@opencode/gui-extensions/sdk"
+export {
+  bindExtension,
+  ComposerPill,
+  Contract,
+  createKeyed,
+  Panel,
+  Slot,
+  Store,
+  useExtension,
+} from "@opencode/gui-extensions/sdk"
 
 export { Schema }
 
@@ -483,6 +493,65 @@ export function mountSessionRegion(input: { definitions: readonly Definition[]; 
     /** The session each composer attachment reached, in order. */
     attached,
     status: (id: string) => hosts[0]?.state.status[id],
+    unmount: () => {
+      dispose()
+      container.remove()
+    },
+  }
+}
+
+/**
+ * Mounts the real host and the composer region's extension pills for one session, as the composer region renders them.
+ * The session's directory is `/repo`.
+ */
+export function mountComposerPills(input: { definitions: readonly Definition[] }) {
+  const container = document.createElement("div")
+  container.dataset.testid = "composer-pills"
+  container.style.position = "relative"
+  container.style.marginTop = "240px"
+  document.body.appendChild(container)
+  const hosts: ExtensionHost[] = []
+  const captured: Captured = {}
+
+  const value = { key: "fixture\na", id: "a", directory: "/repo", visit: {} }
+
+  // SAFETY: the pill renderer passes the session through; the test's extensions read only `directory`.
+  // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- see SAFETY above
+  const session = value as unknown as MountedSession
+
+  // SAFETY: as above; the test's extensions never read the screen.
+  // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- see SAFETY above
+  const screen = {} as unknown as SessionScreen
+
+  function Pills() {
+    const host = useExtensionHost()
+    hosts.push(host)
+
+    return (
+      <Show when={host.ready()}>
+        <SessionExtensionPills session={session} screen={screen} />
+      </Show>
+    )
+  }
+
+  const dispose = render(
+    () => (
+      <LanguageProvider locale="en">
+        <PlatformProvider value={web}>
+          <DialogProvider>
+            <RealHost definitions={input.definitions} captured={captured}>
+              <Pills />
+            </RealHost>
+          </DialogProvider>
+        </PlatformProvider>
+      </LanguageProvider>
+    ),
+    container,
+  )
+
+  return {
+    status: (id: string) => hosts[0]?.state.status[id],
+    failure: (id: string) => hosts[0]?.state.failures[id],
     unmount: () => {
       dispose()
       container.remove()

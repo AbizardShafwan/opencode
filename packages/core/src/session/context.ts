@@ -56,6 +56,7 @@ export interface Interface {
   readonly load: (selection: Selection) => Effect.Effect<Loaded, SessionRunnerModel.Error>
   readonly resolveModel: (
     session: SessionSchema.Info,
+    options?: { readonly effort?: "low" },
   ) => Effect.Effect<SessionRunnerModel.Resolved, SessionRunnerModel.Error>
   /** Selects auxiliary title capabilities without instruction or tool preflight. */
   readonly selectTitle: (session: SessionSchema.Info) => Effect.Effect<
@@ -91,7 +92,31 @@ const layer = Layer.effect(
     const store = yield* SessionStore.Service
     const registry = yield* Tool.Service
 
-    const resolveModel = (session: SessionSchema.Info) => models.resolve(session, model.available)
+    const resolveModel = Effect.fn("SessionContext.resolveModel")(function* (
+      session: SessionSchema.Info,
+      options?: { readonly effort?: "low" },
+    ) {
+      const primary = yield* models.resolve(session, model.available)
+      if (options?.effort !== "low") return primary
+      const info = yield* model.get(primary.ref.providerID, primary.ref.id)
+      if (!info) return primary
+      const variant = minimalVariant(info)
+      if (variant === primary.ref.variant) return primary
+      const reduced = yield* models
+        .resolve(
+          {
+            ...session,
+            model: Model.Ref.make({
+              providerID: info.providerID,
+              id: info.id,
+              ...(variant ? { variant } : {}),
+            }),
+          },
+          model.available,
+        )
+        .pipe(Effect.orElseSucceed(() => undefined))
+      return reduced ?? primary
+    })
 
     const selectTitle = Effect.fn("SessionContext.selectTitle")(function* (session: SessionSchema.Info) {
       const agent = yield* agents.get(Agent.ID.make("title"))

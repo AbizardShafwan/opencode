@@ -221,8 +221,9 @@ SDK icon fields use `IconName` from `@opencode/ui/icons/catalog`, a dependency-f
 | [`SettingsPage`](src/sdk/registries.ts) | window  | A settings page, a section on a host page, or rows in a host section                        |
 | [`Server`](src/sdk/registries.ts)       | window  | A source of servers, such as SSH hosts                                                      |
 | [`LinkHandler`](src/sdk/registries.ts)  | window  | Opens local links, such as file paths in messages, and says whether their target exists     |
-| [`TitlebarItem`](src/sdk/registries.ts) | window  | A titlebar pill, or the dev channel badge as a toggle                                       |
-| [`Slot`](src/sdk/registries.ts)         | window  | Content for `window.bottom`, `session.header`, `session.panel.end`, `session.panel.sidebar` |
+| [`TitlebarItem`](src/sdk/registries.ts) | window  | A titlebar pill, or the dev channel badge as a toggle                                                 |
+| [`ComposerPill`](src/sdk/registries.ts) | window  | A pill in the row above a session's composer, optionally opening a menu of rows or a custom popover   |
+| [`Slot`](src/sdk/registries.ts)         | window  | Content for `window.bottom`, `session.header`, `session.panel.end`, `session.panel.sidebar`           |
 | [`Style`](src/sdk/registries.ts)        | window  | CSS imported with `?inline`                                                                 |
 | [`MenubarItem`](src/sdk/main.ts)        | main    | An item of the native app menu                                                              |
 
@@ -674,6 +675,7 @@ export const builtins = Extension.compose(
   { ...ssh, main: () => import("./ssh/main") },
   { ...wsl, main: () => import("./wsl/main") },
   microsoftOffice,
+  goal,
 )
 ```
 
@@ -700,6 +702,7 @@ export const builtins = Extension.compose(
   { ...ssh, renderer: eager(sshRenderer) },
   { ...wsl, renderer: eager(wslRenderer) },
   { ...microsoftOffice, renderer: eager(microsoftOfficeRenderer) },
+  { ...goal, renderer: eager(goalRenderer) },
 )
 ```
 

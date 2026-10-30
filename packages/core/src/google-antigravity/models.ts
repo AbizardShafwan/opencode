@@ -88,6 +88,7 @@ const catalog: readonly Entry[] = [
   },
   {
     id: "claude-sonnet-5-5",
+    base: "claude-sonnet-5-5@default",
     name: "Claude Sonnet 5.5",
     context: 200_000,
     output: 64_000,
@@ -96,6 +97,7 @@ const catalog: readonly Entry[] = [
   },
   {
     id: "claude-opus-5-5",
+    base: "claude-opus-5-5@default",
     name: "Claude Opus 5.5",
     context: 250_000,
     output: 64_000,
@@ -104,6 +106,7 @@ const catalog: readonly Entry[] = [
   },
   {
     id: "claude-sonnet-4-6",
+    base: "claude-sonnet-4-6@default",
     name: "Claude Sonnet 4.6 (Antigravity)",
     context: 200_000,
     output: 64_000,
@@ -112,6 +115,7 @@ const catalog: readonly Entry[] = [
   },
   {
     id: "claude-opus-4-6",
+    base: "claude-opus-4-6@default",
     name: "Claude Opus 4.6 (Antigravity)",
     context: 250_000,
     output: 64_000,
@@ -120,6 +124,7 @@ const catalog: readonly Entry[] = [
   },
   {
     id: "gpt-oss-120b",
+    base: "openai/gpt-oss-120b-maas",
     name: "GPT-OSS 120B (Antigravity)",
     context: 131_072,
     output: 32_768,
@@ -154,13 +159,26 @@ export function supportedInventory(available: typeof AvailableModels.Type): type
  * Availability owns membership and runtime IDs. The local catalog is only a
  * metadata fallback, never a list of models assumed accessible to an account.
  */
-export function models(source: ReadonlyMap<string, Model.Info>, available: typeof AvailableModels.Type): Model.Info[] {
+export function models(
+  source: ReadonlyMap<string, Model.Info> | ReadonlyArray<ReadonlyMap<string, Model.Info> | undefined>,
+  available: typeof AvailableModels.Type,
+): Model.Info[] {
+  const sources: ReadonlyArray<ReadonlyMap<string, Model.Info>> = (
+    Array.isArray(source) ? source : [source]
+  ).filter((s): s is ReadonlyMap<string, Model.Info> => s !== undefined)
+  const lookup = (key: string): Model.Info | undefined => {
+    for (const src of sources) {
+      const found = src.get(key) ?? src.get(`${key}@default`)
+      if (found) return found
+    }
+    return undefined
+  }
   const groups = Map.groupBy(Object.entries(available.models), ([id]) => publicModelID(id))
   return Array.from(groups, ([id, runtimes]) => {
     const defaultRuntime = resolveRuntime(id, undefined, Object.fromEntries(runtimes))
     const remote = runtimes.find(([runtime]) => runtime === defaultRuntime)?.[1] ?? runtimes[0]![1]
     const entry = catalog.find((entry) => entry.id === id)
-    const template = source.get(id) ?? (entry && source.get(entry.base ?? entry.id))
+    const template = lookup(id) ?? (entry?.base ? lookup(entry.base) : undefined)
     const base = template ?? (entry ? synthetic(entry) : Model.Info.default(Provider.ID.google, Model.ID.make(id)))
     const model: Model.Info = {
       ...base,

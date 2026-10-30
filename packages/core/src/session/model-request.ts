@@ -75,6 +75,8 @@ export interface Input {
   readonly system: Array<SystemPart>
   readonly messages: Array<Message>
   readonly toolChoice?: LLM.RequestInput["toolChoice"]
+  /** Explicit output token cap when an auxiliary caller wants to bound generation. */
+  readonly maxTokens?: number
   /** Only the durable runner may use a stateful WebSocket. */
   readonly webSocket?: "session"
   /** Prompt size, measured by the provider or estimated. The default output limit leaves room for it. */
@@ -270,9 +272,11 @@ export const layer = Layer.effect(
           system: input.system,
           messages: input.messages,
           options:
-            kind === "primary" || kind === "compaction"
-              ? { maxTokens: outputLimit(model.limit, input.inputTokens) }
-              : {},
+            input.maxTokens !== undefined
+              ? { maxTokens: model.limit.output > 0 ? Math.min(input.maxTokens, model.limit.output) : input.maxTokens }
+              : kind === "primary" || kind === "compaction"
+                ? { maxTokens: outputLimit(model.limit, input.inputTokens) }
+                : {},
         },
         Object.fromEntries(Array.from(given, ([d, t]) => [t.name, d])),
       )

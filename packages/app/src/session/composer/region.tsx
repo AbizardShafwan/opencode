@@ -16,7 +16,7 @@ import { useData } from "@/runtime/server/current"
 import { useServerSDK } from "@/runtime/server/client"
 import { showToast } from "@/shell/notifications/toast"
 import { useLocal } from "@/providers/models/selection"
-import type { MountedSession } from "@opencode/gui-extensions/sdk"
+import type { MountedSession, SessionScreen } from "@opencode/gui-extensions/sdk"
 import { useTheme } from "@opencode/ui/theme/context"
 import { ExtensionSlot } from "@/runtime/extension/render"
 import { isNorseTheme } from "@/theme/norse"
@@ -32,6 +32,7 @@ import type { SessionTimelineInteraction } from "../timeline/interaction"
 import { createSessionRevert } from "../revert"
 import { SessionComposerRegion } from "./session-composer-region"
 import { createSessionComposerController, type SessionComposerController } from "./controller"
+import { SessionExtensionPills } from "./extension-pills"
 import { SessionQueuePanel } from "./queue-panel"
 import { resolveSessionComposerSelection } from "./selection"
 import { createSessionRequestModel } from "../requests/model"
@@ -333,6 +334,7 @@ export type ActiveSessionRegionModel = ReturnType<typeof createActiveSessionRegi
 export function ActiveSessionComposerRegion(props: {
   session: SessionModel
   view: MountedSession
+  screen: SessionScreen
   model: SessionComposerController
   suggestionBoundary: () => HTMLElement | undefined
 }) {
@@ -352,6 +354,13 @@ export function ActiveSessionComposerRegion(props: {
   return (
     <SessionComposerRegion
       controller={props.model.region}
+      above={
+        <Show when={!missing() && !props.session.data.isChild()}>
+          <div class="pointer-events-none absolute inset-x-0 bottom-full flex items-end justify-end gap-2 pb-2.5">
+            <SessionExtensionPills session={props.view} screen={props.screen} />
+          </div>
+        </Show>
+      }
       composer={
         <Show
           when={missing()}

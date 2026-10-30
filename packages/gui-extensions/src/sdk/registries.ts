@@ -542,6 +542,91 @@ export interface TitlebarItem {
   run?(): void
 }
 
+/**
+ * The status a composer pill or one of its rows shows, by coloring its icon.
+ * - `success`: done or passing.
+ * - `warning`: needs attention, such as checks still running or a review requested.
+ * - `danger`: failed or blocked.
+ */
+export type ComposerPillTone = "success" | "warning" | "danger"
+
+/** What a composer pill receives: the session whose composer it sits above. Do not destructure. */
+export interface ComposerPillProps {
+  /** The routed session; a new object when another session is routed. Its fields are getters. */
+  readonly session: MountedSession
+  /** The session screen that owns the composer. */
+  readonly screen: SessionScreen
+}
+
+/** One row of the menu a composer pill opens. */
+export interface ComposerPillRow {
+  /** The row's id, unique within the pill. */
+  readonly id: string
+  /** The row's text. */
+  readonly label: string
+  /** The row's icon. Omit it for none. */
+  readonly icon?: IconName
+  /** Colors the row's icon. */
+  readonly tone?: ComposerPillTone
+  /** Muted text at the row's end, such as a branch or a count. */
+  readonly detail?: string
+  /** Runs when the user picks the row. Omit it for a row that only shows. */
+  run?(): void
+}
+
+/** What a composer pill's `menu` receives: the pill's session and a way to close the popover. Do not destructure. */
+export interface ComposerPillMenuProps extends ComposerPillProps {
+  /** Closes the popover, for example after the user picks an action in it. Does nothing once it is closed. */
+  close(): void
+}
+
+/** What a composer pill shows above one session's composer. */
+export interface ComposerPillView {
+  /** The capsule's text; long text truncates. */
+  readonly label: string
+  /** The capsule's icon. Omit it for none. */
+  readonly icon?: IconName
+  /** Colors the capsule's icon. */
+  readonly tone?: ComposerPillTone
+  /**
+   * Accessible name, and the heading of the menu or popover the pill opens, when it differs from `label`. The heading
+   * wraps to at most three lines, then truncates.
+   */
+  readonly title?: string
+  /** The menu the pill opens. Omit it for a pill that runs `run` instead. Unused when the pill has a `menu`. */
+  readonly rows?: readonly ComposerPillRow[]
+  /** Runs when the user clicks a pill without `rows` or a `menu`. */
+  run?(): void
+}
+
+/**
+ * A pill in the row above a session's composer. Pills float over the timeline, so showing or hiding one never resizes
+ * the composer. The host does not show pills in a subagent's session.
+ */
+export interface ComposerPill {
+  /** The pill's id, unique within the extension. */
+  readonly id: string
+  /** Sorts extension pills, lowest first; ties keep contribution order. Defaults to 0. */
+  readonly order?: number
+  /**
+   * The pill above one session's composer, or undefined to show none there. Reactive: the host runs it for each
+   * mounted composer and again when what it reads changes, so read the session's state and your own here.
+   *
+   * @param input - The session and its screen. Do not destructure.
+   */
+  show(input: ComposerPillProps): ComposerPillView | undefined
+  /**
+   * Your content for the popover the pill opens, for a pill that needs more than `rows`, such as status text and
+   * buttons. The host owns the capsule and the popover around this content: its placement, focus, dismissal, and the
+   * heading (`title`, else `label`). When set, clicking the pill opens the popover, and the view's `rows` and `run` are
+   * unused. Renders each time the popover opens; its own reactivity updates it while open, also when another session is
+   * routed. A render that throws renders nothing and records the error.
+   *
+   * @param input - The session, its screen, and `close`. Do not destructure.
+   */
+  menu?(input: ComposerPillMenuProps): JSX.Element
+}
+
 /** The places a `Slot` renders, with the input each passes to `render`. */
 export interface SlotMap {
   /** Full-width strip under the window content, above toasts. */
@@ -678,6 +763,22 @@ export const LinkHandler = Registry.define<LinkHandler>("link-handler")
  * ```
  */
 export const TitlebarItem = Registry.define<TitlebarItem>("titlebar-item")
+
+/**
+ * The registry of pills in the row above a session's composer.
+ *
+ * @example
+ * ```ts
+ * ctx.add(ComposerPill, {
+ *   id: "pulls",
+ *   show: (input) => {
+ *     const pulls = openPulls(input.session.directory)
+ *     return pulls.length > 0 ? { icon: "github", label: ctx.plural("pulls", pulls.length) } : undefined
+ *   },
+ * })
+ * ```
+ */
+export const ComposerPill = Registry.define<ComposerPill>("composer-pill")
 
 /**
  * The registry of content for the host's slots (`SlotMap`).

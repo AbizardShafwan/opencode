@@ -695,7 +695,15 @@ const EndpointSessionInstructionsEntryRemove =
 
 const EndpointSessionGenerate = (raw: RawClient["server.session"]) => (input: SessionGenerateInput) =>
   preserveEffect<SessionGenerateOutput>()(
-    raw["session.generate"]({ params: { sessionID: input["sessionID"] }, payload: { prompt: input["prompt"] } }).pipe(
+    raw["session.generate"]({
+      params: { sessionID: input["sessionID"] },
+      payload: {
+        prompt: input["prompt"],
+        effort: input["effort"],
+        maxTokens: input["maxTokens"],
+        toolChoice: input["toolChoice"],
+      },
+    }).pipe(
       Effect.mapError(mapClientError),
       Effect.map((value) => value.data),
     ),
