@@ -977,7 +977,12 @@ export function make(options: ClientOptions) {
           {
             method: "POST",
             path: `/api/session/${encodeURIComponent(input.sessionID)}/generate`,
-            body: { prompt: input["prompt"] },
+            body: {
+              prompt: input["prompt"],
+              effort: input["effort"],
+              maxTokens: input["maxTokens"],
+              toolChoice: input["toolChoice"],
+            },
             successStatus: 200,
             declaredStatuses: [400, 401, 404, 503],
             empty: false,

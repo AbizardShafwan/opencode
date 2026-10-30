@@ -6,6 +6,7 @@ import { ConfigAgent } from "../src/config/agent.js"
 import { ConfigProvider } from "../src/config/provider.js"
 import { FileSystem } from "../src/filesystem.js"
 import { Form } from "../src/form.js"
+import { Goal } from "../src/goal.js"
 import { Mcp } from "../src/mcp.js"
 import { Model } from "../src/model.js"
 import { Project } from "../src/project.js"
@@ -58,6 +59,27 @@ describe("contract hygiene", () => {
         metadata: undefined,
       }),
     ).toEqual({ text: "completed" })
+    expect(
+      Schema.encodeSync(Goal.State)({
+        id: "goal_1",
+        objective: "Ship the feature",
+        status: "active",
+        reason: undefined,
+        rounds: 0,
+        maxRounds: 50,
+        stalls: undefined,
+        boot: "boot_1",
+        updatedAt: 1,
+      }),
+    ).toEqual({
+      id: "goal_1",
+      objective: "Ship the feature",
+      status: "active",
+      rounds: 0,
+      maxRounds: 50,
+      boot: "boot_1",
+      updatedAt: 1,
+    })
 
     const info = Session.Info.make({
       id: Session.ID.make("ses_untitled"),
@@ -178,6 +200,7 @@ describe("contract hygiene", () => {
       Form.Fields,
       Form.Info,
       Form.ExternalField,
+      Goal.State,
       Mcp.Resource,
       Mcp.ResourceTemplate,
       Mcp.ResourceCatalog,

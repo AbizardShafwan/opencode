@@ -585,4 +585,9 @@
     height: 24px;
     padding-block: 0;
   }
+
+  /* Above session-chat-panel (z-10) and modal dialogs (z-50); matches menu-v2-content. */
+  [data-popper-positioner]:has([data-slot="session-extension-pill-popover"]) {
+    z-index: 60;
+  }
 }

@@ -27,7 +27,7 @@ import { Instructions } from "@opencode/core/instructions/index"
 import { InstructionBuiltIns } from "@opencode/core/instructions/builtins"
 import { Location } from "@opencode/core/location"
 import { McpInstructions } from "@opencode/core/mcp/instructions"
-import { ID } from "@opencode/core/model"
+import { ID, Model } from "@opencode/core/model"
 import { Project } from "@opencode/core/project"
 import { Provider } from "@opencode/core/provider"
 import { ReferenceInstructions } from "@opencode/core/reference/instructions"
@@ -60,6 +60,9 @@ import { testEffect } from "./lib/effect"
 
 const requests: LLMRequest[] = []
 const options: Array<StreamOptions | undefined> = []
+const selections: Array<SessionSchema.Info["model"]> = []
+let catalogModel: Model.Info | undefined
+let outputLimit = 32_000
 let instruction: string | Instructions.Unavailable = "Initial context"
 const sessionID = SessionSchema.ID.make("ses_generate_test")
 
@@ -87,14 +90,19 @@ const client = Layer.mock(LLMClient.Service)({
     }),
 })
 const models = Layer.mock(SessionRunnerModel.Service)({
-  resolve: () =>
-    Effect.succeed(
-      SessionRunnerModel.resolved(model, {
+  resolve: (session) =>
+    Effect.sync(() => {
+      selections.push(session.model)
+      return SessionRunnerModel.resolved(model, {
+        variant: session.model?.variant,
         capabilities: { tools: true, input: ["text", "image"], output: ["text"] },
         cost: [],
-        limit: { context: 200_000, output: 32_000 },
-      }),
-    ),
+        limit: { context: 200_000, output: outputLimit },
+      })
+    }),
+})
+const modelCatalog = Layer.mock(Model.Service, {
+  get: (_providerID, modelID) => Effect.sync(() => (modelID === catalogModel?.id ? catalogModel : undefined)),
 })
 const builtins = Layer.mock(InstructionBuiltIns.Service, {
   load: () =>
@@ -154,6 +162,7 @@ const it = testEffect(
     [
       Bus.node.replace(Bus.configured({ persist: true })),
       llmClient.replace(client),
+      Model.node.replace(modelCatalog),
       SessionRunnerModel.node.replace(models),
       InstructionBuiltIns.node.replace(builtins),
       InstructionDiscovery.node.replace(discovery),
@@ -209,6 +218,9 @@ const userTexts = (request: LLMRequest) =>
   )
 
 const setup = Effect.gen(function* () {
+  selections.length = 0
+  catalogModel = undefined
+  outputLimit = 32_000
   const { db } = yield* Database.Service
   const bus = yield* Bus.Service
   const agents = yield* Agent.Service
@@ -450,4 +462,76 @@ it.effect(
       expect(yield* durableState(db, sessionID)).toEqual(before)
     }),
   { timeout: 15_000 },
+)
+
+it.effect("applies low effort, maxTokens, and toolChoice overrides while keeping default generation unchanged", () =>
+  Effect.gen(function* () {
+    requests.length = 0
+    options.length = 0
+    instruction = "Initial context"
+    const { db, bus, instructions, session, instances } = yield* setup
+    yield* InstructionState.prepare(db, bus, instructions, sessionID)
+    catalogModel = Model.Info.make({
+      ...Model.Info.default(Provider.ID.make("test"), ID.make("generate-model")),
+      variants: [{ id: Model.VariantID.make("low") }, { id: Model.VariantID.make("high") }],
+    })
+
+    // Default generation leaves the session's model variant, output limit, and toolChoice untouched.
+    yield* SessionGenerate.generate({ session, prompt: "Default check" }).pipe(
+      Effect.provideService(Instance.Service, instances),
+    )
+    expect(selections).toEqual([undefined])
+    expect(requests[0]?.generation).toBeUndefined()
+    expect(requests[0]?.toolChoice).toBeUndefined()
+
+    // Low-effort judge generation drops to the minimal reasoning variant, caps output tokens, and disables tool calls
+    // while keeping tool definitions on the request so the prompt-cache prefix still matches.
+    selections.length = 0
+    yield* SessionGenerate.generate({
+      session,
+      prompt: "Judge with low effort",
+      effort: "low",
+      maxTokens: 4_096,
+      toolChoice: { type: "none" },
+    }).pipe(Effect.provideService(Instance.Service, instances))
+    expect(selections).toEqual([
+      undefined,
+      Model.Ref.make({
+        providerID: Provider.ID.make("test"),
+        id: ID.make("generate-model"),
+        variant: Model.VariantID.make("low"),
+      }),
+    ])
+    expect(requests[1]?.generation).toEqual({ maxTokens: 4_096 })
+    expect(requests[1]?.toolChoice).toEqual({ type: "none" })
+    expect(requests[1]?.tools).toMatchObject([{ name: "lookup", description: "Lookup" }])
+
+    // Budget-only models strip a high selected variant to undefined, and maxTokens clamps to model.limit.output.
+    selections.length = 0
+    outputLimit = 1_024
+    catalogModel = Model.Info.make({
+      ...Model.Info.default(Provider.ID.make("test"), ID.make("generate-model")),
+      variants: [{ id: Model.VariantID.make("high") }, { id: Model.VariantID.make("max") }],
+    })
+    const maxRef = Model.Ref.make({
+      providerID: Provider.ID.make("test"),
+      id: ID.make("generate-model"),
+      variant: Model.VariantID.make("max"),
+    })
+    yield* db.update(SessionTable).set({ model: maxRef }).where(eq(SessionTable.id, sessionID)).run().pipe(Effect.orDie)
+    yield* SessionGenerate.generate({
+      session,
+      prompt: "Judge budget model",
+      effort: "low",
+      maxTokens: 4_096,
+    }).pipe(Effect.provideService(Instance.Service, instances))
+    expect(selections).toEqual([
+      maxRef,
+      Model.Ref.make({
+        providerID: Provider.ID.make("test"),
+        id: ID.make("generate-model"),
+      }),
+    ])
+    expect(requests[2]?.generation).toEqual({ maxTokens: 1_024 })
+  }),
 )

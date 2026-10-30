@@ -4022,7 +4022,30 @@ export type SessionInstructionsEntryRemoveOutput = void
 
 export type SessionGenerateInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]
-  readonly prompt: { readonly prompt: string }["prompt"]
+  readonly prompt: {
+    readonly prompt: string
+    readonly effort?: "low" | undefined
+    readonly maxTokens?: number | undefined
+    readonly toolChoice?: { readonly type: "auto" | "none" } | undefined
+  }["prompt"]
+  readonly effort?: {
+    readonly prompt: string
+    readonly effort?: "low" | undefined
+    readonly maxTokens?: number | undefined
+    readonly toolChoice?: { readonly type: "auto" | "none" } | undefined
+  }["effort"]
+  readonly maxTokens?: {
+    readonly prompt: string
+    readonly effort?: "low" | undefined
+    readonly maxTokens?: number | undefined
+    readonly toolChoice?: { readonly type: "auto" | "none" } | undefined
+  }["maxTokens"]
+  readonly toolChoice?: {
+    readonly prompt: string
+    readonly effort?: "low" | undefined
+    readonly maxTokens?: number | undefined
+    readonly toolChoice?: { readonly type: "auto" | "none" } | undefined
+  }["toolChoice"]
 }
 
 export type SessionGenerateOutput = SessionGenerateResponse["data"]

@@ -212,6 +212,9 @@ export interface Interface {
   readonly generate: (input: {
     sessionID: SessionSchema.ID
     prompt: string
+    effort?: "low"
+    maxTokens?: number
+    toolChoice?: { readonly type: "auto" | "none" }
   }) => Effect.Effect<string, NotFoundError | SessionGenerate.Error>
   readonly command: (input: {
     sessionID: SessionSchema.ID
@@ -459,7 +462,13 @@ const layer = Layer.effect(
       prompt: (input) => sessions.forSession(input.sessionID).prompt(input),
       generate: Effect.fn("Session.generate")(function* (input) {
         const session = yield* result.get(input.sessionID)
-        return yield* SessionGenerate.generate({ session, prompt: input.prompt }).pipe(
+        return yield* SessionGenerate.generate({
+          session,
+          prompt: input.prompt,
+          effort: input.effort,
+          maxTokens: input.maxTokens,
+          toolChoice: input.toolChoice,
+        }).pipe(
           Effect.provideService(Instance.Service, instances),
           Effect.provideService(Database.Service, database),
           Effect.provideService(LLMClient.Service, llm),

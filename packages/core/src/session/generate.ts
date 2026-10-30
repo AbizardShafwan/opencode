@@ -26,6 +26,9 @@ export type Error =
 export const generate = Effect.fn("SessionGenerate.generate")(function* (input: {
   session: SessionSchema.Info
   prompt: string
+  effort?: "low"
+  maxTokens?: number
+  toolChoice?: { readonly type: "auto" | "none" }
 }) {
   const instances = yield* Instance.Service
   const database = yield* Database.Service
@@ -35,7 +38,7 @@ export const generate = Effect.fn("SessionGenerate.generate")(function* (input: 
     yield* Plugin.awaitActivation
     const context = yield* SessionContext.Service
     const selection = yield* context.select(input.session.id)
-    const model = yield* context.resolveModel(selection.session)
+    const model = yield* context.resolveModel(selection.session, { effort: input.effort })
     const history = yield* SessionHistory.preview(database.db, selection.session.id, selection.instructions, model.ref)
     const transcript = SessionModelRequest.baseTranscript({
       agent: selection.agent.info,
@@ -50,6 +53,8 @@ export const generate = Effect.fn("SessionGenerate.generate")(function* (input: 
       agent: selection.agent.id,
       model,
       tools: selection.tools,
+      toolChoice: input.toolChoice,
+      maxTokens: input.maxTokens,
       system: transcript.system,
       messages: [
         ...transcript.messages,
