@@ -36,6 +36,7 @@ export const ProviderTipSchema = Persistence.struct({
 export const WorkspaceTipSchema = ProviderTipSchema
 
 export function NewSessionView(props: {
+  draftID: string
   composer: ComposerModel
   project: PromptProjectController
   workspace: NewSessionWorkspaceController
@@ -64,7 +65,7 @@ export function NewSessionView(props: {
         />
         <div data-slot="new-session-content" class="absolute inset-x-0 top-[25.375%] flex justify-center px-6">
           <div class={NEW_SESSION_CONTENT_WIDTH}>
-            <NorseWelcome />
+            <NorseWelcome draftID={props.draftID} />
             <NewSessionWordmark />
             <div class="mt-8 flex flex-col gap-8">
               <Composer model={props.composer} />

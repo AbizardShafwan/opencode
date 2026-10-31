@@ -547,7 +547,23 @@ test("Norse rail preserves global tabs across Home, sessions, and Settings", asy
   await expectPath(page, sessionHref(sessionA.id))
   await expectSessionTitle(page, sessionA.title)
 
-  await rail.locator('[data-slot="norse-rail-brand"]').click()
+  const brand = rail.getByRole("button", { name: "Memyr Home", exact: true })
+  await expect(brand).toHaveAttribute("aria-pressed", "false")
+  await expect(brand.locator('[data-slot="norse-rail-brand-rune"]')).toHaveText("ᛗ")
+  await expect(brand.locator('[data-slot="norse-rail-brand-text"]')).toHaveText("Memyr")
+  await expect(rail.getByRole("button", { name: "Unpin sidebar", exact: true })).toBeVisible()
+  await expect(rail.locator('[data-slot="norse-rail-project"]')).toHaveCount(0)
+
+  await brand.click()
+  await expectPath(page, "/")
+  await expect(brand).toHaveAttribute("aria-pressed", "true")
+  await expect(brand).toHaveAttribute("data-active", "true")
+
+  await brand.click()
+  await expectPath(page, sessionHref(sessionA.id))
+  await expect(brand).toHaveAttribute("aria-pressed", "false")
+
+  await brand.click()
   await expectPath(page, "/")
   await rail.getByRole("button", { name: "Settings", exact: true }).click()
   const settings = page.getByTestId("settings-screen")

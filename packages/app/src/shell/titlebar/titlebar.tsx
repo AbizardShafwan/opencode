@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createResource, Match, Show, Switch, untrack } from "solid-js"
+import { createEffect, createMemo, createResource, Match, onCleanup, Show, Switch, untrack } from "solid-js"
 import { createStore, unwrap } from "solid-js/store"
 import { Dynamic, Portal } from "solid-js/web"
 import { useLocation, useNavigate } from "@solidjs/router"
@@ -56,7 +56,10 @@ const macTrafficLightsTopClearance = 28
 // titlebar row stays 16px clear of it, as ChatGPT's phone header does. Without one, 8px matches the content gap below.
 const mobileTopClearance = "max(8px, min(16px, env(safe-area-inset-top, 0px) * 1000))"
 
-export function Titlebar(props: { verticalTabs?: { mount?: HTMLElement } }) {
+export function Titlebar(props: {
+  verticalTabs?: { mount?: HTMLElement }
+  onToggleHome?: (toggleHome: (() => void) | undefined) => void
+}) {
   const theme = useTheme()
 
   const norse = () => isNorseTheme(theme.themeId())
@@ -400,6 +403,14 @@ export function Titlebar(props: { verticalTabs?: { mount?: HTMLElement } }) {
             }
 
             const toggleHome = () => tabs.toggleHome({ home: layout.route().type === "home", current: currentTab() })
+
+            createEffect(() => {
+              props.onToggleHome?.(toggleHome)
+            })
+
+            onCleanup(() => {
+              props.onToggleHome?.(undefined)
+            })
 
             const homeButton = (vertical = false) => (
               <Show

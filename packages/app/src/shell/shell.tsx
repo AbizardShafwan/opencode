@@ -47,10 +47,12 @@ export default function Layout(props: ParentProps) {
     tabsWidth: number
     tabsMount: HTMLElement | undefined
     railTabsMount: HTMLElement | undefined
+    toggleHome?: () => void
   }>({
     tabsWidth: 260,
     tabsMount: undefined,
     railTabsMount: undefined,
+    toggleHome: undefined,
   })
   const [rail, setRail] = createStore({ pinned: readRailPinned() })
 
@@ -90,7 +92,10 @@ export default function Layout(props: ParentProps) {
         }}
       >
         <NorseBackdrop />
-        <Titlebar verticalTabs={verticalTabs() ? { mount: norse() ? state.railTabsMount : state.tabsMount } : undefined} />
+        <Titlebar
+          verticalTabs={verticalTabs() ? { mount: norse() ? state.railTabsMount : state.tabsMount } : undefined}
+          onToggleHome={(fn) => setState("toggleHome", fn ? () => fn : undefined)}
+        />
         <div
           data-slot="shell-content"
           class="relative flex flex-1 min-h-0 min-w-0 flex-row"
@@ -104,6 +109,7 @@ export default function Layout(props: ParentProps) {
               pinned={rail.pinned}
               onTogglePin={toggleRailPin}
               onTabsMount={(element) => setState("railTabsMount", element)}
+              onToggleHome={() => state.toggleHome?.()}
             />
           </Show>
           <Show when={verticalTabs() && !norse()}>

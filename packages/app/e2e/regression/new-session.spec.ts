@@ -55,8 +55,8 @@ test("Norse centers the welcome and composer together and keeps expanded drafts 
   await openDraft(page, { name: "NorseLanding", seed: { theme: { id: "norse", scheme: "dark" } } })
   const panel = page.locator('[data-component="new-session"]')
   const content = page.locator('[data-slot="new-session-content"] > div')
-  const greeting = page.getByRole("heading", { name: "Velkominn, seeker.", exact: true })
-  const subtitle = page.getByText("Ask, and the well remembers.", { exact: true })
+  const greeting = page.locator('[data-component="norse-welcome"]').getByRole("heading", { level: 1 })
+  const subtitle = page.locator('[data-slot="norse-welcome-subtitle"]')
   await expect(greeting).toBeVisible()
   await page.evaluate(() => document.fonts.ready.then(() => undefined))
 
@@ -95,6 +95,22 @@ test("Norse centers the welcome and composer together and keeps expanded drafts 
   await expect(project).toBeInViewport()
   await project.click()
   await expect(page.getByRole("menu")).toBeVisible()
+})
+
+test("Norse welcome changes for a new draft and stays with its draft", async ({ page }) => {
+  const draft = await openDraft(page, { name: "NorseGreetings", seed: { theme: { id: "norse", scheme: "dark" } } })
+  const greeting = page.locator('[data-component="norse-welcome"]').getByRole("heading", { level: 1 })
+  await expect(greeting).toBeVisible()
+  const original = await greeting.innerText()
+
+  await page.keyboard.press("Control+t")
+  await expect(greeting).not.toHaveText(original)
+  const next = await greeting.innerText()
+  await page.locator(`[data-titlebar-tab-link][href="${draftHref(draft.draftID)}"]`).click()
+  await expect(greeting).toHaveText(original)
+  await page.keyboard.press("Control+t")
+  await expect(greeting).not.toHaveText(next)
+  await expect(greeting).not.toHaveText(original)
 })
 
 test("Norse ambient gradients remain visible through the app root", async ({ page }) => {
