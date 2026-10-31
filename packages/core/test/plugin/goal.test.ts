@@ -1,10 +1,13 @@
 import { describe, expect } from "bun:test"
 import { Deferred, Effect, Layer, Option, Schedule, Schema, Stream } from "effect"
+import { sql } from "drizzle-orm"
 import { AIError, InvalidRequestError, LanguageModel, type LLMRequest } from "@opencode/ai"
 import { OpenAIChat } from "@opencode/ai/protocols/openai-chat"
 import { TestLLM } from "@opencode/ai/testing"
 import { Agent } from "@opencode/core/agent"
+import { Database } from "@opencode/core/database/database"
 import { AppNodeBuilder } from "@opencode/core/effect/app-node-builder"
+import { Bus } from "@opencode/core/bus"
 import { LayerNodePlatform } from "@opencode/core/effect/app-node-platform"
 import { Watcher } from "@opencode/core/filesystem/watcher"
 import { Job } from "@opencode/core/job"
@@ -16,6 +19,7 @@ import { PluginHost } from "@opencode/core/plugin/host"
 import { Provider } from "@opencode/core/provider"
 import { AbsolutePath } from "@opencode/core/schema"
 import { Session } from "@opencode/core/session"
+import { SessionEvent } from "@opencode/core/session/event"
 import { SessionRunnerModel } from "@opencode/core/session/runner/model"
 import { Goal } from "@opencode/schema/goal"
 import { LayerNode } from "@opencode/util/effect/layer-node"
@@ -29,7 +33,9 @@ const llmLayer = TestLLM.testLayer({ fallback: TestLLM.text("Working on it", "wo
 const it = testEffect(
   Layer.merge(
     llmLayer,
-    AppNodeBuilder.build(LayerNode.group([Session.node, LocationServiceMap.node, Job.node, KV.node]), [
+    AppNodeBuilder.build(
+      LayerNode.group([Session.node, LocationServiceMap.node, Job.node, KV.node, Database.node, Bus.node]),
+      [
       Global.node.replace(tempGlobalLayer),
       offlineModels,
       Watcher.node.replace(Watcher.configured({ enabled: false })),
@@ -313,7 +319,7 @@ describe("goal plugin", () => {
         status: "active",
         rounds: 2,
         maxRounds: 50,
-        boot: "an-earlier-process",
+        boot: GoalPlugin.boot(),
         updatedAt: 0,
       })
 
@@ -482,6 +488,323 @@ describe("goal plugin", () => {
 
       yield* sessions.command({ sessionID: session.id, command: "goal", text: "clear" })
       expect(yield* goal(session.id)).toBeUndefined()
+    }),
+  )
+
+  it.live("judges the final permitted round and completes if the verdict is done", () =>
+    Effect.gen(function* () {
+      const session = yield* project()
+      const sessions = yield* Session.Service
+      const verdicts = reviewer('{"verdict":"done","reason":"All tasks accomplished."}')
+      yield* serve(verdicts.respond)
+      yield* setGoal(session.id, {
+        id: "goal-final-round",
+        objective: "Finish everything",
+        status: "active",
+        rounds: 50,
+        maxRounds: 50,
+        boot: GoalPlugin.boot(),
+        updatedAt: 0,
+      })
+
+      yield* sessions.prompt({ sessionID: session.id, text: "Do the last step" })
+      yield* sessions.wait(session.id)
+
+      expect(verdicts.asked()).toBe(1)
+      expect(yield* goal(session.id)).toMatchObject({
+        status: "complete",
+        reason: "All tasks accomplished.",
+      })
+    }),
+  )
+
+  it.live("judges the final permitted round and pauses with limit reached if not done", () =>
+    Effect.gen(function* () {
+      const session = yield* project()
+      const sessions = yield* Session.Service
+      const verdicts = reviewer('{"verdict":"continue","reason":"Still need more work."}')
+      yield* serve(verdicts.respond)
+      yield* setGoal(session.id, {
+        id: "goal-final-round-incomplete",
+        objective: "Finish everything",
+        status: "active",
+        rounds: 50,
+        maxRounds: 50,
+        boot: GoalPlugin.boot(),
+        updatedAt: 0,
+      })
+
+      yield* sessions.prompt({ sessionID: session.id, text: "Do the last step" })
+      yield* sessions.wait(session.id)
+
+      expect(verdicts.asked()).toBe(1)
+      expect(yield* goal(session.id)).toMatchObject({
+        status: "paused",
+        reason: "Reached the limit of 50 rounds",
+      })
+    }),
+  )
+
+  it.live("pauses a goal with stale boot immediately when execution starts", () =>
+    Effect.gen(function* () {
+      const session = yield* project()
+      const sessions = yield* Session.Service
+      yield* setGoal(session.id, {
+        id: "goal-stale-boot",
+        objective: "Work on feature",
+        status: "active",
+        rounds: 1,
+        maxRounds: 50,
+        boot: "stale-boot-id",
+        updatedAt: 0,
+      })
+
+      yield* sessions.prompt({ sessionID: session.id, text: "Hello" })
+      yield* sessions.wait(session.id)
+
+      expect(yield* goal(session.id)).toMatchObject({
+        status: "paused",
+        reason: "The server restarted while the goal was active",
+      })
+    }),
+  )
+
+  it.live("drops the reviewer's verdict when the goal is paused and resumed while it runs", () =>
+    Effect.gen(function* () {
+      const session = yield* project()
+      const sessions = yield* Session.Service
+      const judging = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      let reviewCount = 0
+      yield* serve((request) => {
+        if (!isReview(request)) return TestLLM.text("Working on it", "work")
+        reviewCount++
+        if (reviewCount === 1) {
+          return Stream.fromEffect(Deferred.succeed(judging, undefined).pipe(Effect.andThen(Deferred.await(release)))).pipe(
+            Stream.flatMap(() =>
+              Stream.fromIterable(TestLLM.text('{"verdict":"done","reason":"Old verdict from review 1."}', "review")),
+            ),
+          )
+        }
+        return TestLLM.text('{"verdict":"continue","reason":"Still continuing in review 2."}', "review")
+      })
+
+      yield* sessions.command({ sessionID: session.id, command: "goal", text: "Rename the module" })
+      yield* Deferred.await(judging)
+      yield* sessions.command({ sessionID: session.id, command: "goal", text: "pause" })
+      yield* sessions.command({ sessionID: session.id, command: "goal", text: "resume" })
+      yield* Deferred.succeed(release, undefined)
+      yield* sessions.wait(session.id)
+
+      // The old in-flight verdict "Old verdict from review 1." must NOT settle the resumed goal!
+      const current = yield* goal(session.id)
+      expect(current?.reason).not.toBe("Old verdict from review 1.")
+    }),
+  )
+
+  it.live("does not pause a resumed goal when an earlier in-flight reviewer errors", () =>
+    Effect.gen(function* () {
+      const session = yield* project()
+      const sessions = yield* Session.Service
+      const judging = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      let reviewCount = 0
+      yield* serve((request) => {
+        if (!isReview(request)) return TestLLM.text("Working on it", "work")
+        reviewCount++
+        if (reviewCount === 1) {
+          return Stream.fromEffect(
+            Deferred.succeed(judging, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.andThen(
+                Effect.fail(new AIError({ reason: new InvalidRequestError({ message: "Reviewer failed" }) })),
+              ),
+            ),
+          )
+        }
+        return TestLLM.text('{"verdict":"done","reason":"Done in review 2."}', "review")
+      })
+
+      yield* sessions.command({ sessionID: session.id, command: "goal", text: "Rename the module" })
+      yield* Deferred.await(judging)
+      yield* sessions.command({ sessionID: session.id, command: "goal", text: "pause" })
+      yield* sessions.command({ sessionID: session.id, command: "goal", text: "resume" })
+      yield* Deferred.succeed(release, undefined)
+      yield* sessions.wait(session.id)
+
+      // The failed review 1 must NOT pause the resumed goal
+      const current = yield* goal(session.id)
+      expect(current?.status).toBe("complete")
+    }),
+  )
+
+  it.live("rolls back a resumed goal to paused if synthetic admission fails", () =>
+    Effect.gen(function* () {
+      const session = yield* project()
+      const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      yield* setGoal(session.id, {
+        id: "goal-paused",
+        objective: "Fix bug",
+        status: "paused",
+        reason: "Paused by user",
+        rounds: 1,
+        maxRounds: 50,
+        boot: GoalPlugin.boot(),
+        updatedAt: 100,
+      })
+
+      yield* db.run(
+        sql.raw(
+          `CREATE TRIGGER fail_resume_inbox BEFORE INSERT ON session_inbox WHEN NEW.session_id = '${session.id}' BEGIN SELECT RAISE(ABORT, 'Synthetic admission failed'); END`,
+        ),
+      )
+
+      const exit = yield* sessions
+        .command({ sessionID: session.id, command: "goal", text: "resume" })
+        .pipe(Effect.exit)
+
+      yield* db.run(sql`DROP TRIGGER fail_resume_inbox`)
+
+      expect(exit._tag).toBe("Failure")
+
+      // Failed synthetic admission rolled back goal to paused state
+      expect(yield* goal(session.id)).toMatchObject({
+        id: "goal-paused",
+        status: "paused",
+        reason: "Paused by user",
+      })
+    }),
+  )
+
+  it.live("cleans up goal state if kickoff admission fails", () =>
+    Effect.gen(function* () {
+      const session = yield* project()
+      const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+
+      yield* db.run(
+        sql.raw(
+          `CREATE TRIGGER fail_kickoff_inbox BEFORE INSERT ON session_inbox WHEN NEW.session_id = '${session.id}' BEGIN SELECT RAISE(ABORT, 'Kickoff admission failed'); END`,
+        ),
+      )
+
+      const exit = yield* sessions
+        .command({ sessionID: session.id, command: "goal", text: "Some objective" })
+        .pipe(Effect.exit)
+
+      yield* db.run(sql`DROP TRIGGER fail_kickoff_inbox`)
+
+      expect(exit._tag).toBe("Failure")
+
+      // It cleaned up its own goal because current?.id === created.id
+      expect(yield* goal(session.id)).toBeUndefined()
+    }),
+  )
+
+  it.live("restores previous goal state if replacement kickoff admission fails", () =>
+    Effect.gen(function* () {
+      const session = yield* project()
+      const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+
+      const previousGoal = {
+        id: "previous-goal-id",
+        objective: "Previous goal objective",
+        status: "paused" as const,
+        reason: "Paused for now",
+        rounds: 3,
+        maxRounds: 50,
+        boot: GoalPlugin.boot(),
+        updatedAt: 100,
+      }
+      yield* setGoal(session.id, previousGoal)
+
+      yield* db.run(
+        sql.raw(
+          `CREATE TRIGGER fail_replacement_inbox BEFORE INSERT ON session_inbox WHEN NEW.session_id = '${session.id}' BEGIN SELECT RAISE(ABORT, 'Kickoff admission failed'); END`,
+        ),
+      )
+
+      const exit = yield* sessions
+        .command({ sessionID: session.id, command: "goal", text: "New replacement objective" })
+        .pipe(Effect.exit)
+
+      yield* db.run(sql`DROP TRIGGER fail_replacement_inbox`)
+
+      expect(exit._tag).toBe("Failure")
+
+      // It restored the previous goal rather than wiping it to undefined!
+      expect(yield* goal(session.id)).toMatchObject(previousGoal)
+    }),
+  )
+
+  it.live("pauses the goal if continuation admission fails", () =>
+    Effect.gen(function* () {
+      const session = yield* project()
+      const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      const judging = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      yield* serve((request) =>
+        isReview(request)
+          ? Stream.fromEffect(Deferred.succeed(judging, undefined).pipe(Effect.andThen(Deferred.await(release)))).pipe(
+              Stream.flatMap(() =>
+                Stream.fromIterable(TestLLM.text('{"verdict":"continue","reason":"Keep going"}', "review")),
+              ),
+            )
+          : TestLLM.text("Working on it", "work"),
+      )
+
+      yield* sessions.command({ sessionID: session.id, command: "goal", text: "Some objective" })
+      yield* Deferred.await(judging)
+
+      // Create a trigger while reviewer is running, so that continuation admission fails
+      yield* db.run(
+        sql.raw(
+          `CREATE TRIGGER fail_continuation_inbox BEFORE INSERT ON session_inbox WHEN NEW.session_id = '${session.id}' BEGIN SELECT RAISE(ABORT, 'Continuation admission failed'); END`,
+        ),
+      )
+
+      yield* Deferred.succeed(release, undefined)
+      yield* sessions.wait(session.id)
+
+      yield* db.run(sql`DROP TRIGGER fail_continuation_inbox`)
+
+      expect(yield* goal(session.id)).toMatchObject({
+        status: "paused",
+        reason: "The goal stopped after an error",
+      })
+    }),
+  )
+
+  it.live("does not pause a newly submitted goal when an earlier execution ends with failure or interruption", () =>
+    Effect.gen(function* () {
+      const session = yield* project()
+      const sessions = yield* Session.Service
+      const bus = yield* Bus.Service
+
+      yield* sessions.command({ sessionID: session.id, command: "goal", text: "Goal 1" })
+      const goal1 = yield* goal(session.id)
+      expect(goal1?.objective).toBe("Goal 1")
+
+      // Simulate execution starting for Goal 1
+      yield* bus.publish(SessionEvent.Execution.Started, { sessionID: session.id })
+      yield* Effect.yieldNow
+
+      // User submits replacement Goal 2
+      yield* sessions.command({ sessionID: session.id, command: "goal", text: "Goal 2" })
+      const goal2 = yield* goal(session.id)
+      expect(goal2?.objective).toBe("Goal 2")
+
+      // The old execution for Goal 1 is interrupted or fails
+      yield* bus.publish(SessionEvent.Execution.Interrupted, { sessionID: session.id, reason: "user" })
+      yield* Effect.yieldNow
+
+      // Goal 2 must NOT be paused by the old execution's interruption!
+      const current = yield* goal(session.id)
+      expect(current?.status).toBe("active")
+      expect(current?.objective).toBe("Goal 2")
     }),
   )
 })

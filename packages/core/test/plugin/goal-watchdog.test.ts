@@ -6,7 +6,10 @@ import type { CommandDefinition } from "@opencode/plugin/effect/command"
 import { Event } from "@opencode/schema/event"
 import { Goal } from "@opencode/schema/goal"
 import { GoalPlugin } from "@opencode/core/plugin/goal"
+import { Job } from "@opencode/core/job"
 import { Session } from "@opencode/core/session"
+import { SessionStore } from "@opencode/core/session/store"
+import { AbsolutePath } from "@opencode/core/schema"
 import type { SessionEvent } from "@opencode/core/session/event"
 import { it } from "../lib/effect"
 import { host } from "./host"
@@ -21,12 +24,12 @@ const parents: Record<string, Session.ID | undefined> = { [child]: sessionID, [g
 type Execution = SessionEvent.Execution.Started | SessionEvent.Execution.Succeeded
 type Watched = Execution | SessionEvent.Step.Started
 
-const execution = (type: Execution["type"]): Execution => ({
+const execution = (type: Execution["type"], target = sessionID): Execution => ({
   id: Event.ID.create(),
   created: 0,
-  durable: { aggregateID: sessionID, seq: Event.Seq.make(0), version: Event.Version.make(1) },
+  durable: { aggregateID: target, seq: Event.Seq.make(0), version: Event.Version.make(1) },
   type,
-  data: { sessionID },
+  data: { sessionID: target },
 })
 
 // SAFETY: the plugin reads only the type and Session ID of a step event.
@@ -34,7 +37,11 @@ const step = (stepSessionID: Session.ID) =>
   ({ type: "session.step.started", data: { sessionID: stepSessionID } }) as unknown as SessionEvent.Step.Started
 
 /** Runs the goal plugin against stubbed domains: plugin storage in memory, and RPC that records what it publishes. */
-const run = Effect.fnUntraced(function* (seed?: Goal.State) {
+const run = Effect.fnUntraced(function* (
+  seed?: Goal.State,
+  options?: { isExecuting?: boolean; runningBackground?: unknown[] },
+) {
+  let backgroundJobs = options?.runningBackground ?? []
   const stored = new Map<string, Schema.Json>(seed ? [[`session:${sessionID}`, seed]] : [])
   const changed: unknown[] = []
   const handlers: { get?: (input: { sessionID: string }) => Effect.Effect<Goal.State | null> } = {}
@@ -47,6 +54,7 @@ const run = Effect.fnUntraced(function* (seed?: Goal.State) {
       parentID: parents[id],
       title: "Release",
       time: { created: DateTime.makeUnsafe(0) },
+      location: { directory: AbsolutePath.make("/workspace") },
     }) as unknown as Session.Info
   const session: Partial<Plugin.Context["session"]> = {
     // SAFETY: these tests drive the plugin through events and commands, not its session hooks.
@@ -55,7 +63,7 @@ const run = Effect.fnUntraced(function* (seed?: Goal.State) {
     update: () => Effect.void,
     synthetic: () => Effect.void as never,
   }
-  yield* GoalPlugin.Plugin.effect(
+  const start = GoalPlugin.Plugin.effect(
     host({
       session,
       storage: {
@@ -93,19 +101,33 @@ const run = Effect.fnUntraced(function* (seed?: Goal.State) {
       },
     }),
   )
+  const jobService = Job.Service.of({
+    runningBackground: Effect.sync(() => backgroundJobs as any),
+  } as any)
+  const storeService = SessionStore.Service.of({
+    get: (id: Session.ID) => Effect.sync(() => ({ id, parentID: parents[id] } as any)),
+  } as any)
+  yield* start.pipe(
+    Effect.provideService(Job.Service, jobService),
+    Effect.provideService(SessionStore.Service, storeService),
+  )
   // Let the forked event watcher and startup sweep start.
   yield* Effect.yieldNow
   return {
-    goal: () =>
-      Option.getOrUndefined(Schema.decodeUnknownOption(Goal.State)(stored.get(`session:${sessionID}`))),
+    setBackgroundJobs: (jobs: unknown[]) => {
+      backgroundJobs = jobs
+    },
+    goal: (target = sessionID) =>
+      Option.getOrUndefined(Schema.decodeUnknownOption(Goal.State)(stored.get(`session:${target}`))),
+    set: (target: Session.ID, state: Goal.State) => void stored.set(`session:${target}`, state),
     changed,
     get: () => handlers.get?.({ sessionID }) ?? Effect.die(new Error("the goal RPC was not registered")),
     command: (text: string) =>
       Effect.forEach(commands, (definition) =>
         definition.execute({ sessionID, prompt: { text }, delivery: "steer" }).pipe(Effect.orDie),
       ),
-    emit: (type: Execution["type"]) =>
-      Queue.offer(events, execution(type)).pipe(Effect.andThen(Effect.yieldNow), Effect.andThen(Effect.yieldNow)),
+    emit: (type: Execution["type"], target = sessionID) =>
+      Queue.offer(events, execution(type, target)).pipe(Effect.andThen(Effect.yieldNow), Effect.andThen(Effect.yieldNow)),
     step: (stepSessionID: Session.ID) =>
       Queue.offer(events, step(stepSessionID)).pipe(Effect.andThen(Effect.yieldNow), Effect.andThen(Effect.yieldNow)),
   }
@@ -131,6 +153,30 @@ describe("goal plugin waiting", () => {
     }),
   )
 
+  it.effect("restores waiting goal's watchdog on same-process reload and pauses after WAIT_LIMIT", () =>
+    Effect.gen(function* () {
+      const plugin = yield* run({
+        id: "goal-same-process",
+        objective: "Ship the release",
+        status: "active",
+        rounds: 1,
+        maxRounds: 50,
+        boot: GoalPlugin.boot(),
+        updatedAt: 0,
+      })
+
+      // Active goal is NOT immediately paused on startup
+      expect(plugin.goal()).toMatchObject({ status: "active" })
+
+      // Watchdog was restored on startup because SessionExecution is not active: advancing time by WAIT_LIMIT pauses it
+      yield* TestClock.adjust(GoalPlugin.WAIT_LIMIT)
+      expect(plugin.goal()).toMatchObject({
+        status: "paused",
+        reason: "Nothing ran for 30 minutes while the goal waited on background work",
+      })
+    }),
+  )
+
   it.effect("pauses a goal that sits idle past the limit, and not while the Session keeps running", () =>
     Effect.gen(function* () {
       const plugin = yield* run()
@@ -147,6 +193,29 @@ describe("goal plugin waiting", () => {
 
       yield* plugin.emit("session.execution.succeeded")
       yield* TestClock.adjust(GoalPlugin.WAIT_LIMIT)
+      expect(plugin.goal()).toMatchObject({
+        status: "paused",
+        reason: "Nothing ran for 30 minutes while the goal waited on background work",
+      })
+    }),
+  )
+
+  it.effect("keeps waiting while the Session itself keeps running steps", () =>
+    Effect.gen(function* () {
+      const plugin = yield* run()
+      yield* plugin.command("Ship the release")
+      yield* plugin.emit("session.execution.succeeded")
+
+      // Steps on the goal session itself reset the timer
+      yield* TestClock.adjust(Duration.subtract(GoalPlugin.WAIT_LIMIT, Duration.minutes(1)))
+      yield* plugin.step(sessionID)
+      yield* TestClock.adjust(Duration.subtract(GoalPlugin.WAIT_LIMIT, Duration.minutes(1)))
+      yield* plugin.step(sessionID)
+      yield* TestClock.adjust(Duration.subtract(GoalPlugin.WAIT_LIMIT, Duration.minutes(1)))
+      expect(plugin.goal()).toMatchObject({ status: "active" })
+
+      // Advancing past WAIT_LIMIT with no more steps pauses it
+      yield* TestClock.adjust(Duration.minutes(2))
       expect(plugin.goal()).toMatchObject({
         status: "paused",
         reason: "Nothing ran for 30 minutes while the goal waited on background work",
@@ -191,6 +260,42 @@ describe("goal plugin waiting", () => {
     }),
   )
 
+  it.effect("refreshes all waiting ancestor goals when a descendant runs steps", () =>
+    Effect.gen(function* () {
+      const plugin = yield* run()
+      yield* plugin.command("Ship the release")
+      plugin.set(child, {
+        id: "goal-child",
+        objective: "Child task",
+        status: "active",
+        rounds: 1,
+        maxRounds: 50,
+        boot: GoalPlugin.boot(),
+        updatedAt: 0,
+      })
+
+      // Both sessionID (parent) and child enter waiting state
+      yield* plugin.emit("session.execution.succeeded", sessionID)
+      yield* plugin.emit("session.execution.succeeded", child)
+
+      // Step from grandchild at 29 minutes (both should be refreshed)
+      yield* TestClock.adjust(Duration.minutes(29))
+      yield* plugin.step(grandchild)
+
+      // Advance another 20 minutes (total 49 min from start, 20 min from grandchild step)
+      yield* TestClock.adjust(Duration.minutes(20))
+
+      // Both parent and child goals should still be active!
+      expect(plugin.goal(sessionID)).toMatchObject({ status: "active" })
+      expect(plugin.goal(child)).toMatchObject({ status: "active" })
+
+      // Advance another 11 minutes (31 min from grandchild step) -> both should pause!
+      yield* TestClock.adjust(Duration.minutes(11))
+      expect(plugin.goal(sessionID)).toMatchObject({ status: "paused" })
+      expect(plugin.goal(child)).toMatchObject({ status: "paused" })
+    }),
+  )
+
   it.effect("serves the goal over RPC and publishes every change", () =>
     Effect.gen(function* () {
       const plugin = yield* run()
@@ -207,6 +312,39 @@ describe("goal plugin waiting", () => {
         { sessionID, goal: { status: "paused", reason: "Paused by the user" } },
         { sessionID, goal: null },
       ])
+    }),
+  )
+
+  it.effect("restarts watchdog timer without pausing when background work is still running across locations", () =>
+    Effect.gen(function* () {
+      const plugin = yield* run(undefined, {
+        runningBackground: [
+          {
+            kind: "subagent",
+            parentSessionID: sessionID,
+            childSessionID: child,
+            agent: "reviewer",
+            description: "testing",
+          },
+        ],
+      })
+      yield* plugin.command("Ship the release")
+      yield* plugin.emit("session.execution.succeeded")
+
+      // Advancing by WAIT_LIMIT checks SessionBackground.outstanding
+      yield* TestClock.adjust(GoalPlugin.WAIT_LIMIT)
+      // Because background job was running, watchdog restarted timer instead of pausing!
+      expect(plugin.goal()).toMatchObject({ status: "active" })
+
+      // Now background job finishes
+      plugin.setBackgroundJobs([])
+
+      // Advancing by WAIT_LIMIT again with no background work pauses it
+      yield* TestClock.adjust(GoalPlugin.WAIT_LIMIT)
+      expect(plugin.goal()).toMatchObject({
+        status: "paused",
+        reason: "Nothing ran for 30 minutes while the goal waited on background work",
+      })
     }),
   )
 })

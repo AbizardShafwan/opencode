@@ -7,6 +7,11 @@ import { Goal } from "@opencode/schema/goal"
 import { Session } from "@opencode/schema/session"
 import { isExactRootFallback } from "@opencode/util/session-title-fallback"
 import { Cause, Clock, DateTime, Duration, Effect, FiberMap, Option, Schema, Stream } from "effect"
+import { KeyedMutex } from "../effect/keyed-mutex.js"
+import { Job } from "../job.js"
+import { SessionBackground } from "../session/background.js"
+import { SessionExecution } from "../session/execution.js"
+import { SessionStore } from "../session/store.js"
 import CONTINUATION from "./goal/continuation.txt"
 import JUDGE from "./goal/judge.txt"
 import KICKOFF from "./goal/kickoff.txt"
@@ -21,12 +26,14 @@ export const WAIT_LIMIT = Duration.minutes(30)
 // Identifies this server process. A goal armed by an earlier process comes back paused instead of resuming on its own.
 // Created on first use: Workers forbid random values while a module loads.
 let processBoot: string | undefined
-const boot = () => (processBoot ??= crypto.randomUUID())
+export const boot = () => (processBoot ??= crypto.randomUUID())
 
 type State = Goal.State
 const decodeState = Schema.decodeUnknownOption(Goal.State)
 // Storage key prefix of a Session's goal. Plugin storage is the plugin's own, so children and forks start without one.
 const PREFIX = "session:"
+
+const sessionLocks = KeyedMutex.makeUnsafe<Session.ID>()
 
 const Verdict = Schema.Struct({
   verdict: Schema.Literals(["done", "continue", "blocked", "paused", "wait"]),
@@ -59,14 +66,40 @@ export const Plugin = define({
         .pipe(Effect.catchCause((cause) => Effect.logWarning("failed to publish a goal change", { sessionID, cause })))
     })
 
-    // The loop's own writes only apply to the goal they were decided on. Storage has no compare-and-set, so this
-    // re-reads first: a `/goal pause`, `clear` or new goal that landed since wins instead of being overwritten.
-    const replace = Effect.fn("GoalPlugin.replace")(function* (sessionID: Session.ID, expected: State, next: State) {
+    const replaceLocked = Effect.fn("GoalPlugin.replaceLocked")(function* (
+      sessionID: Session.ID,
+      expected: State,
+      next: State,
+    ) {
       const current = yield* read(sessionID)
-      if (current?.id !== expected.id || current.updatedAt !== expected.updatedAt || current.status !== expected.status)
+      if (
+        !current ||
+        current.id !== expected.id ||
+        current.updatedAt !== expected.updatedAt ||
+        current.status !== expected.status ||
+        current.status !== "active"
+      )
         return false
       yield* write(sessionID, next)
       return true
+    })
+
+    // The loop's own writes only apply to the goal they were decided on. Storage has no compare-and-set, so this
+    // re-reads first: a `/goal pause`, `clear` or new goal that landed since wins instead of being overwritten.
+    const replace = Effect.fn("GoalPlugin.replace")(function* (sessionID: Session.ID, expected: State, next: State) {
+      return yield* sessionLocks.withLock(sessionID)(replaceLocked(sessionID, expected, next))
+    })
+
+    const settleLocked = Effect.fn("GoalPlugin.settleLocked")(function* (
+      sessionID: Session.ID,
+      goal: State,
+      status: "paused" | "complete",
+      reason: string,
+    ) {
+      if (status === "paused") compacted.delete(sessionID)
+      const now = yield* Clock.currentTimeMillis
+      const updatedAt = Math.max(now, (goal.updatedAt ?? 0) + 1)
+      return yield* replaceLocked(sessionID, goal, { ...goal, status, reason, updatedAt })
     })
 
     const settle = Effect.fn("GoalPlugin.settle")(function* (
@@ -75,12 +108,19 @@ export const Plugin = define({
       status: "paused" | "complete",
       reason: string,
     ) {
-      yield* replace(sessionID, goal, { ...goal, status, reason, updatedAt: yield* Clock.currentTimeMillis })
+      if (status === "paused") compacted.delete(sessionID)
+      const now = yield* Clock.currentTimeMillis
+      const updatedAt = Math.max(now, (goal.updatedAt ?? 0) + 1)
+      return yield* replace(sessionID, goal, { ...goal, status, reason, updatedAt })
     })
 
-    const pauseActive = (sessionID: Session.ID, reason: string) =>
+    const pauseActive = (sessionID: Session.ID, reason: string, expected?: { id: string; updatedAt: number }) =>
       read(sessionID).pipe(
-        Effect.flatMap((goal) => (goal?.status === "active" ? settle(sessionID, goal, "paused", reason) : Effect.void)),
+        Effect.flatMap((goal) => {
+          if (goal?.status !== "active") return Effect.void
+          if (expected && (goal.id !== expected.id || goal.updatedAt !== expected.updatedAt)) return Effect.void
+          return settle(sessionID, goal, "paused", reason)
+        }),
       )
 
     // One compaction per round when the reviewer's request is too large; a second overflow pauses instead. An entry
@@ -149,16 +189,14 @@ export const Plugin = define({
     const idle = Effect.fn("GoalPlugin.idle")(function* (
       sessionID: Session.ID,
       background: ReadonlyArray<SessionIdleBackground>,
+      goal: State,
     ) {
-      const goal = yield* read(sessionID)
-      if (goal?.status !== "active") return
+      if (goal.status !== "active") return
       if (goal.boot !== boot())
         return yield* settle(sessionID, goal, "paused", "The server restarted while the goal was active")
       // The Session's own running subagent wakes it with its report, and the hook runs again then. A grandchild reports
       // to its own parent, so it would never wake this Session.
       if (background.some((work) => work.kind === "subagent" && work.sessionID === sessionID)) return
-      if (goal.rounds >= goal.maxRounds)
-        return yield* settle(sessionID, goal, "paused", `Reached the limit of ${goal.maxRounds} rounds`)
 
       // Only the Session's own shells wake it when they finish. A subagent's leftover shell wakes the subagent, so
       // waiting on it would leave this Session idle until the wait limit pauses the goal.
@@ -169,7 +207,7 @@ export const Plugin = define({
       if (verdict !== "overflow") compacted.delete(sessionID)
       // `/goal pause`, `clear` or a new goal may have landed while the reviewer ran.
       const latest = yield* read(sessionID)
-      if (latest?.id !== goal.id || latest.status !== "active") return
+      if (!latest || latest.id !== goal.id || latest.status !== "active" || latest.updatedAt !== goal.updatedAt) return
       if (verdict === "overflow") {
         const key = `${latest.id}:${latest.rounds}`
         if (compacted.get(sessionID) === key) {
@@ -185,6 +223,8 @@ export const Plugin = define({
         return yield* settle(sessionID, latest, "paused", "The goal reviewer gave no usable verdict")
       if (verdict.verdict === "wait") return
       if (verdict.verdict === "done") return yield* settle(sessionID, latest, "complete", verdict.reason)
+      if (latest.rounds >= latest.maxRounds)
+        return yield* settle(sessionID, latest, "paused", `Reached the limit of ${latest.maxRounds} rounds`)
       if (verdict.verdict !== "continue") return yield* settle(sessionID, latest, "paused", verdict.reason)
 
       const stalled = sameReason(latest.reason, verdict.reason) || !(yield* usedTools(sessionID, latest.id))
@@ -192,32 +232,59 @@ export const Plugin = define({
       if (stalls >= MAX_STALLS)
         return yield* settle(sessionID, latest, "paused", `Not making progress: ${verdict.reason}`)
 
+      const now = yield* Clock.currentTimeMillis
       const next = {
         ...latest,
         rounds: latest.rounds + 1,
         stalls,
         reason: verdict.reason,
-        updatedAt: yield* Clock.currentTimeMillis,
+        updatedAt: Math.max(now, (latest.updatedAt ?? 0) + 1),
       }
       if (!(yield* replace(sessionID, latest, next))) return
-      // No description: timelines hide the continuation, and the pinned goal shows that the loop is still running.
-      yield* ctx.session.synthetic({
-        sessionID,
-        text: continuation(next, [verdict.reason, verdict.next_step && `Next step: ${verdict.next_step}`]),
-        metadata: { source: "goal", goalID: next.id },
-      })
+      const admitted = yield* sessionLocks.withLock(sessionID)(
+        Effect.gen(function* () {
+          const current = yield* read(sessionID)
+          if (!current || current.id !== next.id || current.status !== "active") return false
+          // No description: timelines hide the continuation, and the pinned goal shows that the loop is still running.
+          yield* ctx.session
+            .synthetic({
+              sessionID,
+              text: continuation(next, [verdict.reason, verdict.next_step && `Next step: ${verdict.next_step}`]),
+              metadata: { source: "goal", goalID: next.id },
+            })
+            .pipe(
+              Effect.catchCause((cause) =>
+                settleLocked(sessionID, next, "paused", "The goal stopped after an error").pipe(
+                  Effect.andThen(Effect.failCause(cause)),
+                ),
+              ),
+            )
+          return true
+        }),
+      )
+      if (!admitted) return
     })
 
     yield* ctx.session.hook("experimental.idle", (event) =>
-      idle(event.sessionID, event.background).pipe(
-        Effect.catchCause((cause) =>
-          Cause.hasInterruptsOnly(cause)
-            ? Effect.interrupt
-            : Effect.logWarning("goal continuation failed", { sessionID: event.sessionID, cause }).pipe(
-                Effect.andThen(pauseActive(event.sessionID, "The goal stopped after an error")),
-                Effect.catchCause(() => Effect.void),
-              ),
-        ),
+      read(event.sessionID).pipe(
+        Effect.flatMap((goal) => {
+          if (goal?.status !== "active") return Effect.void
+          return idle(event.sessionID, event.background, goal).pipe(
+            Effect.catchCause((cause) =>
+              Cause.hasInterruptsOnly(cause)
+                ? Effect.interrupt
+                : Effect.logWarning("goal continuation failed", { sessionID: event.sessionID, cause }).pipe(
+                    Effect.andThen(
+                      pauseActive(event.sessionID, "The goal stopped after an error", {
+                        id: goal.id,
+                        updatedAt: goal.updatedAt,
+                      }),
+                    ),
+                    Effect.catchCause(() => Effect.void),
+                  ),
+            ),
+          )
+        }),
       ),
     )
 
@@ -225,12 +292,16 @@ export const Plugin = define({
     // without persisting it, so the cached prefix stays warm and the reminder stops once a continuation lands.
     yield* ctx.session.hook("context", (event) =>
       read(event.sessionID).pipe(
-        Effect.map((goal) => {
-          if (goal?.status !== "active") return
+        Effect.flatMap((goal) => {
+          if (goal?.status !== "active") return Effect.void
+          if (goal.boot !== boot())
+            return settle(event.sessionID, goal, "paused", "The server restarted while the goal was active")
           const objective = objectiveBlock(goal.objective)
-          if (event.messages.some((message) => message.role === "user" && textOf(message).includes(objective))) return
+          if (event.messages.some((message) => message.role === "user" && textOf(message).includes(objective)))
+            return Effect.void
           const at = event.messages.at(-1)?.role === "user" ? event.messages.length - 1 : event.messages.length
           event.messages.splice(at, 0, Message.user(render(REMINDER, { objective: escape(goal.objective) })))
+          return Effect.void
         }),
         Effect.catchCause((cause) => Effect.logWarning("failed to remind the model of the goal", { cause })),
       ),
@@ -239,8 +310,11 @@ export const Plugin = define({
     // An active goal only sits idle while it waits on background work, whose notice wakes the Session. If nothing has
     // run in the Session or below it for WAIT_LIMIT (a hung subagent, a shell that never exits, a missed wake), pause
     // instead of staying active.
+    const jobs = yield* Effect.serviceOption(Job.Service)
+    const store = yield* Effect.serviceOption(SessionStore.Service)
     const timers = yield* FiberMap.make<string>()
-    const watch = (sessionID: Session.ID) =>
+    const executionGoals = new Map<string, { id: string; updatedAt: number }>()
+    const watch = (sessionID: Session.ID): Effect.Effect<void> =>
       read(sessionID).pipe(
         Effect.flatMap((goal) =>
           goal?.status !== "active"
@@ -250,12 +324,22 @@ export const Plugin = define({
                 sessionID,
                 Effect.sleep(WAIT_LIMIT).pipe(
                   Effect.andThen(
-                    settle(
-                      sessionID,
-                      goal,
-                      "paused",
-                      `Nothing ran for ${Duration.toMinutes(WAIT_LIMIT)} minutes while the goal waited on background work`,
-                    ),
+                    Effect.gen(function* () {
+                      if (Option.isSome(jobs) && Option.isSome(store)) {
+                        const running = yield* SessionBackground.outstanding(jobs.value, store.value, sessionID).pipe(
+                          Effect.orElseSucceed(() => []),
+                        )
+                        if (running.length > 0) {
+                          return yield* watch(sessionID)
+                        }
+                      }
+                      yield* settle(
+                        sessionID,
+                        goal,
+                        "paused",
+                        `Nothing ran for ${Duration.toMinutes(WAIT_LIMIT)} minutes while the goal waited on background work`,
+                      )
+                    }),
                   ),
                   Effect.catchCause((cause) =>
                     Effect.logWarning("failed to pause a waiting goal", { sessionID, cause }),
@@ -269,9 +353,12 @@ export const Plugin = define({
     // Otherwise a healthy subagent working past WAIT_LIMIT would pause the goal it works for.
     const touch = Effect.fn("GoalPlugin.touch")(function* (sessionID: Session.ID) {
       if ((yield* FiberMap.size(timers)) === 0) return
+      if (yield* FiberMap.has(timers, sessionID)) yield* watch(sessionID)
       let current = (yield* ctx.session.get({ sessionID })).parentID
       while (current !== undefined) {
-        if (yield* FiberMap.has(timers, current)) return yield* watch(current)
+        if (yield* FiberMap.has(timers, current)) {
+          yield* watch(current)
+        }
         current = (yield* ctx.session.get({ sessionID: current })).parentID
       }
     })
@@ -280,6 +367,8 @@ export const Plugin = define({
       Stream.runForEach((event) => {
         switch (event.type) {
           case "session.deleted":
+            compacted.delete(event.data.sessionID)
+            executionGoals.delete(event.data.sessionID)
             return FiberMap.remove(timers, event.data.sessionID).pipe(
               Effect.andThen(ctx.storage.remove(PREFIX + event.data.sessionID)),
             )
@@ -291,27 +380,53 @@ export const Plugin = define({
               ),
             )
           case "session.execution.started":
-            return FiberMap.remove(timers, event.data.sessionID)
+            return Effect.gen(function* () {
+              const goal = yield* read(event.data.sessionID)
+              if (goal?.status === "active") {
+                if (goal.boot !== boot()) {
+                  yield* settle(event.data.sessionID, goal, "paused", "The server restarted while the goal was active")
+                } else {
+                  executionGoals.set(event.data.sessionID, { id: goal.id, updatedAt: goal.updatedAt })
+                }
+              }
+              return yield* FiberMap.remove(timers, event.data.sessionID)
+            }).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logWarning("failed to check boot on execution start", {
+                  sessionID: event.data.sessionID,
+                  cause,
+                }),
+              ),
+            )
           case "session.execution.succeeded":
+            executionGoals.delete(event.data.sessionID)
             return watch(event.data.sessionID).pipe(
               Effect.catchCause((cause) =>
                 Effect.logWarning("failed to watch a waiting goal", { sessionID: event.data.sessionID, cause }),
               ),
             )
-          case "session.execution.interrupted":
+          case "session.execution.interrupted": {
+            compacted.delete(event.data.sessionID)
+            const expected = executionGoals.get(event.data.sessionID)
+            executionGoals.delete(event.data.sessionID)
             // Shutdown keeps the goal active; the next process sees the boot change and pauses it.
             if (event.data.reason !== "user") return Effect.void
-            return pauseActive(event.data.sessionID, "Stopped by the user").pipe(
+            return pauseActive(event.data.sessionID, "Stopped by the user", expected).pipe(
               Effect.catchCause((cause) =>
                 Effect.logWarning("failed to pause goal", { sessionID: event.data.sessionID, cause }),
               ),
             )
-          case "session.execution.failed":
-            return pauseActive(event.data.sessionID, `The session failed: ${event.data.error.message}`).pipe(
+          }
+          case "session.execution.failed": {
+            compacted.delete(event.data.sessionID)
+            const expected = executionGoals.get(event.data.sessionID)
+            executionGoals.delete(event.data.sessionID)
+            return pauseActive(event.data.sessionID, `The session failed: ${event.data.error.message}`, expected).pipe(
               Effect.catchCause((cause) =>
                 Effect.logWarning("failed to pause goal", { sessionID: event.data.sessionID, cause }),
               ),
             )
+          }
           default:
             return Effect.void
         }
@@ -335,17 +450,24 @@ export const Plugin = define({
                 .get({ sessionID: Session.ID.make(entry.key.slice(PREFIX.length)) })
                 .pipe(Effect.option)
               if (Option.isNone(session)) return yield* ctx.storage.remove(entry.key)
+              if (session.value.location.directory !== ctx.location.directory) return
               const goal = Option.getOrUndefined(decodeState(entry.value))
-              if (goal?.status !== "active" || goal.boot === boot()) return
-              yield* settle(session.value.id, goal, "paused", "The server restarted while the goal was active")
+              if (goal?.status !== "active") return
+              if (goal.boot !== boot()) {
+                return yield* settle(session.value.id, goal, "paused", "The server restarted while the goal was active")
+              }
+              const execution = yield* Effect.serviceOption(SessionExecution.Service)
+              const active = Option.isSome(execution) ? yield* execution.value.isActive(session.value.id) : false
+              if (!active) {
+                yield* watch(session.value.id)
+              }
             }),
           { discard: true },
         )
         after = page.next
       } while (after !== undefined)
     }).pipe(
-      Effect.catchCause((cause) => Effect.logWarning("failed to pause goals left by an earlier process", { cause })),
-      Effect.forkScoped({ startImmediately: true }),
+      Effect.catchCause((cause) => Effect.logWarning("failed to restore goals on startup", { cause })),
     )
 
     yield* ctx.command.transform((editor) => {
@@ -360,43 +482,93 @@ export const Plugin = define({
             if (text === "") return yield* Effect.fail(new Error(goal ? `${describe(goal)}\n${USAGE}` : USAGE))
 
             if (control === "pause") {
-              if (goal?.status !== "active") return yield* Effect.fail(new Error("No active goal to pause."))
-              // The user's command wins over the loop, so it writes without the loop's guard.
-              return yield* write(input.sessionID, {
-                ...goal,
-                status: "paused",
-                reason: "Paused by the user",
-                updatedAt: yield* Clock.currentTimeMillis,
-              })
+              return yield* sessionLocks.withLock(input.sessionID)(
+                Effect.gen(function* () {
+                  const current = yield* read(input.sessionID)
+                  if (current?.status !== "active") return yield* Effect.fail(new Error("No active goal to pause."))
+                  compacted.delete(input.sessionID)
+                  const now = yield* Clock.currentTimeMillis
+                  return yield* write(input.sessionID, {
+                    ...current,
+                    status: "paused",
+                    reason: "Paused by the user",
+                    updatedAt: Math.max(now, (current.updatedAt ?? 0) + 1),
+                  })
+                }),
+              )
             }
             if (control === "resume") {
-              if (goal?.status !== "paused") return yield* Effect.fail(new Error("No paused goal to resume."))
-              const resumed: State = {
-                id: goal.id,
-                objective: goal.objective,
-                status: "active",
-                // The resume continuation is the first round of the new budget.
-                rounds: 1,
-                maxRounds: goal.maxRounds,
-                boot: boot(),
-                updatedAt: yield* Clock.currentTimeMillis,
-              }
-              yield* write(input.sessionID, resumed)
-              return yield* ctx.session.synthetic({
-                sessionID: input.sessionID,
-                text: continuation(resumed, ["The user resumed the goal."]),
-                metadata: { source: "goal", goalID: resumed.id },
-              })
+              let currentGoal: State | undefined
+              let resumedGoal: State | undefined
+              let admitted = false
+              return yield* sessionLocks.withLock(input.sessionID)(
+                Effect.gen(function* () {
+                  const current = yield* read(input.sessionID)
+                  if (current?.status !== "paused") return yield* Effect.fail(new Error("No paused goal to resume."))
+                  currentGoal = current
+                  const now = yield* Clock.currentTimeMillis
+                  const resumed: State = {
+                    id: current.id,
+                    objective: current.objective,
+                    status: "active",
+                    // The resume continuation is the first round of the new budget.
+                    rounds: 1,
+                    maxRounds: current.maxRounds,
+                    boot: boot(),
+                    updatedAt: Math.max(now, (current.updatedAt ?? 0) + 1),
+                  }
+                  resumedGoal = resumed
+                  yield* write(input.sessionID, resumed)
+                  const res = yield* ctx.session
+                    .synthetic({
+                      sessionID: input.sessionID,
+                      text: continuation(resumed, ["The user resumed the goal."]),
+                      metadata: { source: "goal", goalID: resumed.id },
+                    })
+                    .pipe(
+                      Effect.andThen(
+                        Effect.sync(() => {
+                          admitted = true
+                        }),
+                      ),
+                      Effect.uninterruptible,
+                    )
+                  return res
+                }).pipe(
+                  Effect.onExit((exit) =>
+                    admitted || !resumedGoal || !currentGoal
+                      ? Effect.void
+                      : Effect.gen(function* () {
+                          const latest = yield* read(input.sessionID)
+                          if (
+                            latest &&
+                            latest.id === resumedGoal?.id &&
+                            latest.status === "active" &&
+                            latest.updatedAt === resumedGoal?.updatedAt
+                          ) {
+                            yield* write(input.sessionID, currentGoal)
+                          }
+                        }),
+                  ),
+                ),
+              )
             }
             if (control === "clear") {
-              if (!goal) return yield* Effect.fail(new Error("No goal is set."))
-              return yield* write(input.sessionID, undefined)
+              return yield* sessionLocks.withLock(input.sessionID)(
+                Effect.gen(function* () {
+                  const current = yield* read(input.sessionID)
+                  if (!current) return yield* Effect.fail(new Error("No goal is set."))
+                  compacted.delete(input.sessionID)
+                  return yield* write(input.sessionID, undefined)
+                }),
+              )
             }
 
             if (text.length > MAX_OBJECTIVE)
               return yield* Effect.fail(
                 new Error(`A goal objective is limited to ${MAX_OBJECTIVE} characters (got ${text.length}).`),
               )
+            compacted.delete(input.sessionID)
             const created: State = {
               id: crypto.randomUUID(),
               objective: text,
@@ -406,38 +578,78 @@ export const Plugin = define({
               boot: boot(),
               updatedAt: yield* Clock.currentTimeMillis,
             }
-            yield* write(input.sessionID, created)
-            const session = yield* ctx.session.get({ sessionID: input.sessionID })
-            // Titles come from the first user message, and a notice kickoff is not one, so name the Session here.
-            if (
-              isExactRootFallback({
-                title: session.title,
-                time: { created: DateTime.toEpochMillis(session.time.created) },
-              })
+            let admitted = false
+            let previous: State | undefined
+            return yield* sessionLocks.withLock(input.sessionID)(
+              Effect.gen(function* () {
+                previous = yield* read(input.sessionID)
+                yield* write(input.sessionID, created)
+                const session = yield* ctx.session.get({ sessionID: input.sessionID })
+                // Titles come from the first user message, and a notice kickoff is not one, so name the Session here.
+                if (
+                  isExactRootFallback({
+                    title: session.title,
+                    time: { created: DateTime.toEpochMillis(session.time.created) },
+                  })
+                )
+                  yield* ctx.session.update({ sessionID: input.sessionID, title: truncate(text, 60) })
+                const kickoff = render(KICKOFF, { objective: escape(text) })
+                const metadata = { source: "goal", goalID: created.id }
+                const attached = [input.prompt.files, input.prompt.agents, input.prompt.skills].some(
+                  (items) => items !== undefined && items.length > 0,
+                )
+
+                // Timelines show a described synthetic message as one notice row instead of the whole kickoff. Only a
+                // prompt can carry attachments, so those still go through as the user's message.
+                if (attached) {
+                  const res = yield* ctx.session
+                    .prompt({
+                      ...input.prompt,
+                      sessionID: input.sessionID,
+                      text: kickoff,
+                      metadata,
+                      delivery: input.delivery,
+                    })
+                    .pipe(
+                      Effect.andThen(
+                        Effect.sync(() => {
+                          admitted = true
+                        }),
+                      ),
+                      Effect.uninterruptible,
+                    )
+                  return res
+                }
+                const res = yield* ctx.session
+                  .synthetic({
+                    sessionID: input.sessionID,
+                    text: kickoff,
+                    description: `Goal: ${truncate(text, 120)}`,
+                    metadata,
+                    delivery: input.delivery,
+                  })
+                  .pipe(
+                    Effect.andThen(
+                      Effect.sync(() => {
+                        admitted = true
+                      }),
+                    ),
+                    Effect.uninterruptible,
+                  )
+                return res
+              }).pipe(
+                Effect.onExit((exit) =>
+                  admitted
+                    ? Effect.void
+                    : Effect.gen(function* () {
+                        const current = yield* read(input.sessionID)
+                        if (current?.id === created.id && current.status === "active") {
+                          yield* write(input.sessionID, previous)
+                        }
+                      }),
+                ),
+              ),
             )
-              yield* ctx.session.update({ sessionID: input.sessionID, title: truncate(text, 60) })
-            const kickoff = render(KICKOFF, { objective: escape(text) })
-            const metadata = { source: "goal", goalID: created.id }
-            const attached = [input.prompt.files, input.prompt.agents, input.prompt.skills].some(
-              (items) => items !== undefined && items.length > 0,
-            )
-            // Timelines show a described synthetic message as one notice row instead of the whole kickoff. Only a
-            // prompt can carry attachments, so those still go through as the user's message.
-            if (attached)
-              return yield* ctx.session.prompt({
-                ...input.prompt,
-                sessionID: input.sessionID,
-                text: kickoff,
-                metadata,
-                delivery: input.delivery,
-              })
-            yield* ctx.session.synthetic({
-              sessionID: input.sessionID,
-              text: kickoff,
-              description: `Goal: ${truncate(text, 120)}`,
-              metadata,
-              delivery: input.delivery,
-            })
           }).pipe(Effect.asVoid),
       })
     })

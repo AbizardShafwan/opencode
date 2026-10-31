@@ -1,5 +1,4 @@
-import { onCleanup, Show } from "solid-js"
-import { createStore } from "solid-js/store"
+import { createSignal, onCleanup, Show } from "solid-js"
 import { Goal } from "@opencode/schema/goal"
 import { Button } from "@opencode/ui/button"
 import { showToast } from "@opencode/ui/toast"
@@ -19,9 +18,59 @@ const status = {
  */
 const setup: Setup<typeof GoalDefinition> = (ctx) => {
   // The last goal heard for each server and session. A session switched back to shows it until the refetch lands.
-  const [goals, setGoals] = createStore<Record<string, { goal: Goal.State | null }>>({})
+  const [goals, setGoals] = createSignal<Readonly<Record<string, { goal: Goal.State | null }>>>({})
   const key = (server: string, sessionID: string) => `${server}\u0000${sessionID}`
-  const goal = (input: ComposerPillProps) => goals[key(input.session.server.id, input.session.id)]?.goal
+  const goal = (input: ComposerPillProps) => goals()[key(input.session.server.id, input.session.id)]?.goal
+
+  const order: string[] = []
+
+  const updateGoal = (k: string, value: { goal: Goal.State | null }) => {
+    const currentSession = ctx.sessions.current()
+    const currentKey = currentSession ? key(currentSession.server.id, currentSession.id) : undefined
+
+    setGoals((prev) => {
+      const next: Record<string, { goal: Goal.State | null }> = {}
+
+      if (value.goal === null && k !== currentKey) {
+        const idx = order.indexOf(k)
+
+        if (idx !== -1) order.splice(idx, 1)
+
+        for (const item of order) {
+          if (prev[item]) next[item] = prev[item]
+        }
+
+        return next
+      }
+
+      const idx = order.indexOf(k)
+
+      if (idx !== -1) order.splice(idx, 1)
+
+      order.push(k)
+
+      while (order.length > 50) {
+        const oldest = order.shift()
+
+        if (oldest && oldest === currentKey) {
+          order.push(oldest)
+          order.shift()
+
+          break
+        }
+      }
+
+      for (const item of order) {
+        if (item === k) {
+          next[item] = value
+        } else if (prev[item]) {
+          next[item] = prev[item]
+        }
+      }
+
+      return next
+    })
+  }
 
   // Subscribes to the routed session's goal: its current value, then every change. It runs again when another session
   // is routed, the session moves, or its server reconnects, since changes published meanwhile were missed.
@@ -47,7 +96,7 @@ const setup: Setup<typeof GoalDefinition> = (ctx) => {
           "changed",
           (event) => {
             if (event.data.sessionID === session.id) heard.value = true
-            setGoals(key(server, event.data.sessionID), { goal: event.data.goal })
+            updateGoal(key(server, event.data.sessionID), { goal: event.data.goal })
           },
           { signal: controller.signal },
         ),
@@ -57,7 +106,7 @@ const setup: Setup<typeof GoalDefinition> = (ctx) => {
         .get({ sessionID: session.id }, { location: { directory: session.directory }, signal: controller.signal })
         .then(
           (next) => {
-            if (!controller.signal.aborted && !heard.value) setGoals(key(server, session.id), { goal: next })
+            if (!controller.signal.aborted && !heard.value) updateGoal(key(server, session.id), { goal: next })
           },
           () => undefined,
         )

@@ -129,10 +129,32 @@ const project = Effect.fn("GoogleAntigravityPlugin.project")(function* (
   return projectIdFromPayload(body)
 })
 
+function recordToken(
+  validTokens: Map<string, { credentialId: string; timestamp: number }>,
+  token: string,
+  credentialId: string,
+  now = Date.now(),
+) {
+  validTokens.set(token, { credentialId, timestamp: now })
+  for (const [t, entry] of validTokens) {
+    if (now - entry.timestamp > 7_200_000) {
+      validTokens.delete(t)
+    }
+  }
+  if (validTokens.size > 20) {
+    const sorted = Array.from(validTokens.entries()).sort((a, b) => a[1].timestamp - b[1].timestamp)
+    for (let i = 0; i < sorted.length - 20; i++) {
+      validTokens.delete(sorted[i][0])
+    }
+  }
+}
+
 const exchange = Effect.fn("GoogleAntigravityPlugin.exchange")(function* (
   client: HttpClient.HttpClient,
   code: string,
   verifier: string,
+  validTokens?: Map<string, { credentialId: string; timestamp: number }>,
+  credentialId: string = Credential.ID.create(),
 ) {
   const tokens = yield* token(client, {
     grant_type: "authorization_code",
@@ -143,9 +165,13 @@ const exchange = Effect.fn("GoogleAntigravityPlugin.exchange")(function* (
   if (!tokens.refresh_token?.trim())
     return yield* Effect.fail(new Error("Google did not return a refresh token. Sign in again and allow offline access."))
 
+  if (validTokens) {
+    recordToken(validTokens, tokens.access_token, credentialId)
+  }
+
   const account = yield* email(client, tokens.access_token)
   const discovered = yield* project(client, tokens.access_token)
-  return Credential.OAuth.make({
+  const cred = Credential.OAuth.make({
     type: "oauth",
     methodID,
     access: tokens.access_token,
@@ -153,6 +179,8 @@ const exchange = Effect.fn("GoogleAntigravityPlugin.exchange")(function* (
     expires: (yield* Clock.currentTimeMillis) + (tokens.expires_in ?? 3600) * 1000,
     metadata: profileMetadata(discovered ?? stableId(account ?? "antigravity-default", "project"), account),
   })
+  Object.assign(cred, { id: credentialId })
+  return cred
 })
 
 function authorizeURL(challenge: string, state: string) {
@@ -177,6 +205,11 @@ function listen(server: Server) {
       server.off("error", onError)
       resume(Effect.void)
     })
+    return Effect.sync(() => {
+      server.off("error", onError)
+      server.closeAllConnections?.()
+      server.close()
+    })
   }).pipe(
     Effect.mapError((cause) =>
       "code" in cause && cause.code === "EADDRINUSE"
@@ -189,7 +222,10 @@ function listen(server: Server) {
   )
 }
 
-const oauth = (client: HttpClient.HttpClient) =>
+const oauth = (
+  client: HttpClient.HttpClient,
+  validTokens?: Map<string, { credentialId: string; timestamp: number }>,
+) =>
   ({
     integrationID,
     method: {
@@ -224,16 +260,20 @@ const oauth = (client: HttpClient.HttpClient) =>
         grant_type: "refresh_token",
         refresh_token: value.refresh,
       }).pipe(
-        Effect.map((tokens) =>
-          Credential.OAuth.make({
+        Effect.map((tokens) => {
+          if (validTokens) {
+            const credentialId = (value as any)?.id ?? ""
+            recordToken(validTokens, tokens.access_token, credentialId)
+          }
+          return Credential.OAuth.make({
             ...value,
             access: tokens.access_token,
             refresh: tokens.refresh_token ?? value.refresh,
             expires:
               Date.now() +
               (tokens.expires_in ?? 3600) * 1000,
-          }),
-        ),
+          })
+        }),
         Effect.mapError(
           (cause) =>
             new Error(
@@ -247,6 +287,7 @@ const oauth = (client: HttpClient.HttpClient) =>
         const challenge = createHash("sha256").update(verifier).digest("base64url")
         const state = randomBytes(32).toString("base64url")
         const url = authorizeURL(challenge, state)
+        const credentialId = Credential.ID.create()
 
         if (answer.mode !== "browser")
           return {
@@ -261,7 +302,7 @@ const oauth = (client: HttpClient.HttpClient) =>
                   try: () => callbackCode(input, state),
                   catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
                 })
-                return yield* exchange(client, code, verifier)
+                return yield* exchange(client, code, verifier, validTokens, credentialId)
               }),
           }
 
@@ -302,13 +343,13 @@ const oauth = (client: HttpClient.HttpClient) =>
           if (!Effect.runSync(Deferred.succeed(received, { code, response })))
             response.writeHead(409).end("OAuth callback already received")
         })
-        yield* listen(server)
         yield* Effect.addFinalizer(() =>
           Effect.sync(() => {
+            server.closeAllConnections?.()
             server.close()
-            server.closeAllConnections()
           }),
         )
+        yield* listen(server)
 
         return {
           mode: "auto" as const,
@@ -326,7 +367,7 @@ const oauth = (client: HttpClient.HttpClient) =>
                       : OauthCallbackPage.success({ provider: "Google Antigravity" }),
                   ),
               )
-            return yield* exchange(client, request.code, verifier).pipe(
+            return yield* exchange(client, request.code, verifier, validTokens, credentialId).pipe(
               Effect.tap(() => respond()),
               Effect.tapError((cause) => respond(cause.message)),
               Effect.onInterrupt(() => Effect.sync(() => request.response.destroy())),
@@ -347,6 +388,7 @@ export const GoogleAntigravityPlugin = define({
     const client = yield* HttpClient.HttpClient
     const bus = yield* Bus.Service
     const loading = Semaphore.makeUnsafe(1)
+    const validTokens = new Map<string, { credentialId: string; timestamp: number }>()
     const loaded: {
       active: boolean
       projectId?: string
@@ -366,7 +408,16 @@ export const GoogleAntigravityPlugin = define({
         loaded.projectId = undefined
         loaded.models = undefined
         loaded.connection = undefined
+        validTokens.clear()
         return
+      }
+      if (IntegrationConnection.key(loaded.connection) !== IntegrationConnection.key(connection)) {
+        validTokens.clear()
+      }
+      if (credential?.type === "oauth" && credential.access) {
+        const credentialId =
+          (credential as any)?.id ?? (connection?.type === "credential" ? connection.id : "")
+        recordToken(validTokens, credential.access, credentialId)
       }
       const projectId = text(credential.metadata?.projectId)
       const remote = yield* Effect.gen(function* () {
@@ -400,6 +451,12 @@ export const GoogleAntigravityPlugin = define({
       )
         return
       const sameAccount = IntegrationConnection.key(connection) === IntegrationConnection.key(loaded.connection)
+      if (!sameAccount) validTokens.clear()
+      if (credential.access) {
+        const credentialId =
+          (credential as any)?.id ?? (connection?.type === "credential" ? connection.id : "")
+        recordToken(validTokens, credential.access, credentialId)
+      }
       loaded.active = true
       loaded.projectId = projectId
       loaded.models = remote ?? (sameAccount ? loaded.models : undefined)
@@ -408,7 +465,7 @@ export const GoogleAntigravityPlugin = define({
     })
 
     yield* ctx.integration.transform((editor) => {
-      editor.method.update(oauth(client))
+      editor.method.update(oauth(client, validTokens))
     })
     yield* ctx.provider.transform((evt) => {
       if (!loaded.active) return
@@ -425,10 +482,37 @@ export const GoogleAntigravityPlugin = define({
       "http.request",
       (evt) =>
         Effect.gen(function* () {
-          if (!loaded.active || evt.model.providerID !== Provider.ID.google) return
+          if (evt.model.providerID !== Provider.ID.google) return
           const token = evt.request.headers.get("x-goog-api-key")
           if (!token) return
-          const project = loaded.projectId
+
+          const activeConnection = yield* ctx.integration.connection.active(integrationID)
+          if (!activeConnection) return
+          if (
+            !loaded.active ||
+            !loaded.connection ||
+            IntegrationConnection.key(loaded.connection) !== IntegrationConnection.key(activeConnection)
+          ) {
+            yield* loading.withPermit(load())
+          }
+          if (!loaded.active) return
+
+          const currentCredential = yield* ctx.integration.connection
+            .resolve(activeConnection)
+            .pipe(Effect.orElseSucceed(() => undefined))
+          if (currentCredential?.type !== "oauth" || currentCredential.methodID !== methodID) return
+
+          const credentialId =
+            (currentCredential as any)?.id ?? (activeConnection.type === "credential" ? activeConnection.id : "")
+          recordToken(validTokens, currentCredential.access, credentialId)
+          const entry = validTokens.get(token)
+          if (!entry || entry.credentialId !== credentialId) {
+            return yield* Effect.die(
+              new Error("The request credentials do not match the active Google Antigravity account"),
+            )
+          }
+
+          const project = text(currentCredential.metadata?.projectId) ?? loaded.projectId
           if (!project)
             return yield* Effect.die(
               new Error("The Google Antigravity project is missing. Sign in again to reconnect the account."),
@@ -441,7 +525,7 @@ export const GoogleAntigravityPlugin = define({
           const headers = new Headers(evt.request.headers)
           headers.delete("x-goog-api-key")
           headers.delete("content-length")
-          headers.set("authorization", `Bearer ${token}`)
+          headers.set("authorization", `Bearer ${currentCredential.access}`)
           headers.set("content-type", "application/json")
           headers.set("accept", "text/event-stream")
           headers.set("user-agent", USER_AGENT)

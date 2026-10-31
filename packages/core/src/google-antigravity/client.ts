@@ -240,21 +240,53 @@ export function publicModelID(runtime: string): string {
  * Cloud Code Assist models use explicit budgets rather than the public API's
  * `thinkingLevel`. Values mirror the reference Antigravity adapters.
  */
-export function thinkingFor(runtime: string, thinking: Thinking | undefined): Thinking | undefined {
+export function thinkingFor(
+  runtime: string,
+  thinking: Thinking | undefined,
+  maxOutputTokens?: number,
+): Thinking | undefined {
   const effort = effortOf(thinking) ?? runtimeEffort(runtime)
   if (thinking && (effort === "off" || thinking.includeThoughts === false))
     return { includeThoughts: false, thinkingBudget: 0 }
-  if (runtime.startsWith("claude-")) return { includeThoughts: true, thinkingBudget: 1024 }
-  if (runtime.startsWith("gpt-oss-")) return { includeThoughts: true, thinkingBudget: 8192 }
-  if (/^gemini-(?:4-|3\.(?:8|7|6)-flash)/.test(runtime))
-    return { includeThoughts: true, thinkingBudget: budget(effort, 4000, 1000, -1) }
+
+  const defaultBudget = defaultBudgetFor(runtime, effort, thinking)
+  if (defaultBudget === undefined && thinking?.thinkingBudget === undefined)
+    return thinking
+
+  let budgetVal = thinking?.thinkingBudget !== undefined ? thinking.thinkingBudget : defaultBudget!
+
+  // If incoming thinking already has a budget, don't exceed it
+  if (thinking?.thinkingBudget !== undefined && budgetVal > 0) {
+    budgetVal = Math.min(budgetVal, thinking.thinkingBudget)
+  }
+
+  // Clamp to maxOutputTokens if available and positive, ensuring room for answer tokens
+  if (typeof maxOutputTokens === "number" && maxOutputTokens > 0 && budgetVal > 0) {
+    if (maxOutputTokens <= 1) {
+      return { includeThoughts: false, thinkingBudget: 0 }
+    }
+    const maxBudget = Math.min(maxOutputTokens - 1, Math.max(1, maxOutputTokens - 1024))
+    budgetVal = Math.min(budgetVal, maxBudget)
+  }
+
+  return { includeThoughts: true, thinkingBudget: budgetVal }
+}
+
+function defaultBudgetFor(
+  runtime: string,
+  effort: string | undefined,
+  thinking: Thinking | undefined,
+): number | undefined {
+  if (runtime.startsWith("claude-")) return 1024
+  if (runtime.startsWith("gpt-oss-")) return 8192
+  if (/^gemini-(?:4-|3\.(?:8|7|6)-flash)/.test(runtime)) return budget(effort, 4000, 1000, -1)
   if (runtime.startsWith("gemini-3.5-flash") || runtime === "gemini-3-flash-agent")
-    return { includeThoughts: true, thinkingBudget: budget(effort, 4000, 1000, 10000) }
+    return budget(effort, 4000, 1000, 10000)
   if (runtime.startsWith("gemini-3.1-pro") || runtime === "gemini-pro-agent")
-    return { includeThoughts: true, thinkingBudget: budget(effort, 1001, 1001, 10001) }
+    return budget(effort, 1001, 1001, 10001)
   if (runtime.startsWith("gemini-") && thinking?.thinkingLevel !== undefined)
-    return { includeThoughts: true, thinkingBudget: budget(effort, 4000, 1000, -1) }
-  return thinking
+    return budget(effort, 4000, 1000, -1)
+  return undefined
 }
 
 function budget(effort: string | undefined, medium: number, low: number, high: number) {
@@ -277,18 +309,182 @@ export function lowerTools(body: Json, runtime: string): Json {
           if (!isRecord(declaration)) return declaration
           const { parametersJsonSchema, ...rest } = declaration
           if (!isRecord(parametersJsonSchema)) return rest
-          return { ...rest, parameters: legacySchema(parametersJsonSchema) }
+          return { ...rest, parameters: legacySchema(parametersJsonSchema, parametersJsonSchema) }
         }),
       }
     }),
   }
 }
 
-const LEGACY_SCHEMA_KEYS = new Set(["type", "description", "properties", "required", "items", "enum"])
+const LEGACY_SCHEMA_KEYS = new Set([
+  "type",
+  "description",
+  "properties",
+  "required",
+  "items",
+  "enum",
+])
 
-function legacySchema(schema: unknown): unknown {
-  if (Array.isArray(schema)) return schema.map(legacySchema)
+function resolveRef(ref: string, root: unknown): unknown {
+  if (typeof ref !== "string" || !ref.startsWith("#/")) return undefined
+  const parts = ref
+    .slice(2)
+    .split("/")
+    .map((part) => decodeURIComponent(part.replace(/~1/g, "/").replace(/~0/g, "~")))
+  let current: unknown = root
+  for (const part of parts) {
+    if (!isRecord(current) && !Array.isArray(current)) return undefined
+    current = (current as Record<string, unknown>)[part]
+  }
+  return current
+}
+
+function dereference(branch: unknown, root: unknown): unknown {
+  let current = branch
+  const seen = new Set<string>()
+  while (isRecord(current) && typeof current.$ref === "string") {
+    if (seen.has(current.$ref)) break
+    seen.add(current.$ref)
+    const resolved = resolveRef(current.$ref, root)
+    if (!isRecord(resolved)) break
+    current = { ...resolved, ...(typeof current.description === "string" ? { description: current.description } : {}) }
+  }
+  return current
+}
+
+function isStringBranch(branch: unknown): boolean {
+  if (!isRecord(branch)) return false
+  if (typeof branch.const === "string") return true
+  if (Array.isArray(branch.enum) && branch.enum.every((e) => typeof e === "string")) return true
+  const type = Array.isArray(branch.type) ? branch.type.find((t) => t !== "null") : branch.type
+  if (type === "string") return true
+  return false
+}
+
+function mergePropertySchemas(existing: unknown, incoming: unknown): unknown {
+  if (!isRecord(existing)) return incoming
+  if (!isRecord(incoming)) return existing
+
+  const result: Json = { ...existing }
+
+  if (!result.description && typeof incoming.description === "string") {
+    result.description = incoming.description
+  }
+
+  const existingType = typeof existing.type === "string" ? existing.type : undefined
+  const incomingType = typeof incoming.type === "string" ? incoming.type : undefined
+
+  const existingEnum = Array.isArray(existing.enum) ? existing.enum : undefined
+  const incomingEnum = Array.isArray(incoming.enum) ? incoming.enum : undefined
+
+  if (existingType === incomingType) {
+    if (existingEnum && incomingEnum) {
+      result.enum = Array.from(new Set([...existingEnum, ...incomingEnum]))
+      if (!result.type) result.type = "string"
+    } else if (existingEnum || incomingEnum) {
+      delete result.enum
+    }
+  } else if (existingType && incomingType) {
+    if (
+      (existingType === "number" && incomingType === "integer") ||
+      (existingType === "integer" && incomingType === "number")
+    ) {
+      result.type = "number"
+      if (existingEnum && incomingEnum) {
+        result.enum = Array.from(new Set([...existingEnum, ...incomingEnum]))
+      } else {
+        delete result.enum
+      }
+    } else {
+      if (existingEnum && incomingEnum) {
+        result.enum = Array.from(new Set([...existingEnum, ...incomingEnum]))
+      } else {
+        delete result.enum
+      }
+      result.type = existingType === "string" || incomingType === "string" ? "string" : existingType
+    }
+  } else if (!existingType && incomingType) {
+    result.type = incomingType
+    if (incomingEnum && !existingEnum) result.enum = incomingEnum
+  }
+
+  if (isRecord(existing.properties) && isRecord(incoming.properties)) {
+    result.properties = mergeProperties(existing.properties, incoming.properties)
+  } else if (isRecord(incoming.properties) && !result.properties) {
+    result.properties = incoming.properties
+  }
+
+  const existingReq = Array.isArray(existing.required)
+    ? existing.required.filter((x): x is string => typeof x === "string")
+    : undefined
+  const incomingReq = Array.isArray(incoming.required)
+    ? incoming.required.filter((x): x is string => typeof x === "string")
+    : undefined
+
+  if (existingReq && incomingReq) {
+    const intersection = existingReq.filter((name) => incomingReq.includes(name))
+    if (intersection.length > 0) {
+      result.required = intersection
+    } else {
+      delete result.required
+    }
+  } else {
+    delete result.required
+  }
+
+  if (isRecord(existing.items) && isRecord(incoming.items)) {
+    result.items = mergePropertySchemas(existing.items, incoming.items)
+  } else if (incoming.items && !result.items) {
+    result.items = incoming.items
+  }
+
+  return result
+}
+
+function mergeProperties(existing: Json, incoming: Json): Json {
+  const merged: Json = { ...existing }
+  for (const [name, incomingProp] of Object.entries(incoming)) {
+    if (name in merged) {
+      merged[name] = mergePropertySchemas(merged[name], incomingProp)
+    } else {
+      merged[name] = incomingProp
+    }
+  }
+  return merged
+}
+
+export function legacySchema(schema: unknown, root: unknown = schema, seenRefs = new Set<string>()): unknown {
+  if (Array.isArray(schema)) return schema.map((item) => legacySchema(item, root, seenRefs))
   if (!isRecord(schema)) return schema
+
+  if (typeof schema.$ref === "string") {
+    const ref = schema.$ref
+    if (seenRefs.has(ref)) {
+      return {
+        type: "object",
+        ...(typeof schema.description === "string" ? { description: schema.description } : {}),
+      }
+    }
+    const resolved = resolveRef(ref, root)
+    if (isRecord(resolved)) {
+      seenRefs.add(ref)
+      const res = legacySchema(
+        {
+          ...resolved,
+          ...(typeof schema.description === "string" ? { description: schema.description } : {}),
+        },
+        root,
+        seenRefs,
+      )
+      seenRefs.delete(ref)
+      return res
+    }
+    return {
+      type: "object",
+      ...(typeof schema.description === "string" ? { description: schema.description } : {}),
+    }
+  }
+
   const result: Json = {}
   for (const [key, value] of Object.entries(schema)) {
     if (!LEGACY_SCHEMA_KEYS.has(key)) continue
@@ -299,13 +495,139 @@ function legacySchema(schema: unknown): unknown {
     }
     if (key === "properties" && isRecord(value)) {
       result.properties = Object.fromEntries(
-        Object.entries(value).map(([name, property]) => [name, legacySchema(property)]),
+        Object.entries(value).map(([name, property]) => [name, legacySchema(property, root, seenRefs)]),
       )
       continue
     }
+    if (key === "items") {
+      result.items = legacySchema(value, root, seenRefs)
+      continue
+    }
     if (key === "enum" && Array.isArray(value) && !value.every((entry) => typeof entry === "string")) continue
-    result[key] = legacySchema(value)
+    result[key] = legacySchema(value, root, seenRefs)
   }
+
+  if (schema.const !== undefined && result.enum === undefined) {
+    if (typeof schema.const === "string") {
+      result.type = "string"
+      result.enum = [schema.const]
+    } else if (typeof schema.const === "boolean") {
+      result.type = "boolean"
+    } else if (typeof schema.const === "number") {
+      result.type = Number.isInteger(schema.const) ? "integer" : "number"
+    }
+  }
+
+  const union = Array.isArray(schema.anyOf) ? schema.anyOf : Array.isArray(schema.oneOf) ? schema.oneOf : undefined
+  if (union) {
+    const variants = union.filter((v) => isRecord(v) && v.type !== "null")
+    const dereferencedVariants = variants.map((v) => dereference(v, root))
+    const isAllStrings = variants.length > 0 && dereferencedVariants.every(isStringBranch)
+
+    if (isAllStrings) {
+      let hasUnconstrainedString = false
+      const allEnums: string[] = []
+      for (const branch of dereferencedVariants) {
+        if (!isRecord(branch)) continue
+        if (typeof branch.const === "string") {
+          allEnums.push(branch.const)
+        } else if (Array.isArray(branch.enum) && branch.enum.every((e) => typeof e === "string")) {
+          allEnums.push(...branch.enum)
+        } else {
+          const type = Array.isArray(branch.type) ? branch.type.find((t) => t !== "null") : branch.type
+          if (type === "string") {
+            if (Array.isArray(branch.enum) && branch.enum.every((e) => typeof e === "string")) {
+              allEnums.push(...branch.enum)
+            } else if (typeof branch.const === "string") {
+              allEnums.push(branch.const)
+            } else {
+              hasUnconstrainedString = true
+            }
+          }
+        }
+      }
+
+      result.type = "string"
+      if (hasUnconstrainedString) {
+        delete result.enum
+      } else {
+        result.enum = Array.from(new Set(allEnums))
+      }
+    } else {
+      const types = new Set<string>()
+      for (const branch of dereferencedVariants) {
+        if (!isRecord(branch)) continue
+        if (typeof branch.type === "string" && branch.type !== "null") types.add(branch.type)
+        else if (Array.isArray(branch.type)) {
+          for (const t of branch.type) {
+            if (typeof t === "string" && t !== "null") types.add(t)
+          }
+        } else if (typeof branch.const === "string" || branch.enum) types.add("string")
+        else if (typeof branch.const === "number") types.add(Number.isInteger(branch.const) ? "integer" : "number")
+        else if (typeof branch.const === "boolean") types.add("boolean")
+        else if (isRecord(branch.properties)) types.add("object")
+      }
+      if (result.type === undefined && types.size > 0) {
+        if (types.has("object")) result.type = "object"
+        else if (types.has("array")) result.type = "array"
+        else if (types.has("string")) result.type = "string"
+        else if (types.has("number")) result.type = "number"
+        else if (types.has("integer")) result.type = "integer"
+        else result.type = [...types][0]
+      }
+      const arrayBranches = dereferencedVariants.filter(
+        (branch): branch is Record<string, unknown> =>
+          isRecord(branch) &&
+          (branch.type === "array" ||
+            (Array.isArray(branch.type) && branch.type.includes("array")) ||
+            branch.items !== undefined),
+      )
+      if (arrayBranches.length > 0) {
+        let mergedItems: unknown
+        for (const branch of arrayBranches) {
+          if (branch.items) {
+            mergedItems = mergedItems ? mergePropertySchemas(mergedItems, branch.items) : branch.items
+          }
+        }
+        result.items = mergedItems ? legacySchema(mergedItems, root, seenRefs) : { type: "string" }
+      }
+      let commonRequired: string[] | undefined = undefined
+      for (const branch of variants) {
+        if (!isRecord(branch)) continue
+        const lowered = legacySchema(branch, root, seenRefs)
+        if (isRecord(lowered)) {
+          for (const [k, v] of Object.entries(lowered)) {
+            if (k === "required") continue
+            if (k === "items" && arrayBranches.length > 0) continue
+            if (result[k] === undefined) {
+              result[k] = v
+            } else if (k === "properties" && isRecord(result.properties) && isRecord(v)) {
+              result.properties = mergeProperties(result.properties, v)
+            }
+          }
+          const branchReq = Array.isArray(lowered.required)
+            ? lowered.required.filter((k): k is string => typeof k === "string")
+            : []
+          if (commonRequired === undefined) {
+            commonRequired = [...branchReq]
+          } else {
+            commonRequired = commonRequired.filter((prop) => branchReq.includes(prop))
+          }
+        }
+      }
+      const parentRequired = Array.isArray(result.required)
+        ? result.required.filter((k): k is string => typeof k === "string")
+        : []
+      const branchRequired = commonRequired ?? []
+      const totalRequired = Array.from(new Set([...parentRequired, ...branchRequired]))
+      if (totalRequired.length > 0) {
+        result.required = totalRequired
+      } else {
+        delete result.required
+      }
+    }
+  }
+
   return result
 }
 
@@ -329,11 +651,29 @@ export function wrapRequest(body: Json, input: WrapInput): Json {
   if (isRecord(request.systemInstruction))
     request.systemInstruction = { ...request.systemInstruction, role: request.systemInstruction.role ?? "user" }
 
-  const configured = thinkingFor(runtime, thinking)
+  const maxOutputTokens = typeof generation?.maxOutputTokens === "number" ? generation.maxOutputTokens : undefined
+  const configured = thinkingFor(runtime, thinking, maxOutputTokens)
   if (generation || configured) {
     const next: Json = { ...(generation ?? {}) }
-    if (configured) next.thinkingConfig = configured
-    else delete next.thinkingConfig
+    if (configured) {
+      let finalThinking = configured
+      if (
+        typeof maxOutputTokens === "number" &&
+        maxOutputTokens > 0 &&
+        typeof configured.thinkingBudget === "number" &&
+        configured.thinkingBudget > 0
+      ) {
+        if (maxOutputTokens <= 1) {
+          finalThinking = { ...configured, includeThoughts: false, thinkingBudget: 0 }
+        } else if (configured.thinkingBudget >= maxOutputTokens) {
+          finalThinking = {
+            ...configured,
+            thinkingBudget: Math.min(maxOutputTokens - 1, Math.max(1, maxOutputTokens - 1024)),
+          }
+        }
+      }
+      next.thinkingConfig = finalThinking
+    } else delete next.thinkingConfig
     request.generationConfig = next
   }
 
@@ -392,6 +732,40 @@ export function unwrapSseLine(line: string): string {
   return line
 }
 
+export function unwrapSseEvent(block: string): string {
+  if (!block.trim()) return block
+  const lines = block.split(/(?:\r\n|\r|\n)/)
+  const dataLines: string[] = []
+  const otherLines: string[] = []
+
+  for (const line of lines) {
+    if (line.startsWith("data:")) {
+      const rest = line.slice(5)
+      dataLines.push(rest.startsWith(" ") ? rest.slice(1) : rest)
+    } else {
+      otherLines.push(line)
+    }
+  }
+
+  if (dataLines.length === 0) return block
+  const payload = dataLines.join("\n").trim()
+  if (!payload || payload === "[DONE]") return block
+
+  try {
+    const parsed: unknown = JSON.parse(payload)
+    if (isRecord(parsed) && parsed.error === undefined && isRecord(parsed.response)) {
+      const unwrappedData = `data: ${JSON.stringify(parsed.response)}`
+      return otherLines.length > 0 ? [...otherLines, unwrappedData].join("\n") : unwrappedData
+    }
+  } catch {
+    // Not JSON; pass the block through so the SSE parser can report it in context.
+  }
+  return block
+}
+
+export const MAX_SSE_BUFFER = 2 * 1024 * 1024
+export const SSE_EVENT_DELIMITER = /\r\n\r\n|\r\n\r|\r\n\n|\r\r\n|\r\r|\n\r\n|\n\r|\n\n/g
+
 /** Streamingly unwrap Cloud Code Assist SSE frames into plain Gemini events. */
 export function unwrapResponse(response: Response): Response {
   if (!response.body) return response
@@ -402,13 +776,27 @@ export function unwrapResponse(response: Response): Response {
     new TransformStream<Uint8Array, Uint8Array>({
       transform(chunk, controller) {
         buffered += decoder.decode(chunk, { stream: true })
-        const lines = buffered.split("\n")
-        buffered = lines.pop() ?? ""
-        for (const line of lines) controller.enqueue(encoder.encode(`${unwrapSseLine(line)}\n`))
+        const boundaryRegex = new RegExp(SSE_EVENT_DELIMITER.source, "g")
+        let lastIndex = 0
+        let match: RegExpExecArray | null
+        while ((match = boundaryRegex.exec(buffered)) !== null) {
+          const event = buffered.slice(lastIndex, match.index)
+          const delimiter = match[0]
+          controller.enqueue(encoder.encode(`${unwrapSseEvent(event)}${delimiter}`))
+          lastIndex = match.index + match[0].length
+        }
+        buffered = buffered.slice(lastIndex)
+        if (buffered.length > MAX_SSE_BUFFER) {
+          controller.error(new Error("SSE stream exceeded maximum buffer limit of 2 MiB without event delimiter"))
+        }
       },
       flush(controller) {
         buffered += decoder.decode()
-        if (buffered) controller.enqueue(encoder.encode(unwrapSseLine(buffered)))
+        if (buffered.length > MAX_SSE_BUFFER) {
+          controller.error(new Error("SSE stream exceeded maximum buffer limit of 2 MiB without event delimiter"))
+          return
+        }
+        if (buffered) controller.enqueue(encoder.encode(unwrapSseEvent(buffered)))
       },
     }),
   )

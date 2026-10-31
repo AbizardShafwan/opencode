@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { Deferred, Effect, Fiber, Schema } from "effect"
+import { Cause, Deferred, Effect, Fiber, Schema } from "effect"
 import { TestClock } from "effect/testing"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http"
 import { Model } from "@opencode/core/model"
@@ -28,10 +28,12 @@ import {
   callbackCode,
   clientID,
   clientSecret,
+  legacySchema,
   projectIdFromPayload,
   runtimeModel,
   thinkingFor,
   unwrapResponse,
+  unwrapSseEvent,
   unwrapSseLine,
   wrapRequest,
 } from "@opencode/core/google-antigravity/client"
@@ -398,6 +400,273 @@ describe("Antigravity model routing", () => {
       includeThoughts: true,
       thinkingBudget: -1,
     })
+    expect(thinkingFor("gpt-oss-120b-medium", { thinkingBudget: 2048, includeThoughts: true })).toEqual({
+      includeThoughts: true,
+      thinkingBudget: 2048,
+    })
+    expect(thinkingFor("claude-sonnet-4-6", { thinkingBudget: 4096, includeThoughts: true })).toEqual({
+      includeThoughts: true,
+      thinkingBudget: 4096,
+    })
+    expect(thinkingFor("gemini-4-argon", { thinkingBudget: 5000, includeThoughts: true }, 2000)).toEqual({
+      includeThoughts: true,
+      thinkingBudget: 976,
+    })
+    expect(thinkingFor("gpt-oss-120b-medium", { thinkingLevel: "medium" }, 3000)).toEqual({
+      includeThoughts: true,
+      thinkingBudget: 1976,
+    })
+  })
+
+  test("ensures thinking budget leaves room for answer output and strictly satisfies thinkingBudget < maxOutputTokens", () => {
+    // When maxOutputTokens is 4096 and budget is 4000, 1024 headroom clamps budget to 3072
+    const clamped4096 = thinkingFor("gemini-4-argon", { thinkingBudget: 4000, includeThoughts: true }, 4096)
+    expect(clamped4096?.thinkingBudget).toBe(3072)
+    expect(clamped4096?.thinkingBudget).toBeLessThan(4096)
+
+    // For Claude, budget must never equal maxOutputTokens
+    const claudeClamped = thinkingFor("claude-opus-5-5-low", { thinkingBudget: 1024, includeThoughts: true }, 1024)
+    expect(claudeClamped?.thinkingBudget).toBe(1)
+    expect(claudeClamped?.thinkingBudget).toBeLessThan(1024)
+
+    // wrapRequest enforces thinkingBudget < maxOutputTokens even when incoming generationConfig requests it
+    const wrapped = wrapRequest(
+      {
+        contents: [],
+        generationConfig: { maxOutputTokens: 2048, thinkingConfig: { includeThoughts: true, thinkingBudget: 2048 } },
+      },
+      { project: "p1", modelID: "claude-sonnet-4-6", sessionID: "ses_1" },
+    )
+    const thinking = (wrapped.request as any).generationConfig.thinkingConfig
+    expect(thinking.thinkingBudget).toBe(1024)
+    expect(thinking.thinkingBudget).toBeLessThan(2048)
+  })
+
+  test("resolves $ref against root definitions and lowers unresolvable $ref to object", () => {
+    const root = {
+      type: "object",
+      definitions: {
+        Item: { type: "string", description: "an item" },
+        LoopA: { $ref: "#/definitions/LoopB" },
+        LoopB: { $ref: "#/definitions/LoopA" },
+      },
+      properties: {
+        validRef: { $ref: "#/definitions/Item" },
+        missingRef: { $ref: "#/definitions/NonExistent" },
+        loopRef: { $ref: "#/definitions/LoopA" },
+      },
+    }
+    const lowered = legacySchema(root) as any
+    expect(lowered.properties.validRef).toEqual({ type: "string", description: "an item" })
+    expect(lowered.properties.missingRef).toEqual({ type: "object" })
+    expect(lowered.properties.loopRef).toEqual({ type: "object" })
+    expect(lowered.properties.validRef.$ref).toBeUndefined()
+    expect(lowered.properties.missingRef.$ref).toBeUndefined()
+  })
+
+  test("combines string enums and consts in unions and selects broadest type", () => {
+    // Branches with string consts and enums are combined into a single enum with type: string
+    const stringUnion = {
+      anyOf: [
+        { const: "option_a" },
+        { const: "option_b" },
+        { enum: ["option_c", "option_d"] },
+      ],
+    }
+    expect(legacySchema(stringUnion)).toEqual({
+      type: "string",
+      enum: ["option_a", "option_b", "option_c", "option_d"],
+    })
+
+    // Branches with multiple types select broadest type and merge properties
+    const multiTypeUnion = {
+      oneOf: [
+        { type: "integer" },
+        { type: "number" },
+      ],
+    }
+    expect(legacySchema(multiTypeUnion)).toEqual({ type: "number" })
+
+    const objectUnion = {
+      anyOf: [
+        { type: "object", properties: { a: { type: "string" } } },
+        { type: "object", properties: { b: { type: "number" } } },
+      ],
+    }
+    expect(legacySchema(objectUnion)).toEqual({
+      type: "object",
+      properties: {
+        a: { type: "string" },
+        b: { type: "number" },
+      },
+    })
+
+    const arrayUnion = {
+      anyOf: [
+        { type: "array", items: { enum: ["red"] } },
+        { type: "array", items: { enum: ["blue"] } },
+      ],
+    }
+    expect(legacySchema(arrayUnion)).toEqual({
+      type: "array",
+      items: {
+        type: "string",
+        enum: ["red", "blue"],
+      },
+    })
+
+    // If any branch is an unconstrained string, outputs type: "string" without enum
+    const unconstrainedStringUnion = {
+      anyOf: [{ const: "option_a" }, { type: "string" }],
+    }
+    expect(legacySchema(unconstrainedStringUnion)).toEqual({ type: "string" })
+
+    // String union with $ref resolving to a string enum
+    const refStringUnion = {
+      definitions: {
+        Status: { type: "string", enum: ["active", "inactive"] },
+      },
+      anyOf: [{ $ref: "#/definitions/Status" }, { const: "pending" }],
+    }
+    expect(legacySchema(refStringUnion, refStringUnion)).toEqual({
+      type: "string",
+      enum: ["active", "inactive", "pending"],
+    })
+
+    // Object union required intersection
+    const objectUnionRequired = {
+      anyOf: [
+        { type: "object", properties: { a: { type: "string" }, b: { type: "string" } }, required: ["a", "b"] },
+        { type: "object", properties: { b: { type: "string" }, c: { type: "string" } }, required: ["b", "c"] },
+      ],
+    }
+    expect(legacySchema(objectUnionRequired)).toEqual({
+      type: "object",
+      properties: {
+        a: { type: "string" },
+        b: { type: "string" },
+        c: { type: "string" },
+      },
+      required: ["b"],
+    })
+
+    // Object union property merging (combines enums, drops enum if unconstrained, merges broader types)
+    const objectUnionPropertyMerge = {
+      anyOf: [
+        {
+          type: "object",
+          properties: {
+            mode: { type: "string", enum: ["read", "write"] },
+            count: { type: "integer", enum: [1, 2] },
+            tag: { type: "string", enum: ["alpha"] },
+          },
+        },
+        {
+          type: "object",
+          properties: {
+            mode: { type: "string", enum: ["delete"] },
+            count: { type: "number" },
+            tag: { type: "string" },
+          },
+        },
+      ],
+    }
+    expect(legacySchema(objectUnionPropertyMerge)).toEqual({
+      type: "object",
+      properties: {
+        mode: { type: "string", enum: ["read", "write", "delete"] },
+        count: { type: "number" },
+        tag: { type: "string" },
+      },
+    })
+
+    // Nested object union property merging intersects required constraints
+    const nestedObjectUnion = {
+      anyOf: [
+        {
+          type: "object",
+          properties: {
+            nested: {
+              type: "object",
+              properties: {
+                x: { type: "string" },
+                y: { type: "string" },
+              },
+              required: ["x", "y"],
+            },
+          },
+        },
+        {
+          type: "object",
+          properties: {
+            nested: {
+              type: "object",
+              properties: {
+                y: { type: "string" },
+                z: { type: "string" },
+              },
+              required: ["y", "z"],
+            },
+          },
+        },
+      ],
+    }
+    expect(legacySchema(nestedObjectUnion)).toEqual({
+      type: "object",
+      properties: {
+        nested: {
+          type: "object",
+          properties: {
+            x: { type: "string" },
+            y: { type: "string" },
+            z: { type: "string" },
+          },
+          required: ["y"],
+        },
+      },
+    })
+
+    // Nested object union drops required if a branch omits it
+    const nestedObjectUnionOptional = {
+      anyOf: [
+        {
+          type: "object",
+          properties: {
+            nested: {
+              type: "object",
+              properties: { x: { type: "string" } },
+              required: ["x"],
+            },
+          },
+        },
+        {
+          type: "object",
+          properties: {
+            nested: {
+              type: "object",
+              properties: { x: { type: "string" } },
+            },
+          },
+        },
+      ],
+    }
+    expect(legacySchema(nestedObjectUnionOptional)).toEqual({
+      type: "object",
+      properties: {
+        nested: {
+          type: "object",
+          properties: { x: { type: "string" } },
+        },
+      },
+    })
+  })
+
+  test("const with boolean or number does not create invalid non-string enum array", () => {
+    expect(legacySchema({ const: true })).toEqual({ type: "boolean" })
+    expect(legacySchema({ const: false })).toEqual({ type: "boolean" })
+    expect(legacySchema({ const: 42 })).toEqual({ type: "integer" })
+    expect(legacySchema({ const: 3.14 })).toEqual({ type: "number" })
+    expect(legacySchema({ const: "value" })).toEqual({ type: "string", enum: ["value"] })
   })
 
   test("wraps a Gemini request in the Cloud Code Assist envelope", () => {
@@ -486,6 +755,89 @@ describe("Cloud Code Assist stream decoding", () => {
     expect(await response.text()).toBe(
       'data: {"candidates":[],"usageMetadata":{}}\n\ndata: {"candidates":[{"finishReason":"STOP"}]}\n\n',
     )
+  })
+
+  test("unwraps multiline SSE data blocks in a single event", async () => {
+    expect(unwrapSseEvent('data: {"response":\ndata: {"candidates":[{"finishReason":"STOP"}]}}')).toBe(
+      'data: {"candidates":[{"finishReason":"STOP"}]}',
+    )
+    const encoder = new TextEncoder()
+    const source = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode('data: {"response":\ndata: {"candidates":[{"finishReason":"STOP"}]}}\n\n'),
+        )
+        controller.close()
+      },
+    })
+    const response = unwrapResponse(new Response(source, { headers: { "content-type": "text/event-stream" } }))
+    expect(await response.text()).toBe('data: {"candidates":[{"finishReason":"STOP"}]}\n\n')
+  })
+
+  test("unwraps SSE frames with CR-only delimiters (\\r\\r)", async () => {
+    const encoder = new TextEncoder()
+    const source = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"response":{"candidates":[{"finishReason":"STOP"}]}}\r\r'))
+        controller.close()
+      },
+    })
+    const response = unwrapResponse(new Response(source, { headers: { "content-type": "text/event-stream" } }))
+    expect(await response.text()).toBe('data: {"candidates":[{"finishReason":"STOP"}]}\r\r')
+  })
+
+  test("unwraps SSE frames with mixed newline delimiters", async () => {
+    const encoder = new TextEncoder()
+    const source = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"response":{"candidates":[{"finishReason":"STOP"}]}}\n\r\n'))
+        controller.enqueue(encoder.encode('data: {"response":{"candidates":[{"finishReason":"OTHER"}]}}\r\n\n'))
+        controller.close()
+      },
+    })
+    const response = unwrapResponse(new Response(source, { headers: { "content-type": "text/event-stream" } }))
+    expect(await response.text()).toBe(
+      'data: {"candidates":[{"finishReason":"STOP"}]}\n\r\ndata: {"candidates":[{"finishReason":"OTHER"}]}\r\n\n',
+    )
+  })
+
+  test("fails when SSE stream buffer exceeds maximum size without an event delimiter", async () => {
+    const encoder = new TextEncoder()
+    const chunk = "a".repeat(1024 * 1024) // 1 MiB chunk
+    const source = new ReadableStream<Uint8Array>({
+      start(controller) {
+        // Enqueue more than 2 MiB without any event delimiter
+        controller.enqueue(encoder.encode(chunk))
+        controller.enqueue(encoder.encode(chunk))
+        controller.enqueue(encoder.encode(chunk))
+        controller.close()
+      },
+    })
+    const response = unwrapResponse(new Response(source, { headers: { "content-type": "text/event-stream" } }))
+    let threw = false
+    try {
+      await response.text()
+    } catch {
+      threw = true
+    }
+    expect(threw).toBe(true)
+  })
+
+  test("does not treat a single CRLF as an SSE boundary", async () => {
+    const payload = 'data: {"response":{"content":"line1\\r\\nline2"}}\r\n\r\n'
+    const response = unwrapResponse(new Response(payload, { headers: { "content-type": "text/event-stream" } }))
+    const text = await response.text()
+    expect(text).toBe('data: {"content":"line1\\r\\nline2"}\r\n\r\n')
+  })
+
+  test("unwraps SSE frames with all 8 valid newline delimiter combinations", async () => {
+    const delimiters = ["\r\n\r\n", "\r\n\r", "\r\n\n", "\r\r\n", "\r\r", "\n\r\n", "\n\r", "\n\n"]
+    for (const delimiter of delimiters) {
+      const payload = `data: {"response":{"candidates":[{"finishReason":"STOP"}]}}${delimiter}`
+      const response = unwrapResponse(new Response(payload, { headers: { "content-type": "text/event-stream" } }))
+      const text = await response.text()
+      expect(text).toBe(`data: {"candidates":[{"finishReason":"STOP"}]}${delimiter}`)
+    }
   })
 })
 
@@ -880,7 +1232,7 @@ describe("Antigravity OAuth", () => {
   it.effect("rewrites the Google transport request and unwraps the Antigravity stream", () =>
     Effect.gen(function* () {
       const credentials = yield* Credential.Service
-      yield* credentials.create({
+      const currentCred = yield* credentials.create({
         integrationID,
         value: Credential.OAuth.make({
           type: "oauth",
@@ -958,6 +1310,261 @@ describe("Antigravity OAuth", () => {
           labels: { model_enum: "MODEL_ARGON" },
         },
       })
+      expect(yield* result.text).toContain('"candidates"')
+
+      // Refresh token in place on the same active connection
+      yield* credentials.update(currentCred.id, {
+        value: Credential.OAuth.make({
+          type: "oauth",
+          methodID,
+          access: "refreshed-token",
+          refresh: tokens.refresh_token,
+          expires: Date.now() + 3_600_000,
+          metadata: { projectId: "project-123" },
+        }),
+      })
+
+      // A request carrying the old token (as prepared before refresh) succeeds and rewrites authorization to the refreshed token
+      const refreshedResult = yield* middleware(
+        HttpClientRequest.post(
+          "https://generativelanguage.googleapis.com/v1beta/models/argon:streamGenerateContent?alt=sse",
+        ).pipe(
+          HttpClientRequest.setHeader("x-goog-api-key", tokens.access_token),
+          HttpClientRequest.setHeader("content-type", "application/json"),
+          HttpClientRequest.bodyJsonUnsafe({ contents: [{ role: "user", parts: [{ text: "hi" }] }] }),
+        ),
+        (request) =>
+          Effect.gen(function* () {
+            const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
+            captured = {
+              url: web.url,
+              headers: web.headers,
+              body: yield* Effect.promise(() => web.text()),
+            }
+            return HttpClientResponse.fromWeb(
+              request,
+              new Response(
+                'data: {"response":{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}]}}\n\n',
+                { status: 200, headers: { "content-type": "text/event-stream" } },
+              ),
+            )
+          }),
+      )
+      expect(captured?.headers.get("authorization")).toBe("Bearer refreshed-token")
+      expect(yield* refreshedResult.text).toContain('"candidates"')
+
+      // A second request carrying the old token also succeeds (Finding 1)
+      const secondOldTokenResult = yield* middleware(
+        HttpClientRequest.post(
+          "https://generativelanguage.googleapis.com/v1beta/models/argon:streamGenerateContent?alt=sse",
+        ).pipe(
+          HttpClientRequest.setHeader("x-goog-api-key", tokens.access_token),
+          HttpClientRequest.setHeader("content-type", "application/json"),
+          HttpClientRequest.bodyJsonUnsafe({ contents: [{ role: "user", parts: [{ text: "hi again" }] }] }),
+        ),
+        (request) =>
+          Effect.gen(function* () {
+            const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
+            captured = {
+              url: web.url,
+              headers: web.headers,
+              body: yield* Effect.promise(() => web.text()),
+            }
+            return HttpClientResponse.fromWeb(
+              request,
+              new Response(
+                'data: {"response":{"candidates":[{"content":{"parts":[{"text":"ok2"}]},"finishReason":"STOP"}]}}\n\n',
+                { status: 200, headers: { "content-type": "text/event-stream" } },
+              ),
+            )
+          }),
+      )
+      expect(captured?.headers.get("authorization")).toBe("Bearer refreshed-token")
+      expect(yield* secondOldTokenResult.text).toContain('"candidates"')
+
+      // Bounded token cache: adding > 20 tokens evicts the oldest tokens (Finding 5)
+      for (let i = 0; i < 22; i++) {
+        yield* credentials.update(currentCred.id, {
+          value: Credential.OAuth.make({
+            type: "oauth",
+            methodID,
+            access: `pushed-token-${i}`,
+            refresh: tokens.refresh_token,
+            expires: Date.now() + 3_600_000,
+            metadata: { projectId: "project-123" },
+          }),
+        })
+        yield* middleware(
+          HttpClientRequest.post(
+            "https://generativelanguage.googleapis.com/v1beta/models/argon:streamGenerateContent?alt=sse",
+          ).pipe(
+            HttpClientRequest.setHeader("x-goog-api-key", `pushed-token-${i}`),
+            HttpClientRequest.setHeader("content-type", "application/json"),
+            HttpClientRequest.bodyJsonUnsafe({ contents: [{ role: "user", parts: [{ text: "ping" }] }] }),
+          ),
+          (request) => Effect.succeed(HttpClientResponse.fromWeb(request, new Response("ok"))),
+        )
+      }
+
+      // The original tokens.access_token has now been evicted because cache size is bounded to 20
+      const evictedCall = middleware(
+        HttpClientRequest.post(
+          "https://generativelanguage.googleapis.com/v1beta/models/argon:streamGenerateContent?alt=sse",
+        ).pipe(
+          HttpClientRequest.setHeader("x-goog-api-key", tokens.access_token),
+          HttpClientRequest.setHeader("content-type", "application/json"),
+          HttpClientRequest.bodyJsonUnsafe({ contents: [{ role: "user", parts: [{ text: "hi" }] }] }),
+        ),
+        (request) => Effect.succeed(HttpClientResponse.fromWeb(request, new Response("ok"))),
+      )
+      const evictedExit = yield* Effect.exit(evictedCall)
+      expect(evictedExit._tag).toBe("Failure")
+      if (evictedExit._tag === "Failure") {
+        expect(Cause.pretty(evictedExit.cause)).toContain(
+          "The request credentials do not match the active Google Antigravity account",
+        )
+      }
+
+      // Switch to a second account
+      yield* credentials.create({
+        integrationID,
+        value: Credential.OAuth.make({
+          type: "oauth",
+          methodID,
+          access: "second-token",
+          refresh: "second-refresh",
+          expires: Date.now() + 3_600_000,
+          metadata: { projectId: "second-project" },
+        }),
+      })
+
+      // Executing with the old token must fail due to credential mismatch
+      const staleCall = middleware(
+        HttpClientRequest.post(
+          "https://generativelanguage.googleapis.com/v1beta/models/argon:streamGenerateContent?alt=sse",
+        ).pipe(
+          HttpClientRequest.setHeader("x-goog-api-key", tokens.access_token),
+          HttpClientRequest.setHeader("content-type", "application/json"),
+          HttpClientRequest.bodyJsonUnsafe({ contents: [{ role: "user", parts: [{ text: "hi" }] }] }),
+        ),
+        (request) => Effect.succeed(HttpClientResponse.fromWeb(request, new Response("ok"))),
+      )
+      const exit = yield* Effect.exit(staleCall)
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        expect(Cause.pretty(exit.cause)).toContain("The request credentials do not match the active Google Antigravity account")
+      }
+
+      // Late refresh for Account A completes while Account B is active
+      const integrations = yield* Integration.Service
+      const integration = yield* integrations.get(integrationID)
+      const conn = integration?.connections.find((c) => c.type === "credential" && c.id === currentCred.id)
+      if (conn) {
+        yield* integrations.connection.resolve(conn)
+      }
+      // A request using Account A's late-refreshed token must still be rejected when Account B is active
+      const lateRefreshCall = middleware(
+        HttpClientRequest.post(
+          "https://generativelanguage.googleapis.com/v1beta/models/argon:streamGenerateContent?alt=sse",
+        ).pipe(
+          HttpClientRequest.setHeader("x-goog-api-key", "refreshed-token"),
+          HttpClientRequest.setHeader("content-type", "application/json"),
+          HttpClientRequest.bodyJsonUnsafe({ contents: [{ role: "user", parts: [{ text: "hi" }] }] }),
+        ),
+        (request) => Effect.succeed(HttpClientResponse.fromWeb(request, new Response("ok"))),
+      )
+      const lateExit = yield* Effect.exit(lateRefreshCall)
+      expect(lateExit._tag).toBe("Failure")
+      if (lateExit._tag === "Failure") {
+        expect(Cause.pretty(lateExit.cause)).toContain(
+          "The request credentials do not match the active Google Antigravity account",
+        )
+      }
+    }).pipe(
+      Effect.provideService(
+        SessionModelTransport.Service,
+        SessionModelTransport.Service.of({
+          bind: () => ({ execute: () => Effect.die("unused WebSocket execution") }),
+          close: () => Effect.void,
+          closeAll: Effect.void,
+        }),
+      ),
+    ),
+  )
+
+  it.effect("retries load and rewrites request when credentials recover after transient failure", () =>
+    Effect.gen(function* () {
+      const credentials = yield* Credential.Service
+      // Plugin starts with NO active credentials, so loaded.active is false
+      const { http } = mock([{ models: { argon: { displayName: "Argon", model: "MODEL_ARGON" } } }])
+      yield* addPlugin(http)
+
+      // Later, credentials are added / recover
+      yield* credentials.create({
+        integrationID,
+        value: Credential.OAuth.make({
+          type: "oauth",
+          methodID,
+          access: tokens.access_token,
+          refresh: tokens.refresh_token,
+          expires: Date.now() + 3_600_000,
+          metadata: { projectId: "project-123" },
+        }),
+      })
+
+      const session = Session.Info.make({
+        id: Session.ID.make("ses_transient_recovery"),
+        projectID: Project.ID.global,
+        cost: Money.USD.zero,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0) },
+        location: Location.Ref.make({ directory: AbsolutePath.make("/project") }),
+      })
+      const model = SessionRunnerModel.resolved(Gemini.route.model({ id: "argon", provider: "google" }), {
+        capabilities: { tools: true, input: ["text", "image"], output: ["text"] },
+        cost: [],
+        limit: { context: 1_048_576, output: 65_536 },
+      })
+      const requests = yield* SessionModelRequest.Service.pipe(Effect.provide(SessionModelRequest.layer))
+      const prepared = yield* requests.primary({
+        session,
+        agent: Agent.ID.make("build"),
+        model,
+        system: [],
+        messages: [],
+      })
+      const middleware = prepared.options.http
+      if (!middleware) throw new Error("Expected HTTP middleware")
+
+      let captured: { url: string; headers: Headers; body: string } | undefined
+      // The request should retry load() because loaded.active was false but activeConnection is present!
+      const result = yield* middleware(
+        HttpClientRequest.post(
+          "https://generativelanguage.googleapis.com/v1beta/models/argon:streamGenerateContent?alt=sse",
+        ).pipe(
+          HttpClientRequest.setHeader("x-goog-api-key", tokens.access_token),
+          HttpClientRequest.setHeader("content-type", "application/json"),
+          HttpClientRequest.bodyJsonUnsafe({ contents: [{ role: "user", parts: [{ text: "hi" }] }] }),
+        ),
+        (request) =>
+          Effect.gen(function* () {
+            const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
+            captured = {
+              url: web.url,
+              headers: web.headers,
+              body: yield* Effect.promise(() => web.text()),
+            }
+            return HttpClientResponse.fromWeb(
+              request,
+              new Response(
+                'data: {"response":{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}]}}\n\n',
+                { status: 200, headers: { "content-type": "text/event-stream" } },
+              ),
+            )
+          }),
+      )
+      expect(captured?.url).toContain("v1internal:streamGenerateContent")
+      expect(captured?.headers.get("authorization")).toBe(`Bearer ${tokens.access_token}`)
       expect(yield* result.text).toContain('"candidates"')
     }).pipe(
       Effect.provideService(

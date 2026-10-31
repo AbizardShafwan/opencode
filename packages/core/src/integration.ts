@@ -458,6 +458,7 @@ const layer = Layer.effect(
             .integrations.get(attempt.integrationID)
             ?.implementations.get(attempt.methodID)
           return createCredential({
+            id: (exit.value as { id?: Credential.ID }).id,
             integrationID: attempt.integrationID,
             label: attempt.label ?? implementation?.label?.(exit.value),
             value: exit.value,
@@ -724,17 +725,20 @@ const layer = Layer.effect(
           }
           const credential = yield* credentials.get(connection.id)
           if (!credential) return undefined
-          if (credential.value.type !== "oauth") return credential.value
+          if (credential.value.type !== "oauth") return Object.assign(credential.value, { id: credential.id })
           const implementation = state
             .get()
             .integrations.get(credential.integrationID)
             ?.implementations.get(credential.value.methodID)
-          if (!implementation?.refresh) return credential.value
+          if (!implementation?.refresh) return Object.assign(credential.value, { id: credential.id })
           const now = yield* Clock.currentTimeMillis
-          if (credential.value.expires > now + Duration.toMillis(Duration.minutes(5))) return credential.value
-          const value = yield* authorize(implementation.refresh(credential.value))
+          if (credential.value.expires > now + Duration.toMillis(Duration.minutes(5)))
+            return Object.assign(credential.value, { id: credential.id })
+          const value = yield* authorize(
+            implementation.refresh(Object.assign(credential.value, { id: credential.id })),
+          )
           yield* credentials.update(credential.id, { value })
-          return value
+          return Object.assign(value, { id: credential.id })
         }),
         key: Effect.fn("Integration.connection.key")(function* (input) {
           const method = state
