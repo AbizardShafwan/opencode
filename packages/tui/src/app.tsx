@@ -75,6 +75,9 @@ import { DialogThemeList } from "./component/dialog-theme-list"
 import { DialogHelp } from "./ui/dialog-help"
 import { DialogAgent } from "./component/dialog-agent"
 import { DialogSessionList } from "./component/dialog-session-list"
+import { DialogContextLimit } from "./component/dialog-context-limit"
+import { parseTokenLimit, formatTokenLimit } from "@opencode/util/token-limit"
+import { errorMessage } from "./util/error"
 import { DialogOpen, DialogOpenKey, moveOpenSession } from "./component/dialog-open"
 import { SessionTabs } from "./component/session-tabs"
 import { clampSessionTabsWidth, sessionTabsFitVertically, SESSION_SIDEBAR_WIDTH } from "./ui/layout"
@@ -818,6 +821,100 @@ function App() {
           if (agent) local.agent.set(agent.id)
           if (model) local.model.set(model)
           dialog.clear()
+        },
+      },
+      {
+        name: "session.limit",
+        title: "Set context soft limit",
+        category: "Session",
+        slash: { name: "limit", arguments: true as const },
+        run: (input?: string) => {
+          const sessionID = route.data.type === "session" ? route.data.sessionID : undefined
+          if (input === undefined || !input.trim()) {
+            return DialogContextLimit.show(dialog, sessionID)
+          }
+          const save = /(?:^|\s)(?:--save|-s)(?:\s|$)/.test(input)
+          const raw = input.replace(/(?:^|\s)(?:--save|-s)(?:\s|$)/g, " ").trim()
+          if (!raw) {
+            return DialogContextLimit.show(dialog, sessionID)
+          }
+
+          const sessionValue = sessionID ? data.session.get(sessionID) : undefined
+          const modelSelection = sessionValue?.model ?? local.model.current()
+          const loc = sessionValue?.location ?? location.ref
+          const models = data.location.model.list(loc)
+          const activeModel = modelSelection
+            ? models?.find(
+                (m) =>
+                  m.providerID === modelSelection.providerID &&
+                  m.id === ("id" in modelSelection ? modelSelection.id : modelSelection.modelID),
+              )
+            : undefined
+          const hardLimit = activeModel?.limit.input || activeModel?.limit.context || 0
+
+          const parsed = parseTokenLimit(raw, hardLimit || undefined)
+          if (parsed.error) {
+            toast.show({ message: parsed.error, variant: "error", duration: 5000 })
+            return
+          }
+
+          const modelKey = activeModel
+            ? `${activeModel.providerID}/${activeModel.id}`
+            : modelSelection
+              ? `${modelSelection.providerID}/${"id" in modelSelection ? modelSelection.id : modelSelection.modelID}`
+              : undefined
+
+          const persistConfig = save || !sessionID
+          const metadata = { ...(sessionValue?.metadata ?? {}) }
+
+          if (parsed.clear) {
+            delete metadata.softLimit
+            void (async () => {
+              try {
+                if (sessionID) {
+                  await client.api.session.update({ sessionID, metadata })
+                }
+                if (persistConfig && modelKey) {
+                  await client.api.config.update({ softLimit: { modelKey, limit: null } })
+                }
+                toast.show({
+                  message: persistConfig ? "Reset context limit and saved to config" : "Reset context limit to default",
+                  variant: "info",
+                })
+              } catch (error) {
+                toast.show({ message: errorMessage(error), variant: "error" })
+              }
+            })()
+            return
+          }
+
+          const tokens = parsed.tokens
+          if (tokens === undefined) return
+
+          metadata.softLimit = tokens
+          void (async () => {
+            try {
+              if (sessionID) {
+                await client.api.session.update({ sessionID, metadata })
+              }
+              if (persistConfig && modelKey) {
+                await client.api.config.update({ softLimit: { modelKey, limit: tokens } })
+              }
+              if (parsed.clamped) {
+                toast.show({
+                  message: `Context limit clamped to model capacity (${formatTokenLimit(tokens)})${persistConfig ? " and saved to config" : ""}`,
+                  variant: "warning",
+                })
+                return
+              }
+              toast.show({
+                message: `Context limit set to ${formatTokenLimit(tokens)}${persistConfig ? " and saved to config" : ""}`,
+                variant: "info",
+              })
+            } catch (error) {
+              toast.show({ message: errorMessage(error), variant: "error" })
+            }
+          })()
         },
       },
       {

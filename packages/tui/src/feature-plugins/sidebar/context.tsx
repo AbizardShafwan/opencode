@@ -12,9 +12,19 @@ export function SidebarContext(props: { context: Plugin.Context; sessionID: stri
   const msg = createMemo(() => props.context.data.session.message.list(props.sessionID))
   const session = createMemo(() => props.context.data.session.get(props.sessionID))
   const cost = createMemo(() => props.context.data.session.cost(props.sessionID))
+  const softLimit = createMemo(() => {
+    const s = session()
+    return typeof s?.metadata?.softLimit === "number" ? s.metadata.softLimit : undefined
+  })
 
   const state = createMemo(() =>
-    contextUsage(msg(), props.context.data.location.model.list(session()?.location), session()?.revert?.messageID),
+    contextUsage(
+      msg(),
+      props.context.data.location.model.list(session()?.location),
+      session()?.revert?.messageID,
+      softLimit(),
+      props.context.data.location.config.list(session()?.location),
+    ),
   )
 
   return (

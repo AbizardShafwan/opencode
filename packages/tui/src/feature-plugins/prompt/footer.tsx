@@ -38,10 +38,13 @@ export function PromptFooter(props: {
     if (!props.sessionID) return []
     const session = props.context.data.session.get(props.sessionID)
     if (!session) return []
+    const softLimit = typeof session.metadata?.softLimit === "number" ? session.metadata.softLimit : undefined
     const usage = contextUsage(
       props.context.data.session.message.list(props.sessionID),
       props.context.data.location.model.list(session.location),
       session.revert?.messageID,
+      softLimit,
+      props.context.data.location.config.list(session.location),
     )
     const cost = props.context.data.session.cost(props.sessionID)
     return [

@@ -3421,6 +3421,53 @@ describe("SessionRunnerLLM", () => {
     })
   })
 
+  scenario("completes turn when tool output bursts past soft limit, and triggers auto compaction before subsequent turn", function* (s) {
+    const burstModel = testModel("burst-window", { context: 1_000_000, output: 32_000 })
+    s.currentModel = burstModel
+    const compaction = yield* SessionCompaction.Service
+    yield* compaction.transform((editor) =>
+      editor.configure({ soft_limits: { "fake/burst-window": 372_000 } }),
+    )
+
+    // Step 1: User runs prompt.
+    // The first step calls echo tool with initial usage of 300k tokens (below the 316.2k ceiling).
+    // The continuation step completes the tool call with 390k tokens (bursting past 372k soft limit, but well within 1M hard window).
+    yield* s.llm.push(
+      [
+        LLMEvent.toolCall({ id: "call_burst_tool", name: "echo", input: { text: "burst data" } }),
+        LLMEvent.stepFinish({
+          index: 0,
+          reason: { normalized: "tool-calls" },
+          usage: { inputTokens: 300_000, nonCachedInputTokens: 300_000, outputTokens: 50 },
+        }),
+        LLMEvent.finish({ reason: { normalized: "tool-calls" } }),
+      ],
+      TestLLM.textWithUsage("Turn completed successfully with burst tool output", "text-burst-complete", 390_000),
+    )
+
+    yield* s.runPrompt("Run a tool that generates burst output")
+
+    // The turn completed without API failure because 390k fits 1M hard window!
+    expect(s.requests).toHaveLength(2)
+    const messages = yield* s.messages
+    const latestAssistant = messages.find((m) => m.type === "assistant")
+    expect(latestAssistant).toBeDefined()
+    expect(latestAssistant?.tokens?.input).toBe(390_000)
+
+    // Now, for the subsequent prompt / turn, automatic compaction triggers because 390k >= 316,200 ceiling.
+    s.requests.length = 0
+    yield* s.llm.push(
+      TestLLM.text("## Objective\n- Preserved summary after burst", "text-summary"),
+      TestLLM.text("Subsequent turn answer", "text-subsequent"),
+    )
+    yield* s.runPrompt("Subsequent user question")
+
+    // Auto compaction ran before the subsequent turn!
+    expect(s.requests).toHaveLength(2)
+    expect(userTexts(s.requests[0]).at(-1)).toContain("## Objective")
+    expect((yield* s.context).some((m) => m.type === "compaction" && m.status === "completed")).toBe(true)
+  })
+
   scenario("automatically persists native windows, retains earlier users, and waits for fresh usage", function* (s) {
     s.currentModel = LanguageModel.make({ id: "native", provider: "openai", route: OpenAIResponses.route })
     modelLimits.set("native", { context: 11_000, output: 1_000 })

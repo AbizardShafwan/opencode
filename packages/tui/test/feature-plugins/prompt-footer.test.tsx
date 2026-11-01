@@ -37,6 +37,7 @@ test("prompt footer separates simultaneous subagent, shell, and usage status", a
         list: () => [{ metadata: { sessionID: "session" } }],
       },
       location: {
+        config: { list: () => [] },
         model: { list: () => [] },
       },
     },
@@ -104,6 +105,7 @@ test("prompt footer can hide details", async () => {
       },
       shell: { list: () => [] },
       location: {
+        config: { list: () => [] },
         model: { list: () => [{ providerID: "provider", id: "model", limit: { context: 10_000 } }] },
       },
     },
@@ -184,7 +186,7 @@ test("prompt footer shows the session's goal without its objective and opens it 
         message: { list: () => [] },
       },
       shell: { list: () => [] },
-      location: { model: { list: () => [] } },
+      location: { config: { list: () => [] }, model: { list: () => [] } },
     },
   } as unknown as Context
   const app = await testRender(

@@ -395,6 +395,24 @@ function normalizeCompaction(
     : undefined
   const buffer = prefer(legacyBuffer, nativeBuffer, ["compaction", "buffer"], diagnostics)
   if (buffer !== undefined) result.buffer = buffer
+  if (own(input.compaction, "default_soft_limit")) {
+    const value = decodeEncoded(
+      ConfigCompaction.Info.fields.default_soft_limit,
+      input.compaction.default_soft_limit,
+      ["compaction", "default_soft_limit"],
+      diagnostics,
+    )
+    if (value !== undefined) result.default_soft_limit = value
+  }
+  if (own(input.compaction, "soft_limits")) {
+    const value = decodeEncoded(
+      ConfigCompaction.Info.fields.soft_limits,
+      input.compaction.soft_limits,
+      ["compaction", "soft_limits"],
+      diagnostics,
+    )
+    if (value !== undefined) result.soft_limits = value
+  }
   if (Object.keys(result).length || !Object.keys(input.compaction).length) encoded.compaction = result
 }
 

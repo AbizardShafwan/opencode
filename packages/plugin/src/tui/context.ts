@@ -1,6 +1,7 @@
 import type {
   AgentInfo,
   CommandInfo,
+  ConfigEntry,
   SessionFormCancelInput,
   FormInfo,
   SessionFormReplyInput,
@@ -127,6 +128,8 @@ export interface Data {
     }
     readonly agent: LocationCollection<AgentInfo>
     readonly command: LocationCollection<CommandInfo>
+    /** Ordered configuration documents, including inherited compaction defaults. */
+    readonly config: LocationCollection<ConfigEntry>
     readonly integration: LocationCollection<IntegrationInfo>
     readonly mcp: {
       readonly server: LocationCollection<McpServer>

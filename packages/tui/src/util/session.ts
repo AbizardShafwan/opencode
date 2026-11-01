@@ -1,5 +1,6 @@
-import type { ModelInfo, SessionMessageInfo } from "@opencode/client"
-import { lastAssistantWithUsage } from "@opencode/client/solid"
+import type { ConfigEntry, ModelInfo, SessionMessageInfo } from "@opencode/client"
+import { compactionSettings, lastAssistantWithUsage } from "@opencode/client/solid"
+import { effectiveContextWindow, resolveSoftLimit } from "@opencode/util/token-limit"
 import { Locale } from "./locale"
 
 type SessionNode = {
@@ -47,6 +48,8 @@ export function contextUsage(
   messages: ReadonlyArray<SessionMessageInfo>,
   models: ReadonlyArray<ModelInfo> | undefined,
   boundary?: string,
+  softLimit?: number,
+  configs?: ReadonlyArray<ConfigEntry>,
 ) {
   const last = lastAssistantWithUsage(messages, boundary)
   if (!last) return
@@ -54,9 +57,14 @@ export function contextUsage(
     last.tokens.input + last.tokens.output + last.tokens.reasoning + last.tokens.cache.read + last.tokens.cache.write
   if (tokens <= 0) return
   const model = models?.find((model) => model.providerID === last.model.providerID && model.id === last.model.id)
+  const settings = compactionSettings(configs, `${last.model.providerID}/${last.model.id}`)
+  const effectiveLimit = effectiveContextWindow(
+    model ? model.limit.input || model.limit.context : 0,
+    resolveSoftLimit(softLimit, settings.modelLimit, settings.defaultLimit),
+  )
   return {
     tokens,
-    percent: model?.limit.context ? Math.round((tokens / model.limit.context) * 100) : undefined,
+    percent: effectiveLimit ? Math.round((tokens / effectiveLimit) * 100) : undefined,
   }
 }
 

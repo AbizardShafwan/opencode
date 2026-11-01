@@ -1,8 +1,10 @@
 import { createMemo, on, onCleanup, For, Show } from "solid-js"
+import { createStore } from "solid-js/store"
 import type { JSX } from "solid-js"
 import { checksum } from "@opencode/util/encode"
 import { Icon } from "@opencode/ui/icon"
 import { Button } from "@opencode/ui/button"
+import { Checkbox } from "@opencode/ui/checkbox"
 import { Accordion } from "@opencode/ui/accordion"
 import { StickyAccordionHeader } from "@opencode/ui/sticky-accordion-header"
 import { ScrollView } from "@opencode/ui/scroll-view"
@@ -11,7 +13,14 @@ import { useI18n } from "@opencode/ui/context/i18n"
 import { File } from "@opencode/session-ui/file"
 import { Markdown } from "@opencode/session-ui/markdown"
 import type { SessionMessageInfo } from "@opencode/client/promise"
-import { lastAssistantWithUsage } from "@opencode/client/solid"
+import { compactionSettings, lastAssistantWithUsage } from "@opencode/client/solid"
+import {
+  calculateCompactionCeiling,
+  effectiveContextWindow,
+  parseTokenLimit,
+  formatTokenLimit,
+  resolveSoftLimit,
+} from "@opencode/util/token-limit"
 import { createKeyed, useExtension, type MountedSession } from "../sdk"
 import { catalogModel, syncCatalog } from "./catalog"
 import { fetchSessionExport, sessionExportFilename } from "./export"
@@ -124,19 +133,342 @@ export default function SessionContextTab(props: { session: MountedSession }) {
       message.tokens.cache.read +
       message.tokens.cache.write
 
+    const settings = compactionSettings(
+      data().location.config.list(props.session.location),
+      `${message.model.providerID}/${message.model.id}`,
+    )
+
+    const softLimit = resolveSoftLimit(info()?.metadata?.softLimit, settings.modelLimit, settings.defaultLimit)
+
+    const hardLimit = entry?.model ? entry.model.limit.input || entry.model.limit.context : undefined
+
+    const effectiveLimit = effectiveContextWindow(hardLimit ?? 0, softLimit)
+
     return {
       message,
       tokens: message.tokens,
       providerLabel: entry?.provider.name ?? message.model.providerID,
       modelLabel: entry?.model?.name ?? message.model.id,
-      limit: entry?.model?.limit.context,
+      limit: effectiveLimit,
+      hardLimit,
+      softLimit,
       input: message.tokens.input,
       total,
-      usage: entry?.model?.limit.context ? Math.round((total / entry.model.limit.context) * 100) : null,
+      usage: effectiveLimit ? Math.round((total / effectiveLimit) * 100) : null,
     }
   })
 
   const usageProviderID = createMemo(() => (info()?.model ?? context()?.message.model)?.providerID)
+
+  const modelRef = createMemo(() => info()?.model ?? context()?.message.model)
+
+  const modelEntry = createMemo(() => {
+    const ref = modelRef()
+
+    if (!ref) return undefined
+
+    return catalogModel(props.session, ref)
+  })
+
+  const activeModel = createMemo(() => modelEntry()?.model)
+
+  const hardLimit = createMemo(() => {
+    const m = activeModel()
+
+    return m ? m.limit.input || m.limit.context : 0
+  })
+
+  const modelKey = createMemo(() => {
+    const m = activeModel()
+
+    if (m) return `${m.providerID}/${m.id}`
+
+    const r = modelRef()
+
+    return r ? `${r.providerID}/${r.id}` : undefined
+  })
+
+  const settings = createMemo(() => compactionSettings(data().location.config.list(props.session.location), modelKey()))
+
+  const currentSoftLimit = createMemo(() =>
+    resolveSoftLimit(info()?.metadata?.softLimit, settings().modelLimit, settings().defaultLimit),
+  )
+
+  const effectiveLimit = createMemo(() => effectiveContextWindow(hardLimit(), currentSoftLimit()))
+
+  // Edits and delayed writes belong to one visit, location, model, and server connection, not the live route.
+  const limitTarget = createMemo(() => ({
+    id: Symbol(),
+    visit: props.session.visit,
+    sessionID: props.session.id,
+    directory: props.session.directory,
+    server: props.session.server,
+    client: props.session.server.client,
+    modelKey: modelKey(),
+  }))
+
+  const [edit, setEdit] = createStore<{ target?: symbol; text: string | null; save: boolean | null }>({
+    text: null,
+    save: null,
+  })
+
+  const textOverride = () => (edit.target === limitTarget().id ? edit.text : null)
+  const saveDefault = () => (edit.target === limitTarget().id ? edit.save : null) ?? settings().modelLimit !== undefined
+  const setTextOverride = (text: string | null) => setEdit({ target: limitTarget().id, text, save: saveDefault() })
+  const setSaveDefaultOverride = (save: boolean) => setEdit({ target: limitTarget().id, text: textOverride(), save })
+
+  const candidatePresets = [1_500_000, 1_000_000, 750_000, 500_000, 372_000, 250_000, 128_000, 100_000, 80_000, 64_000]
+
+  const presetTokens = createMemo(() => {
+    const hard = hardLimit()
+
+    if (hard <= 0) return []
+
+    return candidatePresets.filter((p) => p < hard && (hard >= 1_000_000 ? p >= 128_000 : p >= 40_000))
+  })
+
+  const ceilingTokens = createMemo(() => {
+    const eff = effectiveLimit()
+
+    if (eff <= 0) return 0
+
+    return calculateCompactionCeiling(hardLimit(), settings().buffer, currentSoftLimit())
+  })
+
+  const clampingNotice = createMemo(() => {
+    const def = currentSoftLimit()
+    const hard = hardLimit()
+
+    if (def && hard > 0 && def > hard) {
+      return ctx.t("contextLimit.clampingNotice", {
+        hardLimit: formatTokenLimit(hard),
+        defaultLimit: formatTokenLimit(def),
+      })
+    }
+
+    return undefined
+  })
+
+  const displayInputText = createMemo(() => {
+    const override = textOverride()
+
+    if (override !== null) return override
+
+    const current = currentSoftLimit()
+
+    return current ? formatTokenLimit(current) : hardLimit() > 0 ? formatTokenLimit(hardLimit()) : ""
+  })
+
+  const sliderValue = createMemo(() => {
+    const hard = hardLimit()
+
+    if (hard <= 0) return 40000
+
+    const override = textOverride()
+
+    if (override !== null) {
+      const parsed = parseTokenLimit(override, hard)
+
+      if (!parsed.error && parsed.tokens) return Math.min(parsed.tokens, hard)
+
+      if (parsed.clear) return hard
+    }
+
+    const current = currentSoftLimit()
+
+    return Math.min(current ?? hard, hard)
+  })
+
+  let debounceTimer: ReturnType<typeof setTimeout> | undefined
+
+  const controller = new AbortController()
+
+  const signal = AbortSignal.any([ctx.signal, controller.signal])
+
+  onCleanup(() => {
+    controller.abort()
+
+    if (debounceTimer) clearTimeout(debounceTimer)
+  })
+
+  const isCurrent = (target: ReturnType<typeof limitTarget>) => !signal.aborted && target === limitTarget()
+
+  const commitLimit = async (tokens: number | undefined) => {
+    const target = limitTarget()
+    const save = saveDefault()
+    const sessionID = target.sessionID
+
+    const meta = { ...(info()?.metadata ?? {}) }
+
+    if (tokens === undefined) {
+      delete meta.softLimit
+    } else {
+      meta.softLimit = tokens
+    }
+
+    try {
+      if (sessionID) {
+        await target.server.client.session.update(
+          {
+            sessionID,
+            metadata: meta,
+          },
+          { signal },
+        )
+      }
+
+      if (!isCurrent(target)) return
+
+      if (save && target.modelKey) {
+        await target.server.client.config.update(
+          {
+            softLimit: {
+              modelKey: target.modelKey,
+              limit: tokens ?? null,
+            },
+          },
+          { signal },
+        )
+
+        if (!isCurrent(target)) return
+
+        showToast({
+          variant: "success",
+          icon: () => <Icon name="circle-check" />,
+          title: ctx.t("contextLimit.title"),
+          description: ctx.t("contextLimit.savedToast"),
+        })
+      }
+    } catch (err) {
+      if (!isCurrent(target)) return
+
+      showToast({
+        variant: "error",
+        title: ctx.t("contextLimit.title"),
+        description: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  const debounceCommit = (val: number) => {
+    if (debounceTimer) clearTimeout(debounceTimer)
+    const target = limitTarget()
+
+    debounceTimer = setTimeout(() => {
+      if (!isCurrent(target)) return
+
+      setTextOverride(null)
+
+      void commitLimit(val)
+    }, 250)
+  }
+
+  const handleSliderInput = (event: Event & { currentTarget: HTMLInputElement }) => {
+    const val = Number(event.currentTarget.value)
+
+    setTextOverride(formatTokenLimit(val))
+    debounceCommit(val)
+  }
+
+  const handleSliderChange = (event: Event & { currentTarget: HTMLInputElement }) => {
+    if (debounceTimer) clearTimeout(debounceTimer)
+
+    const val = Number(event.currentTarget.value)
+
+    setTextOverride(null)
+
+    void commitLimit(val)
+  }
+
+  const handleTextInput = (event: Event & { currentTarget: HTMLInputElement }) => {
+    setTextOverride(event.currentTarget.value)
+  }
+
+  const handleTextSubmit = (raw: string) => {
+    if (debounceTimer) clearTimeout(debounceTimer)
+
+    setTextOverride(null)
+
+    const parsed = parseTokenLimit(raw, hardLimit() || undefined)
+
+    if (parsed.error) {
+      showToast({
+        variant: "error",
+        title: ctx.t("contextLimit.title"),
+        description: parsed.error,
+      })
+
+      return
+    }
+
+    if (parsed.clear) {
+      void commitLimit(undefined)
+
+      return
+    }
+
+    void commitLimit(parsed.tokens)
+  }
+
+  const handleTextKeyDown = (event: KeyboardEvent & { currentTarget: HTMLInputElement }) => {
+    if (event.key === "Enter") {
+      handleTextSubmit(event.currentTarget.value)
+    }
+  }
+
+  const handleTextBlur = (event: FocusEvent & { currentTarget: HTMLInputElement }) => {
+    if (textOverride() === null) return
+
+    handleTextSubmit(event.currentTarget.value)
+  }
+
+  const handlePresetClick = (tokens: number | undefined) => {
+    if (debounceTimer) clearTimeout(debounceTimer)
+
+    setTextOverride(null)
+
+    void commitLimit(tokens)
+  }
+
+  const handleToggleSaveDefault = async (checked: boolean) => {
+    setSaveDefaultOverride(checked)
+
+    const target = limitTarget()
+    const key = target.modelKey
+
+    if (!key) return
+
+    try {
+      const cur = currentSoftLimit()
+
+      await target.server.client.config.update(
+        {
+          softLimit: {
+            modelKey: key,
+            limit: checked ? (cur ?? null) : null,
+          },
+        },
+        { signal },
+      )
+
+      if (!isCurrent(target)) return
+
+      showToast({
+        variant: "success",
+        icon: () => <Icon name="circle-check" />,
+        title: ctx.t("contextLimit.title"),
+        description: ctx.t("contextLimit.savedToast"),
+      })
+    } catch (err) {
+      if (!isCurrent(target)) return
+
+      showToast({
+        variant: "error",
+        title: ctx.t("contextLimit.title"),
+        description: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
 
   const formatter = createMemo(() => createSessionContextFormatter(i18n.locale()))
 
@@ -299,6 +631,179 @@ export default function SessionContextTab(props: { session: MountedSession }) {
         </div>
 
         <SessionProviderUsage session={props.session} providerID={usageProviderID()} />
+
+        <Show when={hardLimit() > 0}>
+          <div
+            class="flex flex-col gap-3.5 p-4 rounded-xl border border-border-base bg-surface-base shadow-xs"
+            data-slot="session-context-limit"
+          >
+            <div class="flex items-center justify-between gap-2 flex-wrap">
+              <div class="flex items-center gap-2 flex-wrap">
+                <Icon name="outline-sliders" size="small" class="text-text-weak" />
+
+                <span class="text-13-medium text-text-strong font-medium">{ctx.t("contextLimit.title")}</span>
+
+                <span class="inline-flex items-center px-2 py-0.5 rounded-full text-11-medium bg-surface-inset-base text-text-weak border border-border-base">
+                  {modelLabel()}
+                </span>
+              </div>
+
+              <div class="flex items-center gap-1.5 px-2.5 py-1 bg-surface-inset-base border border-border-base rounded-md focus-within:border-border-strong-base transition-all">
+                <input
+                  type="text"
+                  value={displayInputText()}
+                  onInput={handleTextInput}
+                  onKeyDown={handleTextKeyDown}
+                  onBlur={handleTextBlur}
+                  placeholder={ctx.t("contextLimit.inputPlaceholder")}
+                  aria-label={ctx.t("contextLimit.title")}
+                  class="w-16 font-mono text-12-medium text-text-strong bg-transparent text-right focus:outline-none"
+                />
+
+                <span class="text-11-regular text-text-weak select-none">tokens</span>
+              </div>
+            </div>
+
+            <div class="flex flex-col gap-1.5 pt-1">
+              <div class="relative w-full h-5 flex items-center">
+                <div class="absolute inset-x-0 h-2 rounded-full bg-surface-inset-base overflow-hidden">
+                  <div
+                    class="h-full rounded-full bg-icon-base transition-all duration-150 pointer-events-none"
+                    style={{ width: `${Math.min(100, Math.max(0, (sliderValue() / hardLimit()) * 100))}%` }}
+                  />
+                </div>
+
+                <Show when={ceilingTokens() > 0 && ceilingTokens() < hardLimit()}>
+                  <div
+                    class="absolute w-1 h-3 bg-surface-warning-base z-10 pointer-events-none rounded-full"
+                    style={{ left: `calc(${Math.min(99, (ceilingTokens() / hardLimit()) * 100)}% - 2px)` }}
+                  />
+                </Show>
+
+                <div
+                  class="absolute top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-surface-raised-base shadow-md border-2 border-icon-base pointer-events-none z-10"
+                  style={{ left: `calc(${Math.min(98, Math.max(0, (sliderValue() / hardLimit()) * 100))}% - 8px)` }}
+                />
+
+                <input
+                  type="range"
+                  min={40000}
+                  max={hardLimit()}
+                  step={10000}
+                  value={sliderValue()}
+                  onInput={handleSliderInput}
+                  onChange={handleSliderChange}
+                  aria-label={ctx.t("contextLimit.slider")}
+                  class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-20"
+                />
+              </div>
+
+              <div class="grid grid-cols-[auto_1fr_auto] gap-2 items-start text-10-medium text-text-weak px-0.5 font-mono">
+                <span>40k</span>
+
+                <Show when={ceilingTokens() > 0 && ceilingTokens() < hardLimit()}>
+                  <span class="min-w-0 text-center text-text-base">
+                    <span class="inline-block w-1.5 h-1.5 mr-1 rounded-full bg-surface-warning-base" />~
+                    {formatTokenLimit(ceilingTokens())} {ctx.t("contextLimit.compactionThreshold")}
+                  </span>
+                </Show>
+
+                <span class="col-start-3">{formatTokenLimit(hardLimit())}</span>
+              </div>
+            </div>
+
+            <div class="flex flex-wrap gap-1.5 items-center">
+              <For each={presetTokens()}>
+                {(preset) => {
+                  const active = () => currentSoftLimit() === preset
+
+                  return (
+                    <button
+                      type="button"
+                      class={`px-2.5 py-1 text-11-medium rounded-full border transition-all ${
+                        active()
+                          ? "bg-surface-raised-base border-border-strong-base text-text-strong font-semibold shadow-xs"
+                          : "bg-surface-inset-base/60 hover:bg-surface-raised-base border-border-base text-text-weak hover:text-text-base cursor-pointer"
+                      }`}
+                      onClick={() => handlePresetClick(preset)}
+                    >
+                      {formatTokenLimit(preset)}
+                    </button>
+                  )
+                }}
+              </For>
+
+              <button
+                type="button"
+                class={`px-2.5 py-1 text-11-medium rounded-full border transition-all ${
+                  effectiveLimit() === hardLimit()
+                    ? "bg-surface-raised-base border-border-strong-base text-text-strong font-semibold shadow-xs"
+                    : "bg-surface-inset-base/60 hover:bg-surface-raised-base border-border-base text-text-weak hover:text-text-base cursor-pointer"
+                }`}
+                onClick={() => handlePresetClick(hardLimit())}
+              >
+                {ctx.t("contextLimit.presetMax")}
+              </button>
+              <button
+                type="button"
+                class="px-2.5 py-1 text-11-medium rounded-full border border-border-base text-text-weak hover:text-text-base"
+                onClick={() => handlePresetClick(undefined)}
+              >
+                {ctx.t("contextLimit.presetDefault")}
+              </button>
+            </div>
+
+            <div class="grid grid-cols-1 @[24rem]:grid-cols-2 gap-2 pt-1">
+              <div class="flex items-center gap-2.5 p-2.5 rounded-lg bg-surface-inset-base/50 border border-border-base">
+                <div class="w-2 h-2 rounded-full bg-surface-warning-base shrink-0" />
+
+                <div class="flex flex-col min-w-0">
+                  <span class="text-10-regular text-text-weak uppercase tracking-wider break-words">
+                    {ctx.t("contextLimit.compactionThreshold")}
+                  </span>
+
+                  <span class="text-12-medium text-text-strong font-mono">~{formatTokenLimit(ceilingTokens())}</span>
+                </div>
+              </div>
+
+              <div class="flex items-center gap-2.5 p-2.5 rounded-lg bg-surface-inset-base/50 border border-border-base">
+                <div class="w-2 h-2 rounded-full bg-icon-info-base shrink-0" />
+
+                <div class="flex flex-col min-w-0">
+                  <span class="text-10-regular text-text-weak uppercase tracking-wider break-words">
+                    {ctx.t("contextLimit.physicalCapacity")}
+                  </span>
+
+                  <span class="text-12-medium text-text-strong font-mono">{formatTokenLimit(hardLimit())}</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="flex flex-wrap gap-2 items-center justify-between pt-2 border-t border-border-base/40">
+              <Checkbox checked={saveDefault()} onChange={handleToggleSaveDefault}>
+                <span class="text-12-regular text-text-weak">
+                  {ctx.t("contextLimit.saveDefault", { model: modelLabel() })}
+                </span>
+              </Checkbox>
+
+              <Show when={saveDefault()}>
+                <span class="flex shrink-0 items-center gap-1 text-11-medium text-text-base font-medium">
+                  <Icon name="circle-check" size="small" />
+
+                  {ctx.t("contextLimit.savedBadge")}
+                </span>
+              </Show>
+            </div>
+
+            <Show when={clampingNotice()}>
+              {(notice) => (
+                <div class="text-11-regular text-text-warning bg-surface-warning-subtle/20 border border-border-warning/30 rounded px-2.5 py-1.5">
+                  {notice()}
+                </div>
+              )}
+            </Show>
+          </div>
+        </Show>
 
         <Show when={systemPrompt()}>
           {(prompt) => (

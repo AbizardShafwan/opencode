@@ -33,6 +33,7 @@ function context(options?: { cost?: number; tokens?: number }) {
         },
       },
       location: {
+        config: { list: () => [] },
         model: { list: () => [] },
       },
     },

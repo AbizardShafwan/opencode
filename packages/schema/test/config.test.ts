@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { Schema } from "effect"
 import { Config } from "../src/config.js"
 import { ConfigAgent } from "../src/config/agent.js"
+import { ConfigCompaction } from "../src/config/compaction.js"
 import { ConfigMCP } from "../src/config/mcp.js"
 import { ConfigProvider } from "../src/config/provider.js"
 import { Mcp } from "../src/mcp.js"
@@ -138,5 +139,52 @@ describe("Config.Entry", () => {
     expect(docs.oauth).not.toHaveProperty("client_id")
     expect(encoded.info.providers?.custom).not.toHaveProperty("headers")
     expect(encoded.info.providers?.custom).not.toHaveProperty("canonical")
+  })
+
+  test("accepts compaction soft limits and omits when undefined", () => {
+    const decode = Schema.decodeUnknownSync(ConfigCompaction.Info)
+    const input = {
+      default_soft_limit: 372_000,
+      soft_limits: {
+        "anthropic/claude-3-7-sonnet": 372_000,
+        "openai/gpt-4o": 128_000,
+      },
+    }
+    const decoded = decode(input)
+    expect(decoded.default_soft_limit).toBe(372_000)
+    expect(decoded.soft_limits?.["anthropic/claude-3-7-sonnet"]).toBe(372_000)
+    expect(Schema.encodeSync(ConfigCompaction.Info)(decoded)).toEqual(input)
+
+    const empty = decode({})
+    const encoded = Schema.encodeSync(ConfigCompaction.Info)(empty)
+    expect(encoded).not.toHaveProperty("default_soft_limit")
+    expect(encoded).not.toHaveProperty("soft_limits")
+
+    expect(() => decode({ default_soft_limit: -1 })).toThrow()
+    expect(() => decode({ soft_limits: { "model/a": -1 } })).toThrow()
+  })
+
+  test("validates Config.Patch with shell and softLimit fields", () => {
+    const decode = Schema.decodeUnknownSync(Config.Patch)
+
+    expect(decode({})).toEqual({})
+    expect(decode({ shell: "/bin/bash" })).toEqual({ shell: "/bin/bash" })
+    expect(decode({ shell: null })).toEqual({ shell: null })
+
+    const patchWithLimit = decode({
+      softLimit: { modelKey: "anthropic/claude-3-7-sonnet", limit: 372_000 },
+    })
+    expect(patchWithLimit).toEqual({
+      softLimit: { modelKey: "anthropic/claude-3-7-sonnet", limit: 372_000 },
+    })
+
+    const patchClearLimit = decode({
+      softLimit: { modelKey: "anthropic/claude-3-7-sonnet", limit: null },
+    })
+    expect(patchClearLimit).toEqual({
+      softLimit: { modelKey: "anthropic/claude-3-7-sonnet", limit: null },
+    })
+
+    expect(() => decode({ softLimit: { modelKey: "test", limit: -100 } })).toThrow()
   })
 })

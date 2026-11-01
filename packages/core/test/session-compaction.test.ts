@@ -30,6 +30,7 @@ import { Money } from "@opencode/schema/money"
 import { Skill } from "@opencode/schema/skill"
 import { Shell } from "@opencode/schema/shell"
 import { DateTime, Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
+import { TestClock } from "effect/testing"
 import { asc, eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
@@ -1112,4 +1113,358 @@ it.effect("compaction summarizes as usual when the background summary no longer 
     }
     expect(yield* compactAfterPrecompute(history.due, switched)).toContain("Third answer")
   }),
+)
+
+test("calculateCeiling respects soft limit and hard window clamping", () => {
+  expect(SessionCompaction.calculateCeiling({ context: 1_000_000, output: 32_000 }, undefined, 64_000)).toBe(48_000)
+  expect(SessionCompaction.calculateCeiling({ context: 1_000_000, output: 32_000 }, 8_000, 64_000)).toBe(56_000)
+  expect(SessionCompaction.calculateCeiling({ context: 1_000_000, output: 32_000 }, 64_000, 64_000)).toBe(48_000)
+  expect(SessionCompaction.calculateCeiling({ context: 1_000_000, output: 32_000 }, undefined, 0)).toBe(850_000)
+  // 1M model with 372k soft limit triggers compaction at ~316k (316,200).
+  expect(SessionCompaction.calculateCeiling({ context: 1_000_000, output: 32_000 }, undefined, 372_000)).toBe(316_200)
+
+  // 128k model with 372k default soft limit clamps to 128k and triggers compaction at ~108k (108,800).
+  expect(SessionCompaction.calculateCeiling({ context: 128_000, output: 32_000 }, undefined, 372_000)).toBe(108_800)
+
+  // 1M model without soft limit uses hard window (1M - 150k reserve = 850k).
+  expect(SessionCompaction.calculateCeiling({ context: 1_000_000, output: 32_000 }, undefined)).toBe(850_000)
+
+  // Window too small to give up RESERVE_MIN (16k) keeps RESERVE_SHARE (15%).
+  expect(SessionCompaction.calculateCeiling({ context: 30_000, output: 1_000 }, undefined, 30_000)).toBe(25_500)
+})
+
+test("resolveEffectiveLimit respects precedence: session metadata > model soft limit > default soft limit", () => {
+  const dummyContext = (softLimit?: number) =>
+    ({
+      session: { metadata: softLimit !== undefined ? { softLimit } : undefined },
+      model: { ref: { providerID: Provider.ID.make("anthropic"), id: Model.ID.make("claude-3-7-sonnet") } },
+    }) as unknown as SessionContext.Loaded
+
+  const settings: SessionCompaction.Settings = {
+    auto: true,
+    keep: 15_000,
+    precompute: false,
+    default_soft_limit: 250_000,
+    soft_limits: {
+      "anthropic/claude-3-7-sonnet": 372_000,
+    },
+  }
+
+  // 1. Session override wins
+  expect(SessionCompaction.resolveEffectiveLimit(dummyContext(500_000), settings)).toBe(500_000)
+
+  // 2. Model-specific setting takes precedence over default
+  expect(SessionCompaction.resolveEffectiveLimit(dummyContext(), settings)).toBe(372_000)
+
+  // 3. Default soft limit applies when model not in soft_limits
+  const otherModelContext = {
+    session: { metadata: undefined },
+    model: { ref: { providerID: Provider.ID.make("openai"), id: Model.ID.make("gpt-4o") } },
+  } as unknown as SessionContext.Loaded
+  expect(SessionCompaction.resolveEffectiveLimit(otherModelContext, settings)).toBe(250_000)
+
+  // 4. Undefined when nothing configured
+  expect(
+    SessionCompaction.resolveEffectiveLimit(otherModelContext, { auto: true, keep: 15_000, precompute: false }),
+  ).toBeUndefined()
+})
+
+it.effect("1M model with 372k soft limit triggers compaction at ~316k", () =>
+  Effect.gen(function* () {
+    const compaction = yield* SessionCompaction.Service
+    const session = yield* insertSession(Session.ID.make("ses_soft_limit_1m"))
+    const model1M = { context: 1_000_000, output: 32_000 }
+    const inputWith = (tokens: number, softLimit?: number) => ({
+      session: {
+        ...session,
+        metadata: softLimit !== undefined ? { softLimit } : undefined,
+      },
+      model: SessionRunnerModel.resolved(model, {
+        capabilities: { tools: true, input: ["text"], output: ["text"] },
+        cost: [],
+        limit: model1M,
+      }),
+      messages: [
+        Schema.decodeUnknownSync(SessionMessage.Assistant)({
+          id: SessionMessage.ID.make("msg_assistant_1m"),
+          type: "assistant",
+          agent: Agent.defaultID,
+          model: { id: "summary-model", providerID: "test" },
+          content: [{ type: "text", text: "Done" }],
+          tokens: { input: tokens, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          time: { created: 0, completed: 0 },
+        }),
+      ],
+      agent: {
+        id: Agent.defaultID,
+        info: { ...Agent.Info.default(Agent.defaultID), system: "You are a helpful assistant." },
+      },
+      initial: "Project instructions.",
+      tools: {
+        definitions: [],
+        execute: () => Effect.die("unused"),
+      },
+    })
+    const due = (context: SessionContext.Loaded) =>
+      compaction.compact({ reason: "auto", context }).pipe(Effect.map((outcome) => outcome.status !== "skipped"))
+
+    // Per-session soft limit of 372k: ceiling is 316,200
+    expect(yield* due(inputWith(316_199, 372_000))).toBe(false)
+    expect(yield* due(inputWith(316_200, 372_000))).toBe(true)
+
+    // Configured model soft limit
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        yield* compaction.transform((editor) =>
+          editor.configure({ soft_limits: { "test/summary-model": 372_000 } }),
+        )
+        expect(yield* due(inputWith(316_199))).toBe(false)
+        expect(yield* due(inputWith(316_200))).toBe(true)
+      }),
+    )
+  }),
+)
+
+it.effect("128k model with 372k default soft limit clamps to 128k and triggers compaction at ~108k", () =>
+  Effect.gen(function* () {
+    const compaction = yield* SessionCompaction.Service
+    const session = yield* insertSession(Session.ID.make("ses_soft_limit_128k"))
+    const model128k = { context: 128_000, output: 32_000 }
+    const inputWith = (tokens: number) => ({
+      session,
+      model: SessionRunnerModel.resolved(model, {
+        capabilities: { tools: true, input: ["text"], output: ["text"] },
+        cost: [],
+        limit: model128k,
+      }),
+      messages: [
+        Schema.decodeUnknownSync(SessionMessage.Assistant)({
+          id: SessionMessage.ID.make("msg_assistant_128k"),
+          type: "assistant",
+          agent: Agent.defaultID,
+          model: { id: "summary-model", providerID: "test" },
+          content: [{ type: "text", text: "Done" }],
+          tokens: { input: tokens, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          time: { created: 0, completed: 0 },
+        }),
+      ],
+      agent: {
+        id: Agent.defaultID,
+        info: { ...Agent.Info.default(Agent.defaultID), system: "You are a helpful assistant." },
+      },
+      initial: "Project instructions.",
+      tools: {
+        definitions: [],
+        execute: () => Effect.die("unused"),
+      },
+    })
+    const due = (context: SessionContext.Loaded) =>
+      compaction.compact({ reason: "auto", context }).pipe(Effect.map((outcome) => outcome.status !== "skipped"))
+
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        yield* compaction.transform((editor) => editor.configure({ default_soft_limit: 372_000 }))
+        // Clamped to 128k window -> ceiling is 108,800
+        expect(yield* due(inputWith(108_799))).toBe(false)
+        expect(yield* due(inputWith(108_800))).toBe(true)
+      }),
+    )
+  }),
+)
+
+it.effect("background compaction precomputes at 0.85 * ceiling with soft limit", () =>
+  Effect.gen(function* () {
+    requests = []
+    const compaction = yield* enablePrecompute
+    const session = yield* insertSession(Session.ID.make("ses_precompute_soft_limit"))
+    const model1M = SessionRunnerModel.resolved(model, {
+      capabilities: { tools: true, input: ["text"], output: ["text"] },
+      cost,
+      limit: { context: 1_000_000, output: 32_000 },
+    })
+
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        yield* compaction.transform((editor) =>
+          editor.configure({
+            soft_limits: { "test/summary-model": 372_000 },
+          }),
+        )
+
+        // With 372k soft limit on 1M model, ceiling is 316,200.
+        // 0.85 * ceiling = 268,770.
+        const contextWithTokens = (tokens: number) => ({
+          ...loaded(session, [
+            textUser("First question"),
+            Schema.decodeUnknownSync(SessionMessage.Assistant)({
+              id: SessionMessage.ID.create(),
+              type: "assistant",
+              agent: Agent.defaultID,
+              model: { id: "summary-model", providerID: "test" },
+              content: [{ type: "text", text: "Answer" }],
+              tokens: { input: tokens, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+              time: { created: 0, completed: 1 },
+            }),
+          ]),
+          model: model1M,
+        })
+
+        // Just below 0.85 * ceiling (268,769 tokens): precompute does NOT trigger.
+        yield* compaction.precompute(Effect.succeed(contextWithTokens(268_769)))
+        expect(requests).toHaveLength(0)
+
+        // At 0.85 * ceiling (268,770 tokens): precompute triggers!
+        yield* compaction.precompute(Effect.succeed(contextWithTokens(268_770)))
+        yield* TestClock.adjust("100 millis")
+        expect(requests).toHaveLength(1)
+      }),
+    )
+  }),
+)
+
+it.effect(
+  "model switch transition clamps soft limit to new model's hard window and restores on switch back",
+  () =>
+    Effect.gen(function* () {
+      const compaction = yield* SessionCompaction.Service
+      const session = yield* insertSession(Session.ID.make("ses_model_switch_transition"))
+      const claude1M = SessionRunnerModel.resolved(
+        LanguageModel.make({ id: "claude-3-7-sonnet", provider: "anthropic", route: OpenAIChat.route }),
+        {
+          capabilities: { tools: true, input: ["text"], output: ["text"] },
+          cost: [],
+          limit: { context: 1_000_000, output: 32_000 },
+        },
+      )
+      const gpt128k = SessionRunnerModel.resolved(
+        LanguageModel.make({ id: "gpt-4o", provider: "openai", route: OpenAIChat.route }),
+        {
+          capabilities: { tools: true, input: ["text"], output: ["text"] },
+          cost: [],
+          limit: { context: 128_000, output: 4_096 },
+        },
+      )
+
+      const sessionWithSoftLimit = {
+        ...session,
+        metadata: { softLimit: 372_000 },
+      }
+
+      const contextFor = (runnerModel: typeof claude1M, tokens: number) => ({
+        session: sessionWithSoftLimit,
+        model: runnerModel,
+        messages: [
+          Schema.decodeUnknownSync(SessionMessage.Assistant)({
+            id: SessionMessage.ID.make("msg_switch_test"),
+            type: "assistant",
+            agent: Agent.defaultID,
+            model: { id: runnerModel.ref.id, providerID: runnerModel.ref.providerID },
+            content: [{ type: "text", text: "Response" }],
+            tokens: { input: tokens, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+            time: { created: 0, completed: 0 },
+          }),
+        ],
+        agent: {
+          id: Agent.defaultID,
+          info: { ...Agent.Info.default(Agent.defaultID), system: "You are a helpful assistant." },
+        },
+        initial: "Project instructions.",
+        tools: {
+          definitions: [],
+          execute: () => Effect.die("unused"),
+        },
+      })
+
+      const due = (ctx: SessionContext.Loaded) =>
+        compaction.compact({ reason: "auto", context: ctx }).pipe(Effect.map((outcome) => outcome.status !== "skipped"))
+
+      const defaultSettings: SessionCompaction.Settings = { auto: true, keep: 15_000, precompute: false }
+
+      // 1. On Claude 3.7 (1M): soft limit 372k is active, ceiling is 316,200.
+      expect(SessionCompaction.resolveEffectiveLimit(contextFor(claude1M, 200_000), defaultSettings)).toBe(372_000)
+      expect(SessionCompaction.calculateCeiling(claude1M.limit, undefined, 372_000)).toBe(316_200)
+      expect(yield* due(contextFor(claude1M, 200_000))).toBe(false)
+      expect(yield* due(contextFor(claude1M, 320_000))).toBe(true)
+
+      // 2. Switch to GPT-4o (128k): soft limit 372k clamps to 128k immediately without error or overflow.
+      expect(SessionCompaction.resolveEffectiveLimit(contextFor(gpt128k, 200_000), defaultSettings)).toBe(372_000)
+      expect(SessionCompaction.calculateCeiling(gpt128k.limit, undefined, 372_000)).toBe(108_800)
+      // 200k tokens (which did not trigger on 1M Claude) now triggers compaction on 128k GPT-4o!
+      expect(yield* due(contextFor(gpt128k, 200_000))).toBe(true)
+      expect(yield* due(contextFor(gpt128k, 110_000))).toBe(true)
+      expect(yield* due(contextFor(gpt128k, 100_000))).toBe(false)
+
+      // 3. Switch back to Claude 3.7 (1M): soft limit 372k restores.
+      expect(SessionCompaction.calculateCeiling(claude1M.limit, undefined, 372_000)).toBe(316_200)
+      expect(yield* due(contextFor(claude1M, 200_000))).toBe(false)
+      expect(yield* due(contextFor(claude1M, 320_000))).toBe(true)
+    }),
+)
+
+it.effect(
+  "burst token ingestion: tool output pushing tokens past soft limit completes turn within hard window, then triggers auto compaction",
+  () =>
+    Effect.gen(function* () {
+      requests = []
+      const compaction = yield* SessionCompaction.Service
+      const session = yield* insertSession(Session.ID.make("ses_burst_ingestion"))
+      const sessionWithSoftLimit = {
+        ...session,
+        metadata: { softLimit: 372_000 },
+      }
+      const model1M = SessionRunnerModel.resolved(
+        LanguageModel.make({ id: "claude-3-7-sonnet", provider: "anthropic", route: OpenAIChat.route }),
+        {
+          capabilities: { tools: true, input: ["text"], output: ["text"] },
+          cost,
+          limit: { context: 1_000_000, output: 32_000 },
+        },
+      )
+
+      // With 372k soft limit, ceiling is 316,200.
+      // Initial context is at 320k tokens.
+      // Tool execution bursts context up to 390k tokens (exceeds 372k soft limit, but well within 1M hard window).
+      const assistantMessage = Schema.decodeUnknownSync(SessionMessage.Assistant)({
+        id: SessionMessage.ID.make("msg_burst_assistant"),
+        type: "assistant",
+        agent: Agent.defaultID,
+        model: { id: "claude-3-7-sonnet", providerID: "anthropic" },
+        content: [
+          {
+            type: "tool",
+            id: "call_burst_tool",
+            name: "search",
+            state: {
+              status: "completed",
+              input: { query: "large results" },
+              content: [{ type: "text", text: "burst tool output data" }],
+            },
+            time: { created: 0 },
+          },
+        ],
+        // The turn successfully ingested tool output and finished with 390k tokens!
+        tokens: { input: 390_000, output: 500, reasoning: 0, cache: { read: 0, write: 0 } },
+        time: { created: 0, completed: 1 },
+      })
+
+      const context = {
+        ...loaded(sessionWithSoftLimit, [textUser("User query needing big tool output"), assistantMessage]),
+        model: model1M,
+      }
+
+      // Hard window is 1M, so 390k fits safely inside physical window (390k < 1,000,000)
+      const hardWindow = model1M.limit.input || model1M.limit.context
+      expect(hardWindow).toBe(1_000_000)
+      expect(390_000).toBeLessThan(hardWindow)
+
+      // Automatic compaction check before subsequent turn triggers because 390k >= 316,200 ceiling.
+      const ceiling = SessionCompaction.calculateCeiling(model1M.limit, undefined, 372_000)
+      expect(ceiling).toBe(316_200)
+      expect(390_000).toBeGreaterThanOrEqual(ceiling)
+
+      // Compact runs and completes successfully
+      const outcome = yield* compaction.compact({ reason: "auto", context })
+      expect(outcome.status).toBe("completed")
+      expect(requests).toHaveLength(1)
+    }),
 )

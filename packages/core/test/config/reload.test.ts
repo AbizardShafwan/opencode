@@ -96,6 +96,94 @@ describe("config plugin reloads", () => {
     )
   }
 
+  it.live("reloads compaction.soft_limits when config file on disk is modified", () =>
+    Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const project = path.join(tmp.path, "project")
+          const file = path.join(project, "opencode.json")
+          yield* Effect.promise(async () => {
+            await fs.mkdir(path.join(project, "home"), { recursive: true })
+            await fs.mkdir(path.join(project, "global"))
+            await Bun.write(file, JSON.stringify({ compaction: { auto: false } }))
+          })
+          return yield* Effect.gen(function* () {
+            const config = yield* Config.Service
+
+            // Finish startup by observing an initial config reload once the watcher attaches
+            yield* Effect.promise(() => Bun.write(file, JSON.stringify({ compaction: { auto: true } })))
+            yield* waitUntil(
+              config.entries().pipe(Effect.map((entries) => Config.latest(entries, "compaction")?.auto === true)),
+            )
+
+            // Modify compaction.soft_limits in opencode.json on disk
+            yield* Effect.promise(() =>
+              Bun.write(
+                file,
+                JSON.stringify({
+                  compaction: {
+                    auto: true,
+                    default_soft_limit: 250_000,
+                    soft_limits: {
+                      "anthropic/claude-3-7-sonnet": 372_000,
+                    },
+                  },
+                }),
+              ),
+            )
+
+            // Verify file watcher detects the modification and reloads settings without restarting the daemon
+            yield* waitUntil(
+              config
+                .entries()
+                .pipe(
+                  Effect.map(
+                    (entries) =>
+                      Config.latest(entries, "compaction")?.soft_limits?.["anthropic/claude-3-7-sonnet"] === 372_000,
+                  ),
+                ),
+            )
+
+            const latestCompaction = Config.latest(yield* config.entries(), "compaction")
+            expect(latestCompaction?.default_soft_limit).toBe(250_000)
+            expect(latestCompaction?.soft_limits?.["anthropic/claude-3-7-sonnet"]).toBe(372_000)
+
+            // Update again on disk
+            yield* Effect.promise(() =>
+              Bun.write(
+                file,
+                JSON.stringify({
+                  compaction: {
+                    auto: true,
+                    default_soft_limit: 500_000,
+                    soft_limits: {
+                      "anthropic/claude-3-7-sonnet": 400_000,
+                    },
+                  },
+                }),
+              ),
+            )
+
+            yield* waitUntil(
+              config
+                .entries()
+                .pipe(
+                  Effect.map(
+                    (entries) =>
+                      Config.latest(entries, "compaction")?.soft_limits?.["anthropic/claude-3-7-sonnet"] === 400_000,
+                  ),
+                ),
+            )
+
+            const updatedCompaction = Config.latest(yield* config.entries(), "compaction")
+            expect(updatedCompaction?.default_soft_limit).toBe(500_000)
+            expect(updatedCompaction?.soft_limits?.["anthropic/claude-3-7-sonnet"]).toBe(400_000)
+          }).pipe(Effect.provide(liveConfig(project)))
+        }),
+      ),
+    ),
+  )
+
   it.live("retains readiness signalled synchronously during initial config startup", () =>
     Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
       Effect.flatMap((tmp) => {

@@ -11,4 +11,6 @@ export class Info extends Schema.Class<Info>("Config.Compaction")({
   auto: Schema.Boolean.pipe(optional),
   keep: Keep.pipe(optional),
   buffer: NonNegativeInt.pipe(optional),
+  default_soft_limit: NonNegativeInt.pipe(optional),
+  soft_limits: Schema.Record(Schema.String, NonNegativeInt).pipe(optional),
 }) {}

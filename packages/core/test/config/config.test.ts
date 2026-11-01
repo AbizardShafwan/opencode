@@ -92,6 +92,37 @@ const provider = {
 }
 
 describe("Config", () => {
+  it.live("updates compaction soft_limits via config.update", () =>
+    Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
+      Effect.flatMap((tmp) => {
+        const global = path.join(tmp.path, "global")
+        const project = path.join(tmp.path, "project")
+        const configPath = path.join(global, `${Global.name}.jsonc`)
+        return Effect.gen(function* () {
+          const config = yield* Config.Service
+          yield* config.update!({
+            softLimit: {
+              modelKey: "anthropic/claude-3-7-sonnet",
+              limit: 372_000,
+            },
+          })
+          const content1 = yield* Effect.promise(() => fs.readFile(configPath, "utf-8"))
+          expect(content1).toContain('"anthropic/claude-3-7-sonnet": 372000')
+
+          yield* config.update!({
+            softLimit: {
+              modelKey: "anthropic/claude-3-7-sonnet",
+              limit: null,
+            },
+          })
+          const content2 = yield* Effect.promise(() => fs.readFile(configPath, "utf-8"))
+          expect(content2).not.toContain("372000")
+          expect(content2).not.toContain("anthropic/claude-3-7-sonnet")
+        }).pipe(Effect.provide(testLayer(project, global)))
+      }),
+    ),
+  )
+
   it.live("excludes home-level claude and agents directories when global is disabled", () =>
     Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
       Effect.flatMap((tmp) => {

@@ -67,7 +67,7 @@ export interface DialogSelectProps<T> {
   titlePlaceholder?: string
 }
 
-type DialogSelectActionBase<T> = {
+export type DialogSelectActionBase<T> = {
   command: string
   /** A function title follows the selected option, e.g. "favorite" / "unfavorite". */
   title: string | ((option: DialogSelectOption<T> | undefined) => string)
@@ -83,7 +83,7 @@ type DialogSelectActionBase<T> = {
   disabled?: boolean | ((option: DialogSelectOption<T> | undefined) => boolean)
 }
 
-type DialogSelectAction<T> =
+export type DialogSelectAction<T> =
   | (DialogSelectActionBase<T> & {
       selection?: "required"
       onTrigger: (option: DialogSelectOption<T>) => void

@@ -2309,7 +2309,13 @@ export type ConfigEntry =
                 }
           }
         }
-        compaction?: { auto?: boolean; keep?: { tokens?: number }; buffer?: number }
+        compaction?: {
+          auto?: boolean
+          keep?: { tokens?: number }
+          buffer?: number
+          default_soft_limit?: number
+          soft_limits?: { [x: string]: number }
+        }
         skills?: Array<string>
         commands?: {
           [x: string]: {
@@ -6157,7 +6163,16 @@ export type ConfigGetOutput = Array<ConfigEntry>
 
 export type ConfigShellsOutput = Array<ConfigShellOption>
 
-export type ConfigUpdateInput = { readonly shell: { readonly shell: string | null }["shell"] }
+export type ConfigUpdateInput = {
+  readonly shell?: {
+    readonly shell?: string | null
+    readonly softLimit?: { readonly modelKey: string; readonly limit: number | null }
+  }["shell"]
+  readonly softLimit?: {
+    readonly shell?: string | null
+    readonly softLimit?: { readonly modelKey: string; readonly limit: number | null }
+  }["softLimit"]
+}
 
 export type ConfigUpdateOutput = void
 

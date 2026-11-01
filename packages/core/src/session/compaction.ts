@@ -18,6 +18,7 @@ import type { StreamOptions } from "@opencode/ai/route"
 import type { SessionCompactionResult } from "@opencode/plugin/effect/session"
 import type { SessionError } from "@opencode/schema/session-error"
 import { makeLocationNode } from "@opencode/util/effect/app-node"
+import { calculateCompactionCeiling, resolveSoftLimit } from "@opencode/util/token-limit"
 import { Context, Effect, Exit, Fiber, Layer, Result, Scope, Stream } from "effect"
 import { Agent } from "../agent.js"
 import { Bus } from "../bus.js"
@@ -47,6 +48,8 @@ export type Settings = {
   keep: number
   /** Summarize in the background as the context nears the threshold, so automatic compaction can swap it in. */
   precompute: boolean
+  default_soft_limit?: number
+  soft_limits?: Record<string, number>
 }
 
 export type Editor = {
@@ -122,12 +125,6 @@ const NOTHING_TO_COMPACT: Failure = { error: { type: "compaction.unavailable", m
 const SHRINK_STEPS = [0.85, 0.7, 0.5, 0.35]
 // The least of the window kept free for the last reply before compaction and for the summary itself.
 const RESERVE_MIN = 16_000
-/**
- * Share of the window kept free before automatic compaction. Above `RESERVE_MIN`, the margin between it and
- * `summaryRoom` absorbs a large step past the trigger, so the whole conversation still goes out unchanged and reuses
- * the cache. Single steps grew by up to ~22k tokens at p99 in real sessions.
- */
-const RESERVE_SHARE = 0.15
 /** A common window size, assumed for the compaction request when the model's window is unknown. */
 const UNKNOWN_WINDOW = 200_000
 /** A summary gets at least this much output, or the room left if less, even when the estimate margin leaves less. */
@@ -264,7 +261,12 @@ export const layer = Layer.effect(
       initial: () => ({ auto: true, keep: 15_000, precompute: false }),
       editor: (settings) => ({
         configure: (update) => {
-          Object.assign(settings, update)
+          Object.assign(settings, {
+            ...update,
+            ...(update.soft_limits
+              ? { soft_limits: { ...settings.soft_limits, ...update.soft_limits } }
+              : {}),
+          })
         },
       }),
     })
@@ -272,7 +274,7 @@ export const layer = Layer.effect(
     /** The model that writes the summary, and the request size it aims for. */
     const selectModel = Effect.fnUntraced(function* (
       context: SessionContext.Loaded,
-      buffer: number | undefined,
+      settings: Settings,
       native: boolean,
     ) {
       const agent = native ? undefined : yield* agents.get(Agent.ID.make("compaction"))
@@ -282,12 +284,14 @@ export const layer = Layer.effect(
             .resolve({ ...context.session, model: agent.model }, catalog.available)
             .pipe(Effect.orElseSucceed(() => undefined)))) ??
         context.model
-      const ceiling = calculateCeiling(model.limit, buffer)
+      const modelContext = model === context.model ? context : { ...context, model }
+      const softLimit = resolveEffectiveLimit(modelContext, settings)
+      const ceiling = calculateCeiling(model.limit, settings.buffer, softLimit)
       // An unknown window never triggers auto compaction, but the compaction request still needs a size to aim for.
       const cap = Number.isFinite(ceiling)
         ? ceiling
-        : calculateCeiling({ ...model.limit, context: UNKNOWN_WINDOW }, buffer)
-      return { context: model === context.model ? context : { ...context, model }, cap }
+        : calculateCeiling({ ...model.limit, context: UNKNOWN_WINDOW }, settings.buffer, softLimit)
+      return { context: modelContext, cap }
     })
 
     const compact = Effect.fn("SessionCompaction.compact")(function* (trigger: Trigger): Effect.fn.Return<Outcome> {
@@ -296,12 +300,15 @@ export const layer = Layer.effect(
 
       // Only the user compacts when automatic compaction is off, overflow included.
       if (trigger.reason !== "manual" && !settings.auto) return { status: "skipped" }
-      if (trigger.reason === "auto" && !due(context, calculateCeiling(context.model.limit, settings.buffer)))
+      if (
+        trigger.reason === "auto" &&
+        !due(context, calculateCeiling(context.model.limit, settings.buffer, resolveEffectiveLimit(context, settings)))
+      )
         return { status: "skipped" }
       const held = precomputed.get(context.session.id)
       precomputed.delete(context.session.id)
       const native = context.model.compaction?.type === "native"
-      const model = yield* selectModel(context, settings.buffer, native)
+      const model = yield* selectModel(context, settings, native)
       // The provider just rejected this context, so the estimate ran low; the first attempt already aims below it.
       const budget =
         trigger.reason === "overflow"
@@ -341,7 +348,11 @@ export const layer = Layer.effect(
       if (!settings.precompute || !settings.auto) return
       const context = yield* load
       if (context.model.compaction?.type === "native") return
-      const ceiling = calculateCeiling(context.model.limit, settings.buffer)
+      const ceiling = calculateCeiling(
+        context.model.limit,
+        settings.buffer,
+        resolveEffectiveLimit(context, settings),
+      )
       if (!Number.isFinite(ceiling) || due(context, ceiling)) return
       if (estimateContext(context) < ceiling * PRECOMPUTE_RATIO) return
 
@@ -366,7 +377,7 @@ export const layer = Layer.effect(
       // After a model switch nothing is cached for the new model yet; wait until its first response has written it.
       if (anchor.model.id !== context.model.ref.id || anchor.model.variant !== context.model.ref.variant) return
 
-      const model = yield* selectModel(context, settings.buffer, false)
+      const model = yield* selectModel(context, settings, false)
       const usage: SessionUsage.Recorded[] = []
       const fiber = yield* summarize({ reason: "auto", context: model.context }, model.cap, settings.keep, {
         messages: context.messages.slice(0, anchorIndex),
@@ -1109,18 +1120,29 @@ export const estimatePrompt = (context: SessionContext.Loaded) => {
 }
 
 /**
- * The largest request the model takes while leaving room for its reply: `RESERVE_SHARE` of the window, or
- * `RESERVE_MIN` when that is more. A summary request that must be shrunk is aimed at the same size. A window too small
- * to give up `RESERVE_MIN` keeps `RESERVE_SHARE`.
+ * Resolves the effective context limit from session override, model-specific soft limit, or default soft limit.
  */
-const calculateCeiling = (limit: SessionContext.Loaded["model"]["limit"], buffer: number | undefined) => {
+export const resolveEffectiveLimit = (
+  context: SessionContext.Loaded,
+  settings: Settings,
+): number | undefined => {
+  const modelKey = `${context.model.ref.providerID}/${context.model.ref.id}`
+  return resolveSoftLimit(context.session.metadata?.softLimit, settings.soft_limits?.[modelKey], settings.default_soft_limit)
+}
+
+/**
+ * The largest request the model takes while leaving room for its reply: 15% of the window, or
+ * `RESERVE_MIN` when that is more. Clamped by `softLimit` if specified. A summary request that must be shrunk is aimed
+ * at the same size. A window too small to give up `RESERVE_MIN` keeps `RESERVE_SHARE`.
+ */
+export const calculateCeiling = (
+  limit: SessionContext.Loaded["model"]["limit"],
+  buffer: number | undefined,
+  softLimit?: number,
+) => {
   // Unknown limits are reported as 0. An unknown input limit falls back to the context window; with no window at
   // all, only a provider rejection can limit the request.
-  const window = limit.input || limit.context
-  if (window <= 0) return Number.POSITIVE_INFINITY
-  // A buffer that leaves no room, such as one set for a larger model, is ignored.
-  if (buffer !== undefined && buffer < window) return window - buffer
-  return window - Math.max(Math.floor(window * RESERVE_SHARE), window >= 2 * RESERVE_MIN ? RESERVE_MIN : 0)
+  return calculateCompactionCeiling(limit.input || limit.context, buffer, softLimit)
 }
 
 /** The largest summary request that leaves `RESERVE_MIN` of the window for the summary. Zero for an unknown window. */

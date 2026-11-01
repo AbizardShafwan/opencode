@@ -23,7 +23,11 @@ export function syncCatalog(session: Accessor<MountedSession>) {
       void (async () => {
         if (!current.ref) await current.data.location.syncInfo()
         const resolved = current.ref ?? current.data.location.default()
-        await Promise.all([current.data.location.provider.sync(resolved), current.data.location.model.sync(resolved)])
+        await Promise.all([
+          current.data.location.provider.sync(resolved),
+          current.data.location.model.sync(resolved),
+          current.data.location.config.sync(resolved),
+        ])
       })().catch(() => undefined),
   )
 }

@@ -1,6 +1,24 @@
 import { describe, expect, test } from "bun:test"
 import type { SessionMessageInfo } from "../src/promise"
-import { lastAssistantWithUsage } from "../src/solid/usage"
+import { compactionSettings, lastAssistantWithUsage } from "../src/solid/usage"
+
+test("compaction fields merge independently across config documents, including explicit zero", () => {
+  const entries = [
+    { type: "document" as const, info: { compaction: { soft_limits: { "provider/model": 372_000 }, buffer: 8_000 } } },
+    { type: "document" as const, info: { compaction: { default_soft_limit: 250_000 } } },
+  ]
+  expect(compactionSettings(entries, "provider/model")).toEqual({
+    modelLimit: 372_000,
+    defaultLimit: 250_000,
+    buffer: 8_000,
+  })
+  expect(
+    compactionSettings(
+      [...entries, { type: "document", info: { compaction: { soft_limits: { "provider/model": 0 }, buffer: 0 } } }],
+      "provider/model",
+    ),
+  ).toEqual({ modelLimit: 0, defaultLimit: 250_000, buffer: 0 })
+})
 
 const assistant = (id: string, input: number): SessionMessageInfo => ({
   id,

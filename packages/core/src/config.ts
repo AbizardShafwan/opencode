@@ -3,7 +3,7 @@ export * as Config from "./config.js"
 import { makeLocationNode } from "@opencode/util/effect/app-node"
 import path from "path"
 import { isDeepStrictEqual } from "node:util"
-import { applyEdits, modify, type ParseError, parse } from "jsonc-parser"
+import { applyEdits, findNodeAtLocation, modify, parseTree, type ParseError, parse } from "jsonc-parser"
 import { Context, Effect, FiberMap, Layer, Option, PubSub, Ref, Schema, Semaphore, Stream } from "effect"
 import { Directory, Document, Info, type Patch, type Entry, Event } from "@opencode/schema/config"
 import { Credential } from "./credential.js"
@@ -391,13 +391,40 @@ export const layer = (options?: Options) =>
             (yield* Effect.filter(candidates, fs.isFile)).at(-1) ?? path.join(directory, `${Global.name}.jsonc`)
           const text = (yield* fs.readFileStringSafe(filepath)) ?? "{}\n"
           const updated = yield* Effect.try({
-            try: () =>
-              applyEdits(
-                text,
-                modify(text, ["shell"], patch.shell ?? undefined, {
-                  formattingOptions: { tabSize: 2, insertSpaces: true },
-                }),
-              ),
+            try: () => {
+              let result = text
+              if (patch.shell !== undefined) {
+                result = applyEdits(
+                  result,
+                  modify(result, ["shell"], patch.shell ?? undefined, {
+                    formattingOptions: { tabSize: 2, insertSpaces: true },
+                  }),
+                )
+              }
+              if (patch.softLimit !== undefined) {
+                const limitPath = ["compaction", "soft_limits", patch.softLimit.modelKey]
+                const value = patch.softLimit.limit ?? undefined
+                if (value !== undefined) {
+                  result = applyEdits(
+                    result,
+                    modify(result, limitPath, value, {
+                      formattingOptions: { tabSize: 2, insertSpaces: true },
+                    }),
+                  )
+                } else {
+                  const root = parseTree(result)
+                  if (root && findNodeAtLocation(root, limitPath)) {
+                    result = applyEdits(
+                      result,
+                      modify(result, limitPath, undefined, {
+                        formattingOptions: { tabSize: 2, insertSpaces: true },
+                      }),
+                    )
+                  }
+                }
+              }
+              return result
+            },
             catch: (cause) => new FSUtil.FileSystemError({ method: "config.update", cause }),
           })
           yield* fs.writeWithDirs(filepath, updated.endsWith("\n") ? updated : `${updated}\n`)

@@ -504,6 +504,26 @@ describe("ConfigNormalize", () => {
     ])
   })
 
+  test("normalizes compaction default_soft_limit and soft_limits", () => {
+    const result = normalized({
+      compaction: {
+        default_soft_limit: 250_000,
+        soft_limits: {
+          "anthropic/claude-3-7-sonnet": 372_000,
+          "openai/gpt-4o": 100_000,
+        },
+      },
+    })
+    expect(result.diagnostics).toEqual([])
+    expect(result.encoded.compaction).toEqual({
+      default_soft_limit: 250_000,
+      soft_limits: {
+        "anthropic/claude-3-7-sonnet": 372_000,
+        "openai/gpt-4o": 100_000,
+      },
+    })
+  })
+
   test("distinguishes empty, mixed, and wholly malformed enabled provider lists", () => {
     expect(normalized({ enabled_providers: [] }).encoded.policies).toEqual([
       { action: "provider.use", resource: "*", effect: "deny" },

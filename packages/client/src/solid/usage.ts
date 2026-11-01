@@ -1,4 +1,18 @@
-import type { SessionMessageAssistant, SessionMessageInfo } from "../promise"
+import type { ConfigEntry, SessionMessageAssistant, SessionMessageInfo } from "../promise"
+
+/** Resolve each compaction field independently in document order, matching Core's config observer. */
+export function compactionSettings(entries: ReadonlyArray<ConfigEntry> | undefined, modelKey?: string) {
+  const settings: { modelLimit?: number; defaultLimit?: number; buffer?: number } = {}
+  for (const entry of entries ?? []) {
+    if (entry.type !== "document" || !entry.info.compaction) continue
+    const compaction = entry.info.compaction
+    if (modelKey && compaction.soft_limits?.[modelKey] !== undefined)
+      settings.modelLimit = compaction.soft_limits[modelKey]
+    if (compaction.default_soft_limit !== undefined) settings.defaultLimit = compaction.default_soft_limit
+    if (compaction.buffer !== undefined) settings.buffer = compaction.buffer
+  }
+  return settings
+}
 
 /**
  * The assistant step whose tokens fill the context window now: the latest one after the last completed

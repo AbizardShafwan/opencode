@@ -139,6 +139,82 @@ describe("ConfigCompactionPlugin.Plugin", () => {
       yield* Effect.die(new Error("Timed out waiting for compaction config reload"))
     }),
   )
+
+  it.live("dynamically reloads compaction.soft_limits without service restart", () =>
+    Effect.gen(function* () {
+      const compaction = yield* SessionCompaction.Service
+      const due = (inp: typeof nearInput) =>
+        compaction
+          .compact({ reason: "auto", context: inp.context })
+          .pipe(Effect.map((outcome) => outcome.status !== "skipped"))
+      const config = yield* Config.Test
+      const bus = yield* Bus.Service
+
+      const lowerTokens = input(60_000)
+      yield* config.setEntries([
+        new Document({
+          type: "document",
+          info: new Info({
+            compaction: new ConfigCompaction.Info({
+              auto: true,
+            }),
+          }),
+        }),
+      ])
+      yield* ConfigCompactionPlugin.Plugin.effect(host({ event: { subscribe: () => bus.subscribe(Event.Updated) } }))
+
+      // Initially no soft limit: ceiling for 100k model is 84k, so 60k tokens is not due.
+      expect(yield* due(lowerTokens)).toBe(false)
+
+      // Set soft limit for "test-provider/test-model" to 60k.
+      // Clamped window = 60k. Reserve = 16k. Ceiling = 44k.
+      // 60k >= 44k, so auto compaction is now due.
+      yield* config.setEntries([
+        new Document({
+          type: "document",
+          info: new Info({
+            compaction: new ConfigCompaction.Info({
+              auto: true,
+              soft_limits: {
+                "test-provider/test-model": 60_000,
+              },
+            }),
+          }),
+        }),
+      ])
+      yield* bus.publish(Event.Updated, {})
+      for (let attempt = 0; attempt < 200; attempt++) {
+        if (yield* due(lowerTokens)) break
+        yield* Effect.sleep("10 millis")
+        if (attempt === 199) yield* Effect.die(new Error("Timed out waiting for soft limit reload"))
+      }
+      expect(yield* due(lowerTokens)).toBe(true)
+
+      // Update soft limit to 80k.
+      // Clamped window = 80k. Reserve = 16k. Ceiling = 64k.
+      // 60k < 64k, so auto compaction is no longer due.
+      yield* config.setEntries([
+        new Document({
+          type: "document",
+          info: new Info({
+            compaction: new ConfigCompaction.Info({
+              auto: true,
+              soft_limits: {
+                "test-provider/test-model": 80_000,
+              },
+            }),
+          }),
+        }),
+      ])
+      yield* bus.publish(Event.Updated, {})
+      for (let attempt = 0; attempt < 200; attempt++) {
+        if (!(yield* due(lowerTokens))) break
+        yield* Effect.sleep("10 millis")
+        if (attempt === 199) yield* Effect.die(new Error("Timed out waiting for soft limit update reload"))
+      }
+      expect(yield* due(lowerTokens)).toBe(false)
+    }),
+  )
 })
 
 const session = Session.Info.make({

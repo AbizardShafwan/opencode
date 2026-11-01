@@ -3,7 +3,8 @@ import { ProgressCircle } from "@opencode/ui/progress-circle"
 import { Button } from "@opencode/ui/button"
 import { Tooltip } from "@opencode/ui/tooltip"
 import { useI18n } from "@opencode/ui/context/i18n"
-import { lastAssistantWithUsage } from "@opencode/client/solid"
+import { compactionSettings, lastAssistantWithUsage } from "@opencode/client/solid"
+import { effectiveContextWindow, resolveSoftLimit } from "@opencode/util/token-limit"
 import { useExtension, type MountedSession } from "../sdk"
 import { catalogModel, syncCatalog } from "./catalog"
 
@@ -58,10 +59,23 @@ export function SessionContextUsage(props: {
       message.tokens.cache.read +
       message.tokens.cache.write
 
+    const settings = compactionSettings(
+      props.session.server.data.location.config.list(props.session.location),
+      `${message.model.providerID}/${message.model.id}`,
+    )
+
+    const softLimit = resolveSoftLimit(info()?.metadata?.softLimit, settings.modelLimit, settings.defaultLimit)
+
+    const hardLimit = model ? model.limit.input || model.limit.context : undefined
+
+    const effectiveLimit = effectiveContextWindow(hardLimit ?? 0, softLimit)
+
     return {
       total,
-      usage: model?.limit.context ? Math.round((total / model.limit.context) * 100) : null,
-      limit: model?.limit.context,
+      usage: effectiveLimit ? Math.round((total / effectiveLimit) * 100) : null,
+      limit: effectiveLimit,
+      hardLimit,
+      softLimit,
     }
   })
 
