@@ -28,16 +28,17 @@ let known: Set<string> | undefined
 
 function getFiles() {
   if (files) return files
-  files = import.meta.glob<{ default: DesktopTheme }>("./themes/*.json")
+  files = import.meta.glob<{ default: DesktopTheme }>(["./themes/*.json", "!./themes/oc-2.json"])
 
   return files
 }
 
 function themeIDs() {
   if (ids) return ids
-  ids = Object.keys(getFiles())
-    .map((path) => path.slice("./themes/".length, -".json".length))
-    .sort()
+  ids = [
+    "oc-2",
+    ...Object.keys(getFiles()).map((path) => path.slice("./themes/".length, -".json".length)),
+  ].sort()
 
   return ids
 }

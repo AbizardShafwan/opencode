@@ -137,7 +137,11 @@ const require = __cjs_mod__.createRequire(import.meta.url);
       build: {
         minify: command === "build",
         sourcemap: true,
+        chunkSizeWarningLimit: 2000,
         rolldownOptions: {
+          checks: {
+            pluginTimings: false,
+          },
           input: {
             main: "src/renderer/index.html",
           },

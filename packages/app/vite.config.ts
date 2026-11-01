@@ -2,8 +2,8 @@ import { sentryVitePlugin } from "@sentry/vite-plugin"
 import { fileURLToPath } from "node:url"
 import { defineConfig } from "vite"
 import desktopPlugin, { channel } from "./vite.js"
-import { icons } from "./vite.icons"
-import { serviceWorker } from "./vite.pwa"
+import { icons } from "./vite.icons.ts"
+import { serviceWorker } from "./vite.pwa.ts"
 
 const sentry =
   process.env.SENTRY_AUTH_TOKEN && process.env.SENTRY_ORG && process.env.SENTRY_PROJECT
@@ -35,18 +35,22 @@ export default defineConfig({
     port: 3000,
   },
   build: {
-    ...(process.env.VITE_OPENCODE_TEST_FIXTURES === "1"
-      ? {
-          rolldownOptions: {
+    chunkSizeWarningLimit: 2000,
+    rolldownOptions: {
+      checks: {
+        pluginTimings: false,
+      },
+      ...(process.env.VITE_OPENCODE_TEST_FIXTURES === "1"
+        ? {
             input: [
               "index.html",
               "e2e/utils/settings-wsl.html",
               "e2e/utils/app-direction.html",
               "e2e/utils/windows-menu.html",
             ],
-          },
-        }
-      : {}),
+          }
+        : {}),
+    },
     assetsDir: "_assets",
     target: "esnext",
     sourcemap: true,
