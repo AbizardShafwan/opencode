@@ -137,6 +137,8 @@ function resourceServer(
         missing: [] as string[],
         templateLists: 0,
         toolLists: 0,
+        promptLists: 0,
+        failPromptLists: false,
         toolCalls: [] as Array<{
           name: string
           arguments: Record<string, unknown> | undefined
@@ -155,7 +157,7 @@ function resourceServer(
           {
             capabilities: {
               tools: {},
-              prompts: {},
+              prompts: { listChanged: true },
               ...(input.resources === false ? {} : { resources: { listChanged: input.listChanged } }),
             },
             instructions: "Use the resources tools.",
@@ -257,7 +259,12 @@ function resourceServer(
             return Promise.resolve(structured === undefined ? { content } : { content, structuredContent: structured })
           })
         }
-        protocol.setRequestHandler("prompts/list", () => Promise.resolve({ prompts: [{ name: "greet" }] }))
+        protocol.setRequestHandler("prompts/list", () => {
+          state.promptLists += 1
+          return state.failPromptLists
+            ? Promise.reject(new Error("Prompt list unavailable"))
+            : Promise.resolve({ prompts: [{ name: "greet" }] })
+        })
         protocol.setRequestHandler("prompts/get", (request) =>
           Promise.resolve({
             messages: [{ role: "user", content: { type: "text", text: `hi ${request.params.arguments?.name}` } }],
@@ -313,6 +320,7 @@ function resourceServer(
         clientVersion: () => current.protocol.getClientVersion(),
         sendResourceListChanged: () =>
           modern ? Promise.resolve(modern.notify.resourcesChanged()) : current.protocol.sendResourceListChanged(),
+        sendPromptListChanged: () => current.protocol.sendPromptListChanged(),
         completeElicitation: () => current.protocol.createElicitationCompletionNotifier("elicitation-test")(),
         restart: async () => {
           await current.protocol.close().catch(() => {})
@@ -1193,6 +1201,39 @@ test("reconnects and retries a tool call after the MCP session expires", async (
     ),
   )
 })
+
+testEffect(Layer.empty).live("keeps the previous MCP prompts when a refresh fails", () =>
+  Effect.gen(function* () {
+    const server = yield* resourceServer({ resources: false })
+    yield* Effect.gen(function* () {
+      const service = yield* Mcp.Service
+      expect(yield* settled(service)).toEqual({ status: "connected" })
+      yield* service.prompts().pipe(
+        Effect.filterOrFail(
+          (prompts) => prompts.some((prompt) => prompt.name === "greet"),
+          () => new Error("Initial MCP prompts were not loaded"),
+        ),
+        Effect.retry(Schedule.spaced("10 millis")),
+        Effect.timeout("5 seconds"),
+      )
+
+      const previousLists = server.state.promptLists
+      server.state.failPromptLists = true
+      yield* Effect.promise(server.sendPromptListChanged)
+      yield* Effect.sync(() => server.state.promptLists).pipe(
+        Effect.filterOrFail(
+          (count) => count > previousLists,
+          () => new Error("MCP prompt refresh was not requested"),
+        ),
+        Effect.retry(Schedule.spaced("10 millis")),
+        Effect.timeout("5 seconds"),
+      )
+      // A successful request after the failed list response ensures the refresh failure has been processed.
+      yield* service.prompt({ server: Mcp.ServerName.make("resources"), name: "greet" })
+      expect(yield* service.prompts()).toEqual([{ name: "greet", server: Mcp.ServerName.make("resources") }])
+    }).pipe(Effect.provide(resourceMcpLayer(server.url)))
+  }),
+)
 
 describe.each([
   ["legacy", undefined],

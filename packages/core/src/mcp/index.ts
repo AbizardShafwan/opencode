@@ -340,7 +340,6 @@ export const layer = (options?: Options) =>
 
       const refreshPrompts = (name: ServerName, entry: ServerEntry, connection: McpClient.Connection) =>
         connection.prompts().pipe(
-          Effect.orElseSucceed(() => []),
           Effect.map((prompts) => {
             entry.prompts = prompts.map((prompt): Prompt => ({ ...prompt, server: name }))
           }),
