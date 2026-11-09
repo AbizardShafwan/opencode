@@ -119,8 +119,21 @@ that handler; Console return links handed directly to the process still resolve.
 
 Updates are disabled. Packaging declares no `publish` feed, `Build.updates` is
 false, and the updater menu item is disabled. There is no upstream server to
-check. Build the CLI first, then the app; the CLI distribution is mandatory for
-every channel:
+check. For Linux installations made by `scripts/memyr/install-desktop`, quit the
+desktop and update from the current checkout:
+
+```sh
+./scripts/memyr/update-desktop --plan  # No changes or downloads
+./scripts/memyr/update-desktop
+```
+
+The updater detects pacman, user-local, or manual system-wide installations. If
+several exist, select `--pacman`, `--user`, or `--system`. It rebuilds the CLI and
+desktop, forces fresh pacman packages, preserves existing standalone CLI commands
+for manual installs, and never pulls Git changes or restarts services.
+
+For other platforms or manual packaging, build the CLI first, then the app; the
+CLI distribution is mandatory for every channel:
 
 ```sh
 OPENCODE_CHANNEL=memyr bun run --cwd packages/cli build -- --memyr

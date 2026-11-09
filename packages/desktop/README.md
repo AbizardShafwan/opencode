@@ -23,6 +23,25 @@ This fork has no update service. `publish` is not configured, the App menu's upd
 and `Build.updates` is `false`, so the updater never tries to reach an upstream feed. Update the app by
 rebuilding and installing it.
 
+For a Linux installation made with `scripts/memyr/install-desktop`, quit the desktop and run from the
+repository root:
+
+```bash
+./scripts/memyr/update-desktop --plan  # Preview without changes or downloads
+./scripts/memyr/update-desktop         # Rebuild and reinstall the detected installation
+```
+
+The updater uses the current checkout, including local modifications; it never pulls or resets Git.
+It detects the `memyr-desktop` pacman package, `~/.local/lib/memyr`, or `/opt/memyr`. If several
+installations exist, select `--pacman`, `--user`, or `--system` explicitly. An explicit mode can also
+install to that target. Pacman updates force a fresh build instead of reinstalling a cached package
+with the same version. Manual updates preserve an existing standalone `memyr` command.
+
+The command does not stop the desktop or restart its background service. Relaunch the desktop after
+installation; the existing managed-service version policy still applies. `scripts/memyr/update`
+updates only the standalone CLI, not the desktop. Other desktop platforms still require the manual
+build and packaging steps below.
+
 ## Development
 
 ```bash

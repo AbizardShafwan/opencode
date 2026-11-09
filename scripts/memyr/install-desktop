@@ -8,7 +8,35 @@ memyr_root=$(cd -- "$memyr_scripts/../.." && pwd)
 
 source "$memyr_scripts/prerequisites"
 
+# The dedicated updater shares this build/install pipeline, but selects an existing
+# installation and forces makepkg to replace any cached package from an older checkout.
+desktop_action=install
+if [[ "${1:-}" == --update ]]; then
+  desktop_action=update
+  shift
+fi
+
 usage() {
+  if [[ "$desktop_action" == update ]]; then
+    cat <<'EOF'
+Memyr Desktop - Source Update
+
+Usage: update-desktop [options]
+
+Rebuild the CLI and desktop from the current checkout and reinstall them.
+By default, detect the existing installation; choose a mode explicitly if several exist.
+Quit Memyr Desktop first. This command does not pull Git changes or restart services.
+
+Options:
+    -p, --pacman        Rebuild and reinstall the Arch package, ignoring cached packages
+    -s, --system        Rebuild and install to /opt/memyr (not a pacman-managed installation)
+    -u, --user          Rebuild and install to ~/.local/lib/memyr
+    -b, --build-only    Build production artifacts without installing
+    --plan              Print the update plan without making modifications
+    -h, --help          Show this help message
+EOF
+    return
+  fi
   cat <<'EOF'
 Memyr Desktop - Arch Linux Installation Script
 
@@ -85,6 +113,36 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+makepkg_args=(-si --noconfirm)
+if [[ "$desktop_action" == update ]]; then
+  package_installed=false
+  if command -v pacman >/dev/null && pacman -Qq memyr-desktop >/dev/null 2>&1; then
+    package_installed=true
+  fi
+  if [[ -z "$install_mode" && "$build_only" == false ]]; then
+    installed_modes=()
+    [[ "$package_installed" != true ]] || installed_modes+=(pacman)
+    [[ ! -x "$HOME/.local/lib/memyr/ai.memyr" ]] || installed_modes+=(user)
+    if [[ "$package_installed" != true && -x /opt/memyr/ai.memyr ]]; then
+      installed_modes+=(system)
+    fi
+    if [[ ${#installed_modes[@]} == 0 ]]; then
+      echo "No Memyr Desktop installation detected. Run scripts/memyr/install-desktop first or select --pacman, --system, or --user." >&2
+      exit 1
+    fi
+    if [[ ${#installed_modes[@]} != 1 ]]; then
+      echo "Multiple Memyr Desktop installations detected (${installed_modes[*]}). Select --pacman, --system, or --user." >&2
+      exit 1
+    fi
+    install_mode=${installed_modes[0]}
+  fi
+  if [[ "$install_mode" == system && "$package_installed" == true && "$build_only" == false ]]; then
+    echo "The system installation is managed by pacman. Use update-desktop --pacman instead of --system." >&2
+    exit 1
+  fi
+  makepkg_args+=(--force)
+fi
+
 # Default installation mode selection
 if [[ -z "$install_mode" ]]; then
   if command -v makepkg >/dev/null && command -v pacman >/dev/null && [[ "$EUID" != 0 ]]; then
@@ -97,15 +155,21 @@ if [[ -z "$install_mode" ]]; then
 fi
 
 if [[ "$plan_mode" == true ]]; then
-  echo "=== Memyr Desktop Arch Linux Installation Plan ==="
+  echo "=== Memyr Desktop Arch Linux $desktop_action plan ==="
   echo "Target Architecture: $(target_arch)"
   echo "CLI Target:          $(cli_target_name)"
   echo "Install Mode:        $install_mode"
   echo "Build Channel:       prod (CLI: memyr)"
   echo ""
-  if [[ "$install_mode" == "pacman" ]]; then
+  if [[ "$build_only" == true ]]; then
+    echo "1. Verify prerequisites and fetch toolchain"
+    echo "2. Build production CLI: packages/cli (channel: memyr)"
+    echo "3. Build production Desktop: packages/desktop (channel: prod)"
+    echo "4. Package linux directory (electron-builder --linux --dir)"
+    echo "5. Leave artifacts in packages/desktop/dist/linux-unpacked without installing"
+  elif [[ "$install_mode" == "pacman" ]]; then
     echo "1. Verify prerequisites (Bun 1.4.4, Node 24, pacman tools)"
-    echo "2. Run makepkg -si using scripts/memyr/PKGBUILD"
+    echo "2. Run makepkg ${makepkg_args[*]} using scripts/memyr/PKGBUILD"
     echo "3. Pacman registers and installs 'memyr-desktop'"
   elif [[ "$install_mode" == "user" ]]; then
     echo "1. Verify prerequisites and fetch toolchain"
@@ -123,6 +187,20 @@ if [[ "$plan_mode" == true ]]; then
     echo "6. Register memyr:// URI scheme and update icon/desktop cache"
   fi
   exit 0
+fi
+
+if [[ "$desktop_action" == update ]]; then
+  echo "Quit Memyr Desktop before updating. Services will not be restarted automatically."
+  if [[ "$install_mode" == pacman && "$build_only" == false ]]; then
+    if ! command -v makepkg >/dev/null || ! command -v pacman >/dev/null; then
+      echo "Pacman updates require makepkg and pacman. Install the Arch build tools first." >&2
+      exit 1
+    fi
+    if [[ "$EUID" == 0 ]]; then
+      echo "Run update-desktop as a normal user; makepkg will request sudo for installation." >&2
+      exit 1
+    fi
+  fi
 fi
 
 # Ensure prerequisites and pinned toolchain are available
@@ -147,7 +225,7 @@ fi
 if [[ "$install_mode" == "pacman" && "$build_only" == false ]]; then
   echo "Building and installing native Arch package via makepkg..."
   cd "$memyr_scripts"
-  makepkg -si --noconfirm
+  makepkg "${makepkg_args[@]}"
   echo ""
   echo "Memyr Desktop successfully installed via pacman!"
   echo "Launch with: memyr-desktop or via your application launcher."
@@ -225,8 +303,8 @@ if [[ "$install_mode" == "user" ]]; then
 
   # Executable symlink
   ln -sf "$target_lib/ai.memyr" "$target_bin/memyr-desktop"
-  # Also link bundled CLI to ~/.local/bin/memyr if desired
-  if [[ -f "$target_lib/resources/memyr-cli" ]]; then
+  # An update must not replace a standalone CLI installation or another existing command.
+  if [[ -f "$target_lib/resources/memyr-cli" && ( "$desktop_action" != update || ( ! -e "$target_bin/memyr" && ! -L "$target_bin/memyr" ) ) ]]; then
     ln -sf "$target_lib/resources/memyr-cli" "$target_bin/memyr"
   fi
 
@@ -273,7 +351,7 @@ else
 
   # Symlinks
   "${elevate[@]}" ln -sf "$target_lib/ai.memyr" "$target_bin/memyr-desktop"
-  if [[ -f "$target_lib/resources/memyr-cli" ]]; then
+  if [[ -f "$target_lib/resources/memyr-cli" && ( "$desktop_action" != update || ( ! -e "$target_bin/memyr" && ! -L "$target_bin/memyr" ) ) ]]; then
     "${elevate[@]}" ln -sf "$target_lib/resources/memyr-cli" "$target_bin/memyr"
   fi
 
