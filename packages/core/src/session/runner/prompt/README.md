@@ -2,12 +2,17 @@
 
 ## Prompt sources
 
-These are build-time assets, not runtime reads from another checkout. The source
-was the local `~/Documents/codex` checkout (HEAD
+These are build-time assets, not runtime reads from another checkout. The initial
+imports came from the local `~/Documents/codex` checkout (HEAD
 `e596f5054d4e044a5b5338e942ddc47833b4d4d7`, with local modifications) on 2026-10-24.
 
-- `system.txt`: exact `codex-rs/models-manager/prompt.md`, the active compiled
-  Memyr engineering policy. SHA-256: `eb708da445b093cfd961cb6d9a428791c7ec593eb31e0f0143ea268f2a2a2afd`.
+- `system.txt`: Memyr's engineering policy, shortened locally on 2026-11-09 from
+  the imported `codex-rs/models-manager/prompt.md`. It is no longer an exact copy.
+  Current SHA-256: `c5fa9b9f8f5a30c69d094b95ba15070ab16c400cd159df9ae70fd34b6ffe0436`.
+  Original imported SHA-256: `eb708da445b093cfd961cb6d9a428791c7ec593eb31e0f0143ea268f2a2a2afd`.
+- `visual-verification.txt`: Memyr's always-on render/inspect policy, shortened
+  locally on 2026-11-09. Current SHA-256:
+  `8bfbb5d25ed5decf81a7320715125c58943570ab11db8a63ce902fda07170243`.
 - `compaction.txt`: exact `codex-rs/prompts/templates/compact/prompt.md`.
   SHA-256: `b084c795a4d08c34d0d037292a6a5fc99846b68540990cc8e53a810b37546b61`.
 - `summary-prefix.txt`: exact `codex-rs/prompts/templates/compact/summary_prefix.md`,
@@ -36,6 +41,55 @@ repository instructions, environment facts and plugin customizations remain
 owned by this harness, rather than copying unsupported Codex tool names.
 
 See `packages/core/NOTICE` and `packages/core/LICENSE.codex`.
+
+## Lean policy adaptation
+
+The 2026-11-09 adaptation compresses repeated wording, not the instruction-source
+architecture. The engineering and visual policies remain static and always on;
+no task classifier, new dependency, optional skill gate or provider-specific
+policy is introduced. Literal custom overrides, role assignments, mode contracts,
+tool definitions and project/MCP/skill instructions are unchanged. Roles that
+include the shared policy receive its shorter version, not a new role policy.
+
+Measured with `wc -w -c` on the two policy assets:
+
+| Asset                     | Previous words / bytes | Lean words / bytes |
+| ------------------------- | ---------------------: | -----------------: |
+| `system.txt`              |            613 / 4,655 |        371 / 3,027 |
+| `visual-verification.txt` |            237 / 1,690 |        143 / 1,067 |
+| Total                     |            850 / 6,345 |        514 / 4,094 |
+
+This removes about 40% of words and 35% of asset bytes. These are not tokenizer
+counts or a measurement of total model input, cache hits, cost or task quality.
+
+The retained obligations are:
+
+- Independent judgment, evidence-based corrections and respect for user scope.
+- Relevant source/behavior inspection, affected data flow and failure paths,
+  focused discovery, evidence reuse and an evidence-versus-authority boundary.
+- Explicit ownership, straightforward design, justified abstractions/dependencies,
+  workload-appropriate growth, cleanup on all exits and no unrelated refactoring.
+- Correctness/security/accessibility, boundary validation, required and focused
+  checks, failure investigation and no duplicated protections or weakened tests.
+- No implementation from discussion/audit/planning alone; finish authorized work,
+  clarify material uncertainty, preserve user work and stop when instructed/done.
+- Explicit task-level delegation consent and host/agent permission boundaries.
+- Concise, grounded reporting that distinguishes assumptions, completed work,
+  actual verification, failures, limits and unmet requirements.
+- Proactive rendering and actual image inspection at representative states/sizes,
+  defect correction, evidence paths, honest unavailable-tool/model handling,
+  privacy and operational permission boundaries; no mockup-as-proof substitution.
+
+The pinned-asset, request-prefix, custom-override, role and instruction-state tests
+verify integration, not model compliance. Before claiming behavioral equivalence
+or competitiveness with Pi, compare old and lean policies on the same models,
+tools and repository context. Include a small fix, an ambiguous request,
+discussion-only work, a failing check, unrelated existing changes, delegation
+without consent and visual work with unavailable rendering/image input. Require
+no observed regressions in scope control, truthful reporting, verification or
+solution quality; separately measure cold/cache-read input tokens, unnecessary
+tool calls, latency and total usage. Live-provider evaluation requires separate
+authorization. Auxiliary-only prompt slimming remains a separate change.
 
 ## Review command
 
@@ -176,9 +230,9 @@ lockfile without replacing global Bun:
 
 ## Proactive visual verification
 
-The imported Codex policy remains byte-for-byte unchanged. `SessionSystemPrompt.make()`
-appends the static `visual-verification.txt` policy; literal custom system overrides
-remain literal. This is a one-time default-policy change on upgrade, represented by
+`SessionSystemPrompt.make()` appends the static `visual-verification.txt` policy
+to the engineering policy; both were shortened in the lean adaptation above.
+Literal custom system overrides remain literal. Policy changes on upgrade use
 the existing durable policy update mechanism, not a changing per-step insertion.
 The real bundled policy is included in the deterministic wire-prefix regression test.
 

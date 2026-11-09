@@ -5,7 +5,8 @@ Licensed under the Apache License, Version 2.0; see LICENSE.codex.
 
 Prompt provenance and local adaptations are documented in
 src/session/runner/prompt/README.md in the source distribution.
-The Memyr policy comes from the user's locally modified Codex checkout.
+The Memyr policy was adapted from the user's locally modified Codex checkout
+and shortened locally; it is no longer an exact copy.
 
 The stable-prefix behavior is adapted from the design of DeepSeek Harness
 (https://github.com/deepseek-ai/deepseek-harness), Copyright (c) 2026 DeepSeek.

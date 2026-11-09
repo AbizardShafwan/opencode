@@ -8,7 +8,8 @@ import { SessionSystemPrompt } from "@opencode/core/session/system-prompt"
 import { DateTime, Effect } from "effect"
 import { SessionMessage } from "@opencode/core/session/message"
 import { createHash } from "crypto"
-import CODEX_POLICY from "../src/session/runner/prompt/system.txt"
+import POLICY from "../src/session/runner/prompt/system.txt"
+import VISUAL_POLICY from "../src/session/runner/prompt/visual-verification.txt"
 
 const transcript = (id: string, system?: string, tools: string[] = []) =>
   SessionModelRequest.baseTranscript({
@@ -28,13 +29,16 @@ const transcript = (id: string, system?: string, tools: string[] = []) =>
     messages: [],
   })
 
-describe("Codex system policy", () => {
-  test("bundles the exact local Codex engineering policy", () => {
-    // Source digest is recorded in runner/prompt/README.md; no external checkout is needed at runtime or in CI.
-    expect(createHash("sha256").update(CODEX_POLICY).digest("hex")).toBe(
-      "eb708da445b093cfd961cb6d9a428791c7ec593eb31e0f0143ea268f2a2a2afd",
+describe("Memyr system policy", () => {
+  test("bundles the pinned lean engineering and visual policies", () => {
+    // Digests and adaptation history are recorded in runner/prompt/README.md.
+    expect(createHash("sha256").update(POLICY).digest("hex")).toBe(
+      "c5fa9b9f8f5a30c69d094b95ba15070ab16c400cd159df9ae70fd34b6ffe0436",
     )
-    expect(SessionSystemPrompt.make().startsWith(CODEX_POLICY)).toBe(true)
+    expect(createHash("sha256").update(VISUAL_POLICY).digest("hex")).toBe(
+      "8bfbb5d25ed5decf81a7320715125c58943570ab11db8a63ce902fda07170243",
+    )
+    expect(SessionSystemPrompt.make()).toBe(`${POLICY}\n${VISUAL_POLICY}`)
     expect(SessionSystemPrompt.make()).toContain("<visual_verification>")
     expect(SessionSystemPrompt.make()).toContain("inspect the resulting image with the read tool")
     expect(SessionSystemPrompt.make()).toContain("Do not substitute a mockup for a screenshot")
