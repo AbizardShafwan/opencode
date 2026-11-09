@@ -1,0 +1,103 @@
+# Maintainer: Memyr Team
+pkgname=memyr-desktop
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Memyr Desktop - Open source AI coding agent"
+arch=('x86_64' 'aarch64')
+url="https://memyr.ai"
+license=('MIT')
+depends=('gtk3' 'nss' 'alsa-lib' 'libxss' 'glibc' 'xdg-utils')
+optdepends=(
+  'libnotify: desktop notifications'
+)
+provides=('memyr-desktop' 'memyr')
+conflicts=('memyr-desktop-bin')
+options=('!strip')
+
+build() {
+  local memyr_scripts memyr_root
+  memyr_scripts=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+  memyr_root=$(cd -- "$memyr_scripts/../.." && pwd)
+
+  source "$memyr_scripts/prerequisites"
+  memyr_prerequisites install build
+
+  cd "$memyr_root"
+  bun install --frozen-lockfile
+
+  local cli_target="memyr-linux-x64-baseline"
+  [[ "$(uname -m)" =~ ^(aarch64|arm64)$ ]] && cli_target="memyr-linux-arm64"
+
+  echo "Building Memyr CLI ($cli_target)..."
+  OPENCODE_CHANNEL=memyr bun run --cwd packages/cli script/build.ts \
+    --memyr \
+    --target="$cli_target" \
+    --skip-install
+
+  echo "Building Memyr Desktop bundles..."
+  OPENCODE_CHANNEL=prod OPENCODE_CLI_DIST="$memyr_root/packages/cli/dist" \
+    bun run --cwd packages/desktop build
+
+  echo "Packaging Linux unpacked distribution..."
+  OPENCODE_CHANNEL=prod bun x --cwd packages/desktop \
+    electron-builder --linux --dir --config electron-builder.config.ts
+}
+
+package() {
+  local memyr_scripts memyr_root unpacked
+  memyr_scripts=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+  memyr_root=$(cd -- "$memyr_scripts/../.." && pwd)
+  unpacked="$memyr_root/packages/desktop/dist/linux-unpacked"
+
+  install -d -m 755 "$pkgdir/opt/memyr"
+  cp -a "$unpacked"/* "$pkgdir/opt/memyr/"
+  chmod 755 "$pkgdir/opt/memyr/ai.memyr"
+
+  # Executable symlinks
+  install -d -m 755 "$pkgdir/usr/bin"
+  ln -sf "/opt/memyr/ai.memyr" "$pkgdir/usr/bin/memyr-desktop"
+  if [[ -f "$pkgdir/opt/memyr/resources/memyr-cli" ]]; then
+    ln -sf "/opt/memyr/resources/memyr-cli" "$pkgdir/usr/bin/memyr"
+  fi
+
+  # Desktop launcher
+  install -d -m 755 "$pkgdir/usr/share/applications"
+  cat > "$pkgdir/usr/share/applications/ai.memyr.desktop.desktop" <<'EOF'
+[Desktop Entry]
+Name=Memyr
+Comment=Open source AI coding agent
+GenericName=AI Coding Agent
+Exec=/opt/memyr/ai.memyr %U
+Icon=ai.memyr.desktop
+Type=Application
+StartupNotify=true
+StartupWMClass=ai.memyr.desktop
+Categories=Development;IDE;
+MimeType=x-scheme-handler/memyr;
+Terminal=false
+EOF
+  chmod 644 "$pkgdir/usr/share/applications/ai.memyr.desktop.desktop"
+
+  # Icons
+  local icons_src="$memyr_root/packages/desktop/icons/prod"
+  for size in 32x32 64x64 128x128; do
+    install -d -m 755 "$pkgdir/usr/share/icons/hicolor/$size/apps"
+    install -m 644 "$icons_src/$size.png" "$pkgdir/usr/share/icons/hicolor/$size/apps/ai.memyr.desktop.png"
+  done
+  install -d -m 755 "$pkgdir/usr/share/icons/hicolor/256x256/apps" "$pkgdir/usr/share/icons/hicolor/512x512/apps"
+  install -m 644 "$icons_src/128x128@2x.png" "$pkgdir/usr/share/icons/hicolor/256x256/apps/ai.memyr.desktop.png"
+  install -m 644 "$icons_src/icon.png" "$pkgdir/usr/share/icons/hicolor/512x512/apps/ai.memyr.desktop.png"
+
+  # Metainfo
+  local metainfo_src="$memyr_root/packages/desktop/resources/ai.memyr.desktop.metainfo.xml"
+  if [[ -f "$metainfo_src" ]]; then
+    install -d -m 755 "$pkgdir/usr/share/metainfo"
+    install -m 644 "$metainfo_src" "$pkgdir/usr/share/metainfo/ai.memyr.desktop.metainfo.xml"
+  fi
+
+  # License
+  install -d -m 755 "$pkgdir/usr/share/licenses/$pkgname"
+  if [[ -f "$memyr_root/LICENSE" ]]; then
+    install -m 644 "$memyr_root/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  fi
+}

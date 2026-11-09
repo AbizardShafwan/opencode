@@ -1,0 +1,316 @@
+#!/usr/bin/env bash
+# Production installation script for Memyr Desktop on Arch Linux.
+# Handles toolchain setup, production build (CLI + Electron Desktop), and system/user integration.
+set -euo pipefail
+
+memyr_scripts=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+memyr_root=$(cd -- "$memyr_scripts/../.." && pwd)
+
+source "$memyr_scripts/prerequisites"
+
+usage() {
+  cat <<'EOF'
+Memyr Desktop - Arch Linux Installation Script
+
+Usage: install-desktop [options]
+
+Options:
+    -p, --pacman        Build and install as an official Arch package (.pkg.tar.zst) via makepkg/pacman
+    -s, --system        Install system-wide to /opt/memyr (default when running with sudo)
+    -u, --user          Install user-locally to ~/.local/lib/memyr (rootless)
+    -b, --build-only    Build production release artifacts without installing
+    --plan              Print installation plan without making modifications
+    -h, --help          Show this help message
+
+Examples:
+    ./scripts/memyr/install-desktop           # Native installation (Arch package or /opt/memyr)
+    ./scripts/memyr/install-desktop --pacman  # Build and install through pacman
+    ./scripts/memyr/install-desktop --user    # Install without sudo into ~/.local
+EOF
+}
+
+target_arch() {
+  case "$(uname -m)" in
+    x86_64|amd64) echo "x64" ;;
+    aarch64|arm64) echo "arm64" ;;
+    *) echo "Unsupported architecture $(uname -m)" >&2; exit 1 ;;
+  esac
+}
+
+cli_target_name() {
+  local arch
+  arch=$(target_arch)
+  if [[ "$arch" == "x64" ]]; then
+    echo "memyr-linux-x64-baseline"
+  else
+    echo "memyr-linux-arm64"
+  fi
+}
+
+install_mode=""
+build_only=false
+plan_mode=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -p|--pacman)
+      install_mode="pacman"
+      shift
+      ;;
+    -s|--system)
+      install_mode="system"
+      shift
+      ;;
+    -u|--user)
+      install_mode="user"
+      shift
+      ;;
+    -b|--build-only)
+      build_only=true
+      shift
+      ;;
+    --plan)
+      plan_mode=true
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+# Default installation mode selection
+if [[ -z "$install_mode" ]]; then
+  if command -v makepkg >/dev/null && command -v pacman >/dev/null && [[ "$EUID" != 0 ]]; then
+    install_mode="pacman"
+  elif [[ "$EUID" == 0 ]]; then
+    install_mode="system"
+  else
+    install_mode="system"
+  fi
+fi
+
+if [[ "$plan_mode" == true ]]; then
+  echo "=== Memyr Desktop Arch Linux Installation Plan ==="
+  echo "Target Architecture: $(target_arch)"
+  echo "CLI Target:          $(cli_target_name)"
+  echo "Install Mode:        $install_mode"
+  echo "Build Channel:       prod (CLI: memyr)"
+  echo ""
+  if [[ "$install_mode" == "pacman" ]]; then
+    echo "1. Verify prerequisites (Bun 1.4.4, Node 24, pacman tools)"
+    echo "2. Run makepkg -si using scripts/memyr/PKGBUILD"
+    echo "3. Pacman registers and installs 'memyr-desktop'"
+  elif [[ "$install_mode" == "user" ]]; then
+    echo "1. Verify prerequisites and fetch toolchain"
+    echo "2. Build production CLI: packages/cli (channel: memyr)"
+    echo "3. Build production Desktop: packages/desktop (channel: prod)"
+    echo "4. Package linux directory (electron-builder --linux --dir)"
+    echo "5. Install into ~/.local/lib/memyr, ~/.local/bin, ~/.local/share/applications"
+    echo "6. Register memyr:// URI scheme and update icon/desktop cache"
+  else
+    echo "1. Verify prerequisites and fetch toolchain"
+    echo "2. Build production CLI: packages/cli (channel: memyr)"
+    echo "3. Build production Desktop: packages/desktop (channel: prod)"
+    echo "4. Package linux directory (electron-builder --linux --dir)"
+    echo "5. Install into /opt/memyr, /usr/bin, /usr/share/applications (via sudo)"
+    echo "6. Register memyr:// URI scheme and update icon/desktop cache"
+  fi
+  exit 0
+fi
+
+# Ensure prerequisites and pinned toolchain are available
+echo "Checking prerequisites..."
+memyr_prerequisites install build
+
+elevate=()
+if [[ "$EUID" != 0 ]]; then
+  elevate=(sudo)
+fi
+
+# Ensure required runtime libraries on Arch
+if command -v pacman >/dev/null; then
+  echo "Checking Arch runtime dependencies..."
+  if ! pacman -Qi gtk3 nss alsa-lib xdg-utils >/dev/null 2>&1; then
+    echo "Installing missing runtime libraries via pacman..."
+    "${elevate[@]}" pacman -S --needed --noconfirm gtk3 nss alsa-lib xdg-utils
+  fi
+fi
+
+# Pacman / makepkg workflow
+if [[ "$install_mode" == "pacman" && "$build_only" == false ]]; then
+  echo "Building and installing native Arch package via makepkg..."
+  cd "$memyr_scripts"
+  makepkg -si --noconfirm
+  echo ""
+  echo "Memyr Desktop successfully installed via pacman!"
+  echo "Launch with: memyr-desktop or via your application launcher."
+  exit 0
+fi
+
+# Standard build workflow
+echo "==> [1/3] Building Memyr CLI (production release)..."
+cd "$memyr_root"
+bun install --frozen-lockfile
+
+cli_target=$(cli_target_name)
+OPENCODE_CHANNEL=memyr bun run --cwd packages/cli script/build.ts \
+  --memyr \
+  --target="$cli_target" \
+  --skip-install
+
+echo "==> [2/3] Building Memyr Desktop bundles..."
+OPENCODE_CHANNEL=prod OPENCODE_CLI_DIST="$memyr_root/packages/cli/dist" \
+  bun run --cwd packages/desktop build
+
+echo "==> [3/3] Packaging Linux Desktop distribution..."
+OPENCODE_CHANNEL=prod bun x --cwd packages/desktop \
+  electron-builder --linux --dir --config electron-builder.config.ts
+
+unpacked_dist="$memyr_root/packages/desktop/dist/linux-unpacked"
+if [[ ! -d "$unpacked_dist" ]]; then
+  echo "Error: Expected distribution directory not found: $unpacked_dist" >&2
+  exit 1
+fi
+
+if [[ "$build_only" == true ]]; then
+  echo ""
+  echo "Production build complete at: $unpacked_dist"
+  exit 0
+fi
+
+# Installation phase
+echo "==> Installing Memyr Desktop ($install_mode mode)..."
+
+desktop_file_content() {
+  local exec_path=$1
+  cat <<EOF
+[Desktop Entry]
+Name=Memyr
+Comment=Open source AI coding agent
+GenericName=AI Coding Agent
+Exec=$exec_path %U
+Icon=ai.memyr.desktop
+Type=Application
+StartupNotify=true
+StartupWMClass=ai.memyr.desktop
+Categories=Development;IDE;
+MimeType=x-scheme-handler/memyr;
+Terminal=false
+EOF
+}
+
+icons_src="$memyr_root/packages/desktop/icons/prod"
+metainfo_src="$memyr_root/packages/desktop/resources/ai.memyr.desktop.metainfo.xml"
+
+if [[ "$install_mode" == "user" ]]; then
+  target_lib="$HOME/.local/lib/memyr"
+  target_bin="$HOME/.local/bin"
+  apps_dir="$HOME/.local/share/applications"
+  icons_dir="$HOME/.local/share/icons/hicolor"
+  metainfo_dir="$HOME/.local/share/metainfo"
+
+  mkdir -p "$target_lib" "$target_bin" "$apps_dir" "$metainfo_dir"
+
+  echo "Copying application files to $target_lib..."
+  rm -rf "$target_lib"/*
+  cp -a "$unpacked_dist"/* "$target_lib/"
+  chmod 755 "$target_lib/ai.memyr"
+
+  # Executable symlink
+  ln -sf "$target_lib/ai.memyr" "$target_bin/memyr-desktop"
+  # Also link bundled CLI to ~/.local/bin/memyr if desired
+  if [[ -f "$target_lib/resources/memyr-cli" ]]; then
+    ln -sf "$target_lib/resources/memyr-cli" "$target_bin/memyr"
+  fi
+
+  # Desktop launcher
+  desktop_file_content "$target_lib/ai.memyr" > "$apps_dir/ai.memyr.desktop.desktop"
+  chmod 644 "$apps_dir/ai.memyr.desktop.desktop"
+
+  # Icons
+  for size in 32x32 64x64 128x128; do
+    mkdir -p "$icons_dir/$size/apps"
+    cp -f "$icons_src/$size.png" "$icons_dir/$size/apps/ai.memyr.desktop.png"
+  done
+  mkdir -p "$icons_dir/256x256/apps" "$icons_dir/512x512/apps"
+  cp -f "$icons_src/128x128@2x.png" "$icons_dir/256x256/apps/ai.memyr.desktop.png"
+  cp -f "$icons_src/icon.png" "$icons_dir/512x512/apps/ai.memyr.desktop.png"
+
+  # Metainfo
+  if [[ -f "$metainfo_src" ]]; then
+    cp -f "$metainfo_src" "$metainfo_dir/ai.memyr.desktop.metainfo.xml"
+  fi
+
+  # Cache and MIME updates
+  command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$apps_dir" || true
+  command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -q -t -f "$icons_dir" || true
+  command -v xdg-mime >/dev/null 2>&1 && xdg-mime default ai.memyr.desktop.desktop x-scheme-handler/memyr || true
+
+  echo ""
+  echo "Memyr Desktop installed to $target_lib"
+  echo "Executable: $target_bin/memyr-desktop"
+  echo "Ensure $target_bin is in your PATH."
+else
+  target_lib="/opt/memyr"
+  target_bin="/usr/bin"
+  apps_dir="/usr/share/applications"
+  icons_dir="/usr/share/icons/hicolor"
+  metainfo_dir="/usr/share/metainfo"
+
+  echo "Installing to $target_lib (requires sudo)..."
+  "${elevate[@]}" mkdir -p "$target_lib" "$target_bin" "$apps_dir" "$metainfo_dir"
+
+  "${elevate[@]}" rm -rf "$target_lib"/*
+  "${elevate[@]}" cp -a "$unpacked_dist"/* "$target_lib/"
+  "${elevate[@]}" chmod 755 "$target_lib/ai.memyr"
+
+  # Symlinks
+  "${elevate[@]}" ln -sf "$target_lib/ai.memyr" "$target_bin/memyr-desktop"
+  if [[ -f "$target_lib/resources/memyr-cli" ]]; then
+    "${elevate[@]}" ln -sf "$target_lib/resources/memyr-cli" "$target_bin/memyr"
+  fi
+
+  # Desktop launcher
+  desktop_tmp=$(mktemp)
+  desktop_file_content "$target_lib/ai.memyr" > "$desktop_tmp"
+  "${elevate[@]}" cp "$desktop_tmp" "$apps_dir/ai.memyr.desktop.desktop"
+  "${elevate[@]}" chmod 644 "$apps_dir/ai.memyr.desktop.desktop"
+  rm -f "$desktop_tmp"
+
+  # Icons
+  for size in 32x32 64x64 128x128; do
+    "${elevate[@]}" mkdir -p "$icons_dir/$size/apps"
+    "${elevate[@]}" cp -f "$icons_src/$size.png" "$icons_dir/$size/apps/ai.memyr.desktop.png"
+  done
+  "${elevate[@]}" mkdir -p "$icons_dir/256x256/apps" "$icons_dir/512x512/apps"
+  "${elevate[@]}" cp -f "$icons_src/128x128@2x.png" "$icons_dir/256x256/apps/ai.memyr.desktop.png"
+  "${elevate[@]}" cp -f "$icons_src/icon.png" "$icons_dir/512x512/apps/ai.memyr.desktop.png"
+
+  # Metainfo
+  if [[ -f "$metainfo_src" ]]; then
+    "${elevate[@]}" cp -f "$metainfo_src" "$metainfo_dir/ai.memyr.desktop.metainfo.xml"
+  fi
+
+  # Cache and MIME updates
+  if command -v update-desktop-database >/dev/null 2>&1; then
+    "${elevate[@]}" update-desktop-database -q "$apps_dir" || true
+  fi
+  if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    "${elevate[@]}" gtk-update-icon-cache -q -t -f "$icons_dir" || true
+  fi
+  command -v xdg-mime >/dev/null 2>&1 && xdg-mime default ai.memyr.desktop.desktop x-scheme-handler/memyr || true
+
+  echo ""
+  echo "Memyr Desktop installed to $target_lib"
+  echo "Launcher: /usr/bin/memyr-desktop"
+  echo "CLI:      /usr/bin/memyr"
+fi
+
+echo "Done! You can launch Memyr Desktop from your application menu or terminal."

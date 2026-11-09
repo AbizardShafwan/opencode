@@ -39,3 +39,7 @@ logs/
 *.bun-build
 tsconfig.tsbuildinfo
 /artifacts/
+
+# Arch package build output
+/scripts/memyr/pkg/
+/scripts/memyr/*.pkg.tar.zst

@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# Uninstallation script for Memyr Desktop on Arch Linux.
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Memyr Desktop - Arch Linux Uninstallation Script
+
+Usage: uninstall-desktop [options]
+
+Options:
+    -p, --pacman        Uninstall Arch package via pacman (pacman -R memyr-desktop)
+    -s, --system        Uninstall system-wide installation (/opt/memyr)
+    -u, --user          Uninstall user-local installation (~/.local/lib/memyr)
+    -h, --help          Show this help message
+EOF
+}
+
+uninstall_mode=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -p|--pacman)
+      uninstall_mode="pacman"
+      shift
+      ;;
+    -s|--system)
+      uninstall_mode="system"
+      shift
+      ;;
+    -u|--user)
+      uninstall_mode="user"
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+# Detect installed version
+if [[ -z "$uninstall_mode" ]]; then
+  if pacman -Qq memyr-desktop >/dev/null 2>&1; then
+    uninstall_mode="pacman"
+  elif [[ -d "/opt/memyr" ]]; then
+    uninstall_mode="system"
+  elif [[ -d "$HOME/.local/lib/memyr" ]]; then
+    uninstall_mode="user"
+  else
+    echo "No Memyr Desktop installation detected."
+    exit 0
+  fi
+fi
+
+if [[ "$uninstall_mode" == "pacman" ]]; then
+  echo "Uninstalling memyr-desktop via pacman..."
+  elevate=()
+  [[ "$EUID" != 0 ]] && elevate=(sudo)
+  "${elevate[@]}" pacman -R memyr-desktop
+  echo "Memyr Desktop package removed."
+  exit 0
+fi
+
+if [[ "$uninstall_mode" == "user" ]]; then
+  echo "Removing user-local Memyr Desktop..."
+  rm -rf "$HOME/.local/lib/memyr"
+  rm -f "$HOME/.local/bin/memyr-desktop"
+  rm -f "$HOME/.local/share/applications/ai.memyr.desktop.desktop"
+  for size in 32x32 64x64 128x128 256x256 512x512; do
+    rm -f "$HOME/.local/share/icons/hicolor/$size/apps/ai.memyr.desktop.png"
+  done
+  rm -f "$HOME/.local/share/metainfo/ai.memyr.desktop.metainfo.xml"
+  command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$HOME/.local/share/applications" || true
+  command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -q -t -f "$HOME/.local/share/icons/hicolor" || true
+  echo "User-local Memyr Desktop uninstalled."
+  exit 0
+fi
+
+if [[ "$uninstall_mode" == "system" ]]; then
+  echo "Removing system-wide Memyr Desktop..."
+  elevate=()
+  [[ "$EUID" != 0 ]] && elevate=(sudo)
+  "${elevate[@]}" rm -rf "/opt/memyr"
+  "${elevate[@]}" rm -f "/usr/bin/memyr-desktop"
+  "${elevate[@]}" rm -f "/usr/share/applications/ai.memyr.desktop.desktop"
+  for size in 32x32 64x64 128x128 256x256 512x512; do
+    "${elevate[@]}" rm -f "/usr/share/icons/hicolor/$size/apps/ai.memyr.desktop.png"
+  done
+  "${elevate[@]}" rm -f "/usr/share/metainfo/ai.memyr.desktop.metainfo.xml"
+  command -v update-desktop-database >/dev/null 2>&1 && "${elevate[@]}" update-desktop-database -q /usr/share/applications || true
+  command -v gtk-update-icon-cache >/dev/null 2>&1 && "${elevate[@]}" gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor || true
+  echo "System-wide Memyr Desktop uninstalled."
+fi

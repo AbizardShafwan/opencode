@@ -55,6 +55,21 @@ The CLI executable is named `memyr`. On macOS, "Install CLI" copies it to `~/.lo
 not run an upstream installer or edit shell profiles. It never replaces an existing `memyr` command,
 such as the symlink owned by `scripts/memyr/install`; it reports that path instead.
 
+### Arch Linux
+
+To build and install the production release on Arch Linux:
+
+```bash
+./scripts/memyr/install-desktop           # Native Arch pacman package or /opt/memyr
+./scripts/memyr/install-desktop --user    # Rootless install into ~/.local
+```
+
+Or build with `makepkg` directly:
+
+```bash
+cd scripts/memyr && makepkg -si
+```
+
 ### Windows and WSL
 
 WSL needs a Linux CLI. When `OPENCODE_CLI_DIST` contains the matching `cli-linux-*` target, `prebuild`
