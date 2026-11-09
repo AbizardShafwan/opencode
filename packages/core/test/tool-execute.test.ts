@@ -7,7 +7,8 @@ import { Agent } from "@opencode/schema/agent"
 import { Session } from "@opencode/schema/session"
 import { SessionMessage } from "@opencode/schema/session-message"
 import type { Info } from "@opencode/schema/tool"
-import { Effect, Schema } from "effect"
+import { Deferred, Effect, Fiber, Schema } from "effect"
+import { it } from "./lib/effect"
 import { permissionService } from "./lib/permission"
 
 const context = {
@@ -47,19 +48,37 @@ test("execute rejects filesystem fetches", async () => {
 
 describe("fetch permissions", () => {
   const hits: Array<string> = []
+  const received: Array<{ method: string; body: string; headers: Record<string, string> }> = []
   let server: ReturnType<typeof Bun.serve>
+  let other: ReturnType<typeof Bun.serve>
   beforeAll(() => {
+    const inspect = async (request: Request) => {
+      received.push({
+        method: request.method,
+        body: await request.text(),
+        headers: Object.fromEntries(request.headers),
+      })
+      return new Response("ok")
+    }
+    other = Bun.serve({ port: 0, fetch: inspect })
     server = Bun.serve({
       port: 0,
       fetch: (request) => {
         const url = new URL(request.url)
         hits.push(`${request.method} ${url.pathname}`)
         if (url.pathname === "/redirect") return Response.redirect(`${url.origin}/blocked`, 302)
+        if (url.pathname === "/forward")
+          return new Response(null, {
+            status: Number(url.searchParams.get("status")),
+            headers: { location: url.searchParams.get("target") ?? "/inspect" },
+          })
+        if (url.pathname === "/loop") return Response.redirect(`${url.origin}/loop`, 307)
+        if (url.pathname === "/inspect") return inspect(request)
         return new Response("ok")
       },
     })
   })
-  afterAll(() => server.stop(true))
+  afterAll(() => Promise.all([server.stop(true), other.stop(true)]))
 
   test("fetch asks the webfetch permission for its URL as the execute call", async () => {
     hits.length = 0
@@ -125,6 +144,20 @@ describe("fetch permissions", () => {
     expect(hits).toEqual(["GET /allowed"])
   })
 
+  test("fetch matches the initial URL's spelling rather than a canonicalized URL", async () => {
+    const asked: Permission.AssertInput[] = []
+    const url = `HTTP://${server.url.host}/allowed`
+    const result = await Effect.runPromise(
+      createCodeMode(
+        new Map(),
+        permissionService({ assert: (input) => Effect.sync(() => void asked.push(input)) }),
+      ).execute({ code: `return (await fetch("${url}#top")).status` }, context),
+    )
+
+    expect(result.output.output).toBe("200")
+    expect(asked.map((input) => input.resources)).toEqual([[url]])
+  })
+
   test("a rejection with feedback reaches the program as the error message", async () => {
     hits.length = 0
     const url = `${server.url.origin}/corrected`
@@ -159,7 +192,245 @@ describe("fetch permissions", () => {
     expect(result.output.output).toBe("rejected")
     expect(hits).toEqual([])
   })
+
+  test.each(
+    [false, true].flatMap((crossOrigin) =>
+      [
+        { status: 301, method: "POST", next: "GET" },
+        { status: 302, method: "POST", next: "GET" },
+        { status: 303, method: "PUT", next: "GET" },
+        { status: 303, method: "HEAD", next: "HEAD" },
+        { status: 302, method: "PUT", next: "PUT" },
+        { status: 307, method: "POST", next: "POST" },
+        { status: 308, method: "PUT", next: "PUT" },
+      ].map((scenario) => ({ ...scenario, crossOrigin })),
+    ),
+  )(
+    "redirect $status $method, cross-origin=$crossOrigin, preserves HTTP and credential semantics",
+    async (scenario) => {
+      received.length = 0
+      const checked: Permission.AssertInput[] = []
+      const target = scenario.crossOrigin ? `${other.url.origin}/inspect` : "/inspect"
+      const url = `${server.url.origin}/forward?status=${scenario.status}&target=${encodeURIComponent(target)}`
+      const headers = {
+        authorization: "Bearer test-only",
+        cookie: "session=test-only",
+        "proxy-authorization": "Basic test-only",
+        "content-type": "text/plain",
+        "x-request-id": "preserved",
+      }
+      const result = await Effect.runPromise(
+        createCodeMode(
+          new Map(),
+          permissionService({
+            assert: () => Effect.void,
+            assertNotDenied: (input) => Effect.sync(() => void checked.push(input)),
+          }),
+        ).execute(
+          {
+            code: `return (await fetch(${JSON.stringify(url)}, ${JSON.stringify({
+              method: scenario.method,
+              headers,
+              ...(scenario.method === "HEAD" ? {} : { body: "payload" }),
+            })})).status`,
+          },
+          context,
+        ),
+      )
+
+      expect(result.output.output).toBe("200")
+      expect(received).toHaveLength(1)
+      expect(received[0]?.method).toBe(scenario.next)
+      expect(received[0]?.body).toBe(scenario.next === "GET" || scenario.next === "HEAD" ? "" : "payload")
+      if (scenario.next === "GET") expect(received[0]?.headers["content-type"]).toBeUndefined()
+      if (scenario.next !== "GET") expect(received[0]?.headers["content-type"]).toBe("text/plain")
+      expect(received[0]?.headers["x-request-id"]).toBe("preserved")
+      for (const name of ["authorization", "cookie", "proxy-authorization"] as const) {
+        if (scenario.crossOrigin) expect(received[0]?.headers[name]).toBeUndefined()
+        if (!scenario.crossOrigin) expect(received[0]?.headers[name]).toBe(headers[name])
+      }
+      expect(checked).toMatchObject([
+        {
+          action: "webfetch",
+          resources: [new URL(target, server.url).href],
+          sessionID: context.sessionID,
+          agent: context.agent,
+          source: { type: "tool", messageID: context.messageID, id: context.id },
+        },
+      ])
+    },
+  )
+
+  test.each(["file:///blocked", "https://user@example.invalid/"])(
+    "rejects unsafe redirect destination %s before permission checks or transport",
+    async (target) => {
+      hits.length = 0
+      const checked: Permission.AssertInput[] = []
+      const result = await Effect.runPromise(
+        createCodeMode(
+          new Map(),
+          permissionService({
+            assert: () => Effect.void,
+            assertNotDenied: (input) => Effect.sync(() => void checked.push(input)),
+          }),
+        ).execute(
+          {
+            code: `return await fetch("${server.url.origin}/forward?status=302&target=${encodeURIComponent(target)}")`,
+          },
+          context,
+        ),
+      )
+
+      expect(result.output.error).toBe(true)
+      expect(result.output.output).toContain(
+        target.startsWith("file:") ? "cannot follow a redirect to file:" : "cannot follow a redirect with credentials",
+      )
+      expect(checked).toEqual([])
+      expect(hits).toHaveLength(1)
+    },
+  )
+
+  test("bounds redirect loops", async () => {
+    hits.length = 0
+    const result = await Effect.runPromise(
+      createCodeMode(
+        new Map(),
+        permissionService({ assert: () => Effect.void, assertNotDenied: () => Effect.void }),
+      ).execute({ code: `return await fetch("${server.url.origin}/loop")` }, context),
+    )
+
+    expect(result.output.error).toBe(true)
+    expect(result.output.output).toContain("Too many redirects (more than 20)")
+    expect(hits).toHaveLength(21)
+  })
 })
+
+it.effect("cached Code Mode runtimes keep permission authority and identity local to concurrent executions", () =>
+  Effect.gen(function* () {
+    const inventory = { tools: new Map<string, Info>() }
+    const release = yield* Deferred.make<void>()
+    const contexts = [
+      context,
+      {
+        ...context,
+        sessionID: Session.ID.make("ses_other"),
+        agent: Agent.ID.make("other"),
+        messageID: SessionMessage.ID.make("msg_other"),
+        id: Tool.CallID.make("call_other"),
+      },
+    ]
+    const executions = yield* Effect.forEach(contexts, (context) =>
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>()
+        const asked: Permission.AssertInput[] = []
+        const tool = CodeModeTool.create(
+          inventory,
+          (_, tool, input, context) => execute(tool, input, context),
+          permissionService({
+            assert: (input) =>
+              Effect.gen(function* () {
+                asked.push(input)
+                yield* Deferred.succeed(entered, undefined)
+                yield* Deferred.await(release)
+                return yield* new Permission.BlockedError({
+                  rules: [],
+                  permission: input.action,
+                  resources: input.resources,
+                })
+              }),
+          }),
+        )
+        return {
+          context,
+          entered,
+          asked,
+          execution: tool.execute({ code: 'return await fetch("https://example.invalid/blocked")' }, context),
+        }
+      }),
+    )
+    const fiber = yield* Effect.all(
+      executions.map((item) => item.execution),
+      { concurrency: "unbounded" },
+    ).pipe(Effect.forkChild)
+    yield* Effect.all(executions.map((item) => Deferred.await(item.entered)))
+    yield* Deferred.succeed(release, undefined)
+    const results = yield* Fiber.join(fiber)
+
+    expect(results.every((result) => result.output.error)).toBe(true)
+    executions.forEach((item) =>
+      expect(item.asked).toMatchObject([
+        {
+          sessionID: item.context.sessionID,
+          agent: item.context.agent,
+          source: { type: "tool", messageID: item.context.messageID, id: item.context.id },
+        },
+      ]),
+    )
+  }),
+)
+
+it.live("interrupting Code Mode fetch cancels an in-flight response body", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>()
+    const cancelled = yield* Deferred.make<void>()
+    const server = yield* Effect.acquireRelease(
+      Effect.sync(() =>
+        Bun.serve({
+          port: 0,
+          fetch: () =>
+            new Response(
+              new ReadableStream({
+                start(controller) {
+                  controller.enqueue(new TextEncoder().encode("waiting"))
+                  Effect.runSync(Deferred.succeed(started, undefined))
+                },
+                cancel() {
+                  Effect.runSync(Deferred.succeed(cancelled, undefined))
+                },
+              }),
+            ),
+        }),
+      ),
+      (server) => Effect.promise(() => server.stop(true)),
+    )
+    const fiber = yield* createCodeMode(new Map())
+      .execute({ code: `return await (await fetch("${server.url.origin}/stream")).text()` }, context)
+      .pipe(Effect.forkChild)
+    yield* Deferred.await(started)
+    expect(yield* Deferred.isDone(cancelled)).toBe(false)
+    yield* Fiber.interrupt(fiber)
+    yield* Deferred.await(cancelled).pipe(Effect.timeout("2 seconds"))
+  }),
+)
+
+it.live("interrupting Code Mode fetch aborts a request waiting for response headers", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>()
+    const cancelled = yield* Deferred.make<void>()
+    const server = yield* Effect.acquireRelease(
+      Effect.sync(() =>
+        Bun.serve({
+          port: 0,
+          fetch: (request) => {
+            request.signal.addEventListener("abort", () => Effect.runSync(Deferred.succeed(cancelled, undefined)), {
+              once: true,
+            })
+            Effect.runSync(Deferred.succeed(started, undefined))
+            return new Promise<Response>(() => {})
+          },
+        }),
+      ),
+      (server) => Effect.promise(() => server.stop(true)),
+    )
+    const fiber = yield* createCodeMode(new Map())
+      .execute({ code: `return await fetch("${server.url.origin}/waiting")` }, context)
+      .pipe(Effect.forkChild)
+    yield* Deferred.await(started)
+    expect(yield* Deferred.isDone(cancelled)).toBe(false)
+    yield* Fiber.interrupt(fiber)
+    yield* Deferred.await(cancelled).pipe(Effect.timeout("2 seconds"))
+  }),
+)
 
 test("canonical execution distinguishes declared, model-only, and raw schema outputs", async () => {
   const declared: Info = {

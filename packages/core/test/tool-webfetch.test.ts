@@ -566,6 +566,16 @@ describe("WebFetchTool registration", () => {
       expect(checks).toEqual([])
 
       reset()
+      respond = () =>
+        Effect.succeed(new Response("", { status: 302, headers: { location: "https://user@example.com/" } }))
+      expect(yield* executeTool(registry, call({ url: "https://example.com/a", format: "text" }))).toMatchObject({
+        status: "error",
+        error: { message: "URL must not include credentials" },
+      })
+      expect(checks).toEqual([])
+      expect(requests.map((request) => request.url)).toEqual(["https://example.com/a"])
+
+      reset()
       respond = (request) => Effect.succeed(new Response("", { status: 307, headers: { location: `${request.url}x` } }))
       expect(yield* executeTool(registry, call({ url: "https://example.com/a", format: "text" }))).toMatchObject({
         status: "error",

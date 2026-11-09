@@ -77,6 +77,54 @@ const transform = (service: Tool.Interface, tools: Readonly<Record<string, Info>
   )
 
 describe("Tool", () => {
+  testEffect(Layer.empty).effect(
+    "supplies permission authority to Code Mode fetch even when the webfetch tool is absent",
+    () => {
+      const assertions: Permission.AssertInput[] = []
+      return Effect.gen(function* () {
+        const registry = yield* Tool.Service
+        const snapshot = yield* registry.snapshot([{ action: "webfetch", resource: "*", effect: "deny" }])
+        expect(snapshot.definitions.map((tool) => tool.name)).toEqual(["execute"])
+        const result = yield* snapshot.execute({
+          ...call("execute"),
+          call: {
+            type: "tool-call",
+            id: "call-fetch",
+            name: "execute",
+            input: { code: 'return await fetch("https://example.invalid/blocked")' },
+          },
+        })
+
+        expect(result.output).toMatchObject({ error: true, output: expect.stringContaining("Permission denied") })
+        expect(assertions).toMatchObject([
+          {
+            action: "webfetch",
+            resources: ["https://example.invalid/blocked"],
+            sessionID,
+            agent: identity.agent,
+            source: { type: "tool", messageID: identity.messageID, id: "call-fetch" },
+          },
+        ])
+      }).pipe(
+        Effect.provide(
+          AppNodeBuilder.build(Tool.node, [
+            Image.node.replace(imageStore),
+            Permission.node.replace(
+              permissionLayer({
+                assert: (input) => {
+                  assertions.push(input)
+                  return Effect.fail(
+                    new Permission.BlockedError({ rules: [], permission: input.action, resources: input.resources }),
+                  )
+                },
+              }),
+            ),
+          ]),
+        ),
+      )
+    },
+  )
+
   it.effect("reads the current editor tools by effective name", () =>
     Effect.gen(function* () {
       const service = yield* Tool.Service

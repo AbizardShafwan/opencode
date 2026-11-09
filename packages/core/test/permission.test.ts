@@ -207,6 +207,30 @@ describe("Permission", () => {
     }),
   )
 
+  it.effect("redirect checks preserve inherited webfetch denies despite child rules and saved grants", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "*", resource: "*", effect: "allow" }])
+      const database = yield* Database.Service
+      yield* database.db
+        .update(SessionTable)
+        .set({ authority: [[{ action: "webfetch", resource: "https://blocked.example/*", effect: "deny" }]] })
+        .where(eq(SessionTable.id, Session.ID.make("ses_test")))
+        .run()
+        .pipe(Effect.orDie)
+      const saved = yield* PermissionSaved.Service
+      yield* saved.add({ projectID: Project.ID.global, action: "webfetch", resources: ["*"] })
+      const service = yield* Permission.Service
+      const blocked = yield* service
+        .assertNotDenied(assertion({ action: "webfetch", resources: ["https://blocked.example/private"] }))
+        .pipe(Effect.flip)
+
+      expect(blocked).toBeInstanceOf(Permission.BlockedError)
+      expect(blocked).toMatchObject({ resources: ["https://blocked.example/private"] })
+      yield* service.assertNotDenied(assertion({ action: "webfetch", resources: ["https://allowed.example/"] }))
+      expect(yield* service.list()).toEqual([])
+    }),
+  )
+
   test("matches Windows rule resources against slash-normalized file access resources", () => {
     const rules: Permission.Ruleset = [
       { action: "external_directory", resource: "C:\\Users\\x\\proj\\*", effect: "allow" },

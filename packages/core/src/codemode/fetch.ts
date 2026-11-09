@@ -20,7 +20,8 @@ const fetch = (input: string | URL, init: Init = {}) =>
     // matching.
     const url = String(input).split("#")[0]
     const parsed = URL.parse(url)
-    if (parsed?.protocol === "file:") return yield* Effect.fail(new Error("fetch cannot be used for filesystem access."))
+    if (parsed?.protocol === "file:")
+      return yield* Effect.fail(new Error("fetch cannot be used for filesystem access."))
     // Rules match the URL, so `https://user@evil.com` would slip past a rule for `https://evil.com/*`.
     if (parsed?.username || parsed?.password)
       return yield* Effect.fail(new TypeError("fetch cannot be used with credentials in the URL."))
@@ -54,7 +55,8 @@ const fetch = (input: string | URL, init: Init = {}) =>
         agent: execution.agent,
         source,
       })
-    const signal = AbortSignal.timeout(TIMEOUT_MS)
+    // The network request and body read must stop when their Code Mode execution is interrupted.
+    const signal = AbortSignal.any([yield* Effect.abortSignal, AbortSignal.timeout(TIMEOUT_MS)])
     const follow = (
       target: string,
       request: Init,
@@ -83,7 +85,7 @@ const fetch = (input: string | URL, init: Init = {}) =>
       )
     const result = yield* follow(url, init, 0)
     return yield* Effect.tryPromise({ try: () => read(result), catch: (error) => error })
-  })
+  }).pipe(Effect.scoped)
 
 export const MAX_REDIRECTS = 20
 const redirectStatuses = new Set([301, 302, 303, 307, 308])
