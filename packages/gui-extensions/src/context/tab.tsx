@@ -25,7 +25,6 @@ import { createKeyed, useExtension, type MountedSession } from "../sdk"
 import { catalogModel, syncCatalog } from "./catalog"
 import { fetchSessionExport, sessionExportFilename } from "./export"
 import { createSessionContextFormatter } from "./format"
-import { SessionContextUsage } from "./indicator"
 import { SessionProviderUsage } from "./usage"
 
 function RawMessageContent(props: { message: SessionMessageInfo; onRendered: () => void }) {
@@ -647,18 +646,14 @@ export default function SessionContextTab(props: { session: MountedSession }) {
                 </span>
               </div>
 
-              <div class="flex items-center gap-1.5 flex-wrap shrink-0 max-w-full">
-                <SessionContextUsage session={props.session} variant="badge" />
-
-                <div class="flex items-center gap-1.5 h-7 px-2.5 rounded-full bg-background-base border border-border-base shadow-xs shrink-0 max-w-full">
-                  <span class="sr-only">{ctx.t("stats.provider")}:</span>
-                  <span class="text-11-medium text-text-weak truncate">{providerLabel()}</span>
-                  <span aria-hidden="true" class="text-11-regular text-text-weak">
-                    ·
-                  </span>
-                  <span class="sr-only">{ctx.t("stats.model")}:</span>
-                  <span class="text-11-medium text-text-strong font-medium truncate">{modelLabel()}</span>
-                </div>
+              <div class="flex items-center gap-1.5 h-7 px-2.5 rounded-full bg-background-base border border-border-base shadow-xs shrink-0 max-w-full">
+                <span class="sr-only">{ctx.t("stats.provider")}:</span>
+                <span class="text-11-medium text-text-weak truncate">{providerLabel()}</span>
+                <span aria-hidden="true" class="text-11-regular text-text-weak">
+                  ·
+                </span>
+                <span class="sr-only">{ctx.t("stats.model")}:</span>
+                <span class="text-11-medium text-text-strong font-medium truncate">{modelLabel()}</span>
               </div>
             </div>
 
