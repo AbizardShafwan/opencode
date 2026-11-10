@@ -60,10 +60,7 @@ export function NorseRail(props: {
             aria-pressed={props.pinned}
             onClick={props.onTogglePin}
           >
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M9 4h6l-1 7 4 3v2H6v-2l4-3z" />
-              <path d="M12 16v4" />
-            </svg>
+            <Icon name={props.pinned ? "layout-left-full" : "layout-left-partial"} />
           </button>
         </div>
 
@@ -73,11 +70,7 @@ export function NorseRail(props: {
             <span>{tabs.store.length}</span>
           </div>
           {/* Titlebar owns the strip and its commands; the rail only supplies its portal destination. */}
-          <div
-            ref={props.onTabsMount}
-            data-slot="vertical-tabs-sidebar"
-            class="flex min-h-0 min-w-0 flex-1 flex-col"
-          />
+          <div ref={props.onTabsMount} data-slot="vertical-tabs-sidebar" class="flex min-h-0 min-w-0 flex-1 flex-col" />
         </div>
 
         <button

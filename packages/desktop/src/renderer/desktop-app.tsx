@@ -72,9 +72,7 @@ export function DesktopApp(props: { api: ElectronAPI; version: string }) {
 
   const router = (routerProps: BaseRouterProps) => <DesktopMemoryRouter {...routerProps} windowID={windowState.id} />
 
-  const readyToReveal = () =>
-    startup.ready &&
-    (!import.meta.env.OPENCODE_TEST_ONBOARDING || !firstLaunch() || initialUrl !== "/" || startup.drawingReady)
+  const readyToReveal = () => startup.ready && startup.drawingReady
 
   // Reveal only after the theme and the first-launch splash choice are both resolved.
   createEffect(() => {

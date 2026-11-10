@@ -391,7 +391,9 @@ html[data-theme="norse"] [data-slot="norse-rail-brand"]:hover [data-slot="norse-
   color: var(--norse-text);
 }
 
-html[data-theme="norse"] [data-slot="norse-rail-brand"]:is([data-active="true"], [data-state="pressed"], [aria-pressed="true"]) [data-slot="norse-rail-brand-rune"] {
+html[data-theme="norse"]
+  [data-slot="norse-rail-brand"]:is([data-active="true"], [data-state="pressed"], [aria-pressed="true"])
+  [data-slot="norse-rail-brand-rune"] {
   border-color: var(--norse-gold-line);
   background:
     radial-gradient(circle at 50% 118%, color-mix(in srgb, var(--norse-gold) 32%, transparent), transparent 60%),
@@ -401,7 +403,9 @@ html[data-theme="norse"] [data-slot="norse-rail-brand"]:is([data-active="true"],
     inset 0 0 12px color-mix(in srgb, var(--norse-gold) 20%, transparent);
 }
 
-html[data-theme="norse"] [data-slot="norse-rail-brand"]:is([data-active="true"], [data-state="pressed"], [aria-pressed="true"]) [data-slot="norse-rail-brand-text"] {
+html[data-theme="norse"]
+  [data-slot="norse-rail-brand"]:is([data-active="true"], [data-state="pressed"], [aria-pressed="true"])
+  [data-slot="norse-rail-brand-text"] {
   color: var(--norse-gold);
   text-shadow: 0 0 12px color-mix(in srgb, var(--norse-gold) 28%, transparent);
 }
@@ -422,18 +426,31 @@ html[data-theme="norse"] [data-slot="norse-rail-pin"] {
   transition:
     color 180ms ease,
     border-color 180ms ease,
-    background 180ms ease;
+    background 180ms ease,
+    box-shadow 180ms ease,
+    transform 180ms var(--norse-ease);
 }
 
 html[data-theme="norse"] [data-slot="norse-rail-pin"]:hover {
   color: var(--norse-text);
   border-color: var(--norse-royal-line);
+  background: color-mix(in srgb, var(--norse-royal) 10%, transparent);
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-pin"]:focus-visible {
+  outline: 2px solid var(--norse-royal-line);
+  outline-offset: 2px;
+}
+
+html[data-theme="norse"] [data-slot="norse-rail-pin"]:active {
+  transform: scale(0.94);
 }
 
 html[data-theme="norse"] [data-slot="norse-rail-pin"][aria-pressed="true"] {
   color: var(--norse-gold);
   border-color: var(--norse-gold-line);
   background: var(--norse-gold-soft);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--norse-gold) 22%, transparent);
 }
 
 html[data-theme="norse"] [data-slot="norse-rail-new"],
@@ -1010,9 +1027,7 @@ html[data-theme="norse"] [data-slot="session-timeline-scroll"]::after {
 }
 
 /* Only clip once the title is outside: theme selection can precede asynchronous stylesheet loading. */
-html[data-theme="norse"]
-  [data-slot="session-timeline-scroll"]
-  > [data-scrollable]:not(:has(> [data-session-title])) {
+html[data-theme="norse"] [data-slot="session-timeline-scroll"] > [data-scrollable]:not(:has(> [data-session-title])) {
   position: absolute;
   inset: 0;
   /* Unlike clip-path, a rectangular clip does not create a backdrop root that defeats the glass blur. */
