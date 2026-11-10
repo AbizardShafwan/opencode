@@ -25,16 +25,8 @@ import { createKeyed, useExtension, type MountedSession } from "../sdk"
 import { catalogModel, syncCatalog } from "./catalog"
 import { fetchSessionExport, sessionExportFilename } from "./export"
 import { createSessionContextFormatter } from "./format"
+import { SessionContextUsage } from "./indicator"
 import { SessionProviderUsage } from "./usage"
-
-function Stat(props: { label: string; value: JSX.Element }) {
-  return (
-    <div class="flex flex-col gap-1">
-      <div class="text-12-regular text-text-weak">{props.label}</div>
-      <div class="text-12-medium text-text-strong">{props.value}</div>
-    </div>
-  )
-}
 
 function RawMessageContent(props: { message: SessionMessageInfo; onRendered: () => void }) {
   const file = createMemo(() => {
@@ -514,28 +506,44 @@ export default function SessionContextTab(props: { session: MountedSession }) {
     return c.modelLabel
   })
 
-  const stats = [
-    { label: "stats.session", value: () => info()?.title ?? (props.session.id || "—") },
-    { label: "stats.messages", value: () => counts().all.toLocaleString(i18n.locale()) },
-    { label: "stats.provider", value: providerLabel },
-    { label: "stats.model", value: modelLabel },
-    { label: "stats.limit", value: () => formatter().number(context()?.limit) },
-    { label: "stats.totalTokens", value: () => formatter().number(context()?.total) },
-    { label: "stats.usage", value: () => formatter().percent(context()?.usage) },
-    { label: "stats.inputTokens", value: () => formatter().number(context()?.input) },
-    { label: "stats.outputTokens", value: () => formatter().number(context()?.tokens.output) },
-    { label: "stats.reasoningTokens", value: () => formatter().number(context()?.tokens.reasoning) },
+  const tokenSegments = createMemo(() => {
+    const c = context()
+    const limit = c?.limit ?? 0
+
+    if (!c || limit <= 0) return { cache: 0, input: 0, output: 0, reasoning: 0 }
+
+    const pct = (value: number) => Math.min(100, Math.max(0, (value / limit) * 100))
+    const cache = pct(c.tokens.cache.read + c.tokens.cache.write)
+    const input = Math.min(100 - cache, pct(c.tokens.input))
+    const output = Math.min(100 - cache - input, pct(c.tokens.output))
+    const reasoning = Math.min(100 - cache - input - output, pct(c.tokens.reasoning))
+
+    return { cache, input, output, reasoning }
+  })
+
+  const tokenBreakdown = [
+    {
+      label: "stats.inputTokens",
+      dot: "bg-icon-base",
+      value: () => formatter().number(context()?.input),
+    },
+    {
+      label: "stats.outputTokens",
+      dot: "bg-icon-success-base",
+      value: () => formatter().number(context()?.tokens.output),
+    },
+    {
+      label: "stats.reasoningTokens",
+      dot: "bg-icon-warning-base",
+      value: () => formatter().number(context()?.tokens.reasoning),
+    },
     {
       label: "stats.cacheTokens",
+      dot: "bg-icon-info-base",
       value: () =>
         `${formatter().number(context()?.tokens.cache.read)} / ${formatter().number(context()?.tokens.cache.write)}`,
     },
-    { label: "stats.userMessages", value: () => counts().user.toLocaleString(i18n.locale()) },
-    { label: "stats.assistantMessages", value: () => counts().assistant.toLocaleString(i18n.locale()) },
-    { label: "stats.totalCost", value: cost },
-    { label: "stats.sessionCreated", value: () => formatter().time(info()?.time.created) },
-    { label: "stats.lastActivity", value: () => formatter().time(context()?.message.time.created) },
-  ] satisfies { label: string; value: () => JSX.Element }[]
+  ] satisfies { label: string; dot: string; value: () => JSX.Element }[]
 
   const exportSession = async () => {
     const sessionID = props.session.id
@@ -626,8 +634,165 @@ export default function SessionContextTab(props: { session: MountedSession }) {
       onScroll={handleScroll}
     >
       <div data-slot="session-usage-content" class="px-4 pt-4 pb-6 flex flex-col gap-6 md:px-6 md:pb-10 md:gap-10">
-        <div class="grid grid-cols-1 @[32rem]:grid-cols-2 gap-4">
-          <For each={stats}>{(stat) => <Stat label={ctx.t(stat.label)} value={stat.value()} />}</For>
+        <div data-slot="session-context-summary" class="flex flex-col gap-3">
+          <div
+            data-slot="session-context-identity"
+            class="flex flex-col gap-3 p-4 rounded-xl border border-border-base bg-surface-base shadow-xs"
+          >
+            <div class="flex items-start justify-between gap-3 flex-wrap">
+              <div class="flex flex-col gap-0.5 min-w-[8rem] flex-1">
+                <span class="text-11-regular text-text-weak">{ctx.t("stats.session")}</span>
+                <span class="text-14-medium text-text-strong font-medium truncate">
+                  {info()?.title ?? (props.session.id || "—")}
+                </span>
+              </div>
+
+              <div class="flex items-center gap-1.5 flex-wrap shrink-0 max-w-full">
+                <SessionContextUsage session={props.session} variant="badge" />
+
+                <div class="flex items-center gap-1.5 h-7 px-2.5 rounded-full bg-background-base border border-border-base shadow-xs shrink-0 max-w-full">
+                  <span class="sr-only">{ctx.t("stats.provider")}:</span>
+                  <span class="text-11-medium text-text-weak truncate">{providerLabel()}</span>
+                  <span aria-hidden="true" class="text-11-regular text-text-weak">
+                    ·
+                  </span>
+                  <span class="sr-only">{ctx.t("stats.model")}:</span>
+                  <span class="text-11-medium text-text-strong font-medium truncate">{modelLabel()}</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 @[24rem]:grid-cols-2 gap-2 pt-2.5 border-t border-border-base/50">
+              <div class="flex items-baseline justify-between @[24rem]:justify-start gap-2 min-w-0">
+                <span class="text-11-regular text-text-weak shrink-0">{ctx.t("stats.sessionCreated")}</span>
+                <span class="text-11-medium text-text-base font-mono tabular-nums truncate">
+                  {formatter().time(info()?.time.created)}
+                </span>
+              </div>
+
+              <div class="flex items-baseline justify-between @[24rem]:justify-end gap-2 min-w-0">
+                <span class="text-11-regular text-text-weak shrink-0">{ctx.t("stats.lastActivity")}</span>
+                <span class="text-11-medium text-text-base font-mono tabular-nums truncate">
+                  {formatter().time(context()?.message.time.created)}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div
+            data-slot="session-context-occupancy"
+            class="flex flex-col gap-3.5 p-4 rounded-xl border border-border-base bg-surface-base shadow-xs"
+          >
+            <div class="flex flex-wrap items-end justify-between gap-x-4 gap-y-2">
+              <div class="flex flex-col gap-0.5 shrink-0">
+                <span class="text-11-regular text-text-weak">{ctx.t("stats.usage")}</span>
+                <span class="text-16-medium font-semibold text-text-strong font-mono tabular-nums">
+                  {formatter().percent(context()?.usage)}
+                </span>
+              </div>
+
+              <div class="flex flex-col @[22rem]:items-end gap-0.5 min-w-0">
+                <div class="flex items-center @[22rem]:justify-end gap-1 text-11-regular text-text-weak flex-wrap">
+                  <span>{ctx.t("stats.totalTokens")}</span>
+                  <span aria-hidden="true">/</span>
+                  <span>{ctx.t("stats.limit")}</span>
+                </div>
+
+                <div class="flex items-baseline @[22rem]:justify-end gap-1 font-mono tabular-nums text-12-medium">
+                  <span class="text-text-strong font-semibold">{formatter().number(context()?.total)}</span>
+                  <span aria-hidden="true" class="text-text-weak">
+                    /
+                  </span>
+                  <span class="text-text-weak">{formatter().number(context()?.limit)}</span>
+                </div>
+              </div>
+            </div>
+
+            <div
+              role="progressbar"
+              aria-label={ctx.t("stats.usage")}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={context()?.usage ?? 0}
+              class="h-2.5 w-full rounded-full bg-surface-inset-base overflow-hidden flex gap-px p-0.5"
+            >
+              <Show when={tokenSegments().cache > 0}>
+                <div
+                  class="h-full bg-icon-info-base rounded-l-full first:rounded-l-full last:rounded-r-full transition-all duration-200"
+                  style={{ width: `${tokenSegments().cache}%` }}
+                />
+              </Show>
+              <Show when={tokenSegments().input > 0}>
+                <div
+                  class="h-full bg-icon-base first:rounded-l-full last:rounded-r-full transition-all duration-200"
+                  style={{ width: `${tokenSegments().input}%` }}
+                />
+              </Show>
+              <Show when={tokenSegments().output > 0}>
+                <div
+                  class="h-full bg-icon-success-base first:rounded-l-full last:rounded-r-full transition-all duration-200"
+                  style={{ width: `${tokenSegments().output}%` }}
+                />
+              </Show>
+              <Show when={tokenSegments().reasoning > 0}>
+                <div
+                  class="h-full bg-icon-warning-base first:rounded-l-full last:rounded-r-full transition-all duration-200"
+                  style={{ width: `${tokenSegments().reasoning}%` }}
+                />
+              </Show>
+            </div>
+
+            <div class="grid grid-cols-1 @[24rem]:grid-cols-2 @[38rem]:grid-cols-4 gap-2 pt-0.5">
+              <For each={tokenBreakdown}>
+                {(item) => (
+                  <div class="flex items-center justify-between @[24rem]:flex-col @[24rem]:items-stretch gap-2 @[24rem]:gap-1 p-2.5 rounded-lg bg-background-base border border-border-base min-w-0">
+                    <div class="flex items-center @[24rem]:items-start gap-1.5 min-w-0">
+                      <span class={`w-2 h-2 @[24rem]:mt-1 rounded-full shrink-0 ${item.dot}`} />
+                      <span class="text-11-regular text-text-weak leading-4 min-w-0">{ctx.t(item.label)}</span>
+                    </div>
+                    <div class="text-12-medium font-mono text-text-strong tabular-nums shrink-0 @[24rem]:truncate">
+                      {item.value()}
+                    </div>
+                  </div>
+                )}
+              </For>
+            </div>
+          </div>
+
+          <div
+            data-slot="session-context-totals"
+            class="grid grid-cols-1 @[24rem]:grid-cols-2 gap-3"
+          >
+            <div class="flex flex-col justify-between gap-2 p-4 rounded-xl border border-border-base bg-surface-base shadow-xs">
+              <span class="text-11-regular text-text-weak">{ctx.t("stats.totalCost")}</span>
+              <span class="text-16-medium font-semibold text-text-strong font-mono tabular-nums">{cost()}</span>
+            </div>
+
+            <div class="flex flex-col justify-between gap-2 p-4 rounded-xl border border-border-base bg-surface-base shadow-xs">
+              <div class="flex items-baseline justify-between gap-2">
+                <span class="text-11-regular text-text-weak">{ctx.t("stats.messages")}</span>
+                <span class="text-16-medium font-semibold text-text-strong font-mono tabular-nums">
+                  {counts().all.toLocaleString(i18n.locale())}
+                </span>
+              </div>
+
+              <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 pt-2 border-t border-border-base/50 text-11-regular">
+                <div class="flex items-baseline gap-1.5">
+                  <span class="text-text-weak">{ctx.t("stats.userMessages")}</span>
+                  <span class="font-mono text-11-medium text-text-strong tabular-nums">
+                    {counts().user.toLocaleString(i18n.locale())}
+                  </span>
+                </div>
+
+                <div class="flex items-baseline gap-1.5">
+                  <span class="text-text-weak">{ctx.t("stats.assistantMessages")}</span>
+                  <span class="font-mono text-11-medium text-text-strong tabular-nums">
+                    {counts().assistant.toLocaleString(i18n.locale())}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
 
         <SessionProviderUsage session={props.session} providerID={usageProviderID()} />
@@ -675,7 +840,7 @@ export default function SessionContextTab(props: { session: MountedSession }) {
 
                 <Show when={ceilingTokens() > 0 && ceilingTokens() < hardLimit()}>
                   <div
-                    class="absolute w-1 h-3 bg-surface-warning-base z-10 pointer-events-none rounded-full"
+                    class="absolute w-1 h-3 bg-icon-warning-base z-10 pointer-events-none rounded-full"
                     style={{ left: `calc(${Math.min(99, (ceilingTokens() / hardLimit()) * 100)}% - 2px)` }}
                   />
                 </Show>
@@ -703,7 +868,7 @@ export default function SessionContextTab(props: { session: MountedSession }) {
 
                 <Show when={ceilingTokens() > 0 && ceilingTokens() < hardLimit()}>
                   <span class="min-w-0 text-center text-text-base">
-                    <span class="inline-block w-1.5 h-1.5 mr-1 rounded-full bg-surface-warning-base" />~
+                    <span class="inline-block w-1.5 h-1.5 mr-1 rounded-full bg-icon-warning-base" />~
                     {formatTokenLimit(ceilingTokens())} {ctx.t("contextLimit.compactionThreshold")}
                   </span>
                 </Show>
@@ -723,7 +888,7 @@ export default function SessionContextTab(props: { session: MountedSession }) {
                       class={`px-2.5 py-1 text-11-medium rounded-full border transition-all ${
                         active()
                           ? "bg-surface-raised-base border-border-strong-base text-text-strong font-semibold shadow-xs"
-                          : "bg-surface-inset-base/60 hover:bg-surface-raised-base border-border-base text-text-weak hover:text-text-base cursor-pointer"
+                          : "bg-background-base hover:bg-surface-raised-base border-border-base text-text-weak hover:text-text-base cursor-pointer"
                       }`}
                       onClick={() => handlePresetClick(preset)}
                     >
@@ -738,7 +903,7 @@ export default function SessionContextTab(props: { session: MountedSession }) {
                 class={`px-2.5 py-1 text-11-medium rounded-full border transition-all ${
                   effectiveLimit() === hardLimit()
                     ? "bg-surface-raised-base border-border-strong-base text-text-strong font-semibold shadow-xs"
-                    : "bg-surface-inset-base/60 hover:bg-surface-raised-base border-border-base text-text-weak hover:text-text-base cursor-pointer"
+                    : "bg-background-base hover:bg-surface-raised-base border-border-base text-text-weak hover:text-text-base cursor-pointer"
                 }`}
                 onClick={() => handlePresetClick(hardLimit())}
               >
@@ -754,8 +919,8 @@ export default function SessionContextTab(props: { session: MountedSession }) {
             </div>
 
             <div class="grid grid-cols-1 @[24rem]:grid-cols-2 gap-2 pt-1">
-              <div class="flex items-center gap-2.5 p-2.5 rounded-lg bg-surface-inset-base/50 border border-border-base">
-                <div class="w-2 h-2 rounded-full bg-surface-warning-base shrink-0" />
+              <div class="flex items-center gap-2.5 p-2.5 rounded-lg bg-background-base border border-border-base">
+                <div class="w-2 h-2 rounded-full bg-icon-warning-base shrink-0" />
 
                 <div class="flex flex-col min-w-0">
                   <span class="text-10-regular text-text-weak uppercase tracking-wider break-words">
@@ -766,7 +931,7 @@ export default function SessionContextTab(props: { session: MountedSession }) {
                 </div>
               </div>
 
-              <div class="flex items-center gap-2.5 p-2.5 rounded-lg bg-surface-inset-base/50 border border-border-base">
+              <div class="flex items-center gap-2.5 p-2.5 rounded-lg bg-background-base border border-border-base">
                 <div class="w-2 h-2 rounded-full bg-icon-info-base shrink-0" />
 
                 <div class="flex flex-col min-w-0">

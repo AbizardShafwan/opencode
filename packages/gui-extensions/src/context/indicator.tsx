@@ -19,7 +19,7 @@ function ContextTooltipRow(props: { name: JSX.Element; value: JSX.Element }) {
 
 export function SessionContextUsage(props: {
   session: MountedSession
-  variant?: "button" | "composer" | "indicator"
+  variant?: "button" | "composer" | "indicator" | "badge"
   placement?: ComponentProps<typeof Tooltip>["placement"]
 }) {
   const ctx = useExtension()
@@ -116,17 +116,27 @@ export function SessionContextUsage(props: {
     layout.toggle(`${ctx.id}:main`, props.session)
   }
 
+  const ringProgressColor = createMemo(() => {
+    const usage = context()?.usage ?? 0
+
+    if (usage >= 90) return "var(--icon-critical-base, var(--v2-icon-icon-base))"
+
+    if (usage >= 75) return "var(--icon-warning-base, var(--v2-icon-icon-base))"
+
+    return "var(--v2-icon-icon-base, var(--icon-base))"
+  })
+
   const circle = () => (
     <div class="flex items-center justify-center">
       <ProgressCircle
         appearance="indicator"
-        size={16}
+        size={15}
         strokeWidth={2}
         percentage={context()?.usage ?? 0}
         style={{
           "--progress-circle-background": "var(--v2-background-bg-layer-04, var(--border-weak-base))",
           "--progress-circle-background-overlay": "var(--v2-overlay-simple-overlay-pressed, transparent)",
-          "--progress-circle-progress": "var(--v2-icon-icon-base, var(--icon-base))",
+          "--progress-circle-progress": ringProgressColor(),
         }}
       />
     </div>
@@ -134,7 +144,17 @@ export function SessionContextUsage(props: {
 
   const compactCircle = () => (
     <div class="flex items-center justify-center">
-      <ProgressCircle appearance="compact" size={16} percentage={context()?.usage ?? 0} />
+      <ProgressCircle
+        appearance="indicator"
+        size={14}
+        strokeWidth={2}
+        percentage={context()?.usage ?? 0}
+        style={{
+          "--progress-circle-background": "var(--border-base, var(--v2-background-bg-layer-04))",
+          "--progress-circle-background-overlay": "transparent",
+          "--progress-circle-progress": ringProgressColor(),
+        }}
+      />
     </div>
   )
 
@@ -148,51 +168,87 @@ export function SessionContextUsage(props: {
     </div>
   )
 
+  const expanded = () => layout.state(`${ctx.id}:main`, props.session) === "visible"
+
   return (
     <Show when={props.session.id}>
       <Tooltip
-        value={variant() === "indicator" ? tooltipValue() : ctx.t("usage.toggle")}
+        value={variant() === "indicator" || variant() === "badge" ? tooltipValue() : ctx.t("usage.toggle")}
         placement={props.placement ?? "top"}
       >
         <Show
           when={variant() === "indicator"}
           fallback={
-            <Button
-              type="button"
-              variant="ghost-muted"
-              class="group shrink-0"
-              style={{ padding: "0 6px", color: "var(--v2-text-text-faint)" }}
-              onClick={openContext}
-              aria-expanded={layout.state(`${ctx.id}:main`, props.session) === "visible"}
-              aria-label={ctx.t("usage.toggle")}
-            >
-              <span class="flex items-center gap-2 whitespace-nowrap group-active:text-v2-text-text-muted">
-                {compactCircle()}
-                <span>{tokens()}</span>
-                <Show
-                  when={variant() === "composer"}
-                  fallback={
-                    <Show when={showCost()}>
-                      <span aria-hidden="true" class="flex w-1.5 shrink-0 items-center justify-center">
-                        ·
-                      </span>
-                      <span>{cost()}</span>
-                    </Show>
-                  }
+            <Show
+              when={variant() === "badge"}
+              fallback={
+                <Button
+                  type="button"
+                  variant="ghost-muted"
+                  data-slot="session-context-trigger"
+                  data-variant={variant()}
+                  class={`group shrink-0 h-7 rounded-full border px-2.5 transition-colors ${
+                    expanded()
+                      ? "bg-surface-raised-base border-border-strong-base text-text-strong shadow-xs"
+                      : "bg-surface-base hover:bg-surface-raised-base border-border-base text-text-weak hover:text-text-base shadow-xs"
+                  }`}
+                  onClick={openContext}
+                  aria-expanded={expanded()}
+                  aria-label={ctx.t("usage.toggle")}
                 >
+                  <span class="flex items-center gap-1.5 whitespace-nowrap font-mono text-11-medium tabular-nums">
+                    {compactCircle()}
+                    <span class="text-text-strong font-medium">{tokens()}</span>
+                    <Show
+                      when={variant() === "composer"}
+                      fallback={
+                        <Show when={showCost()}>
+                          <span aria-hidden="true" class="flex w-1 shrink-0 items-center justify-center text-text-weak">
+                            ·
+                          </span>
+                          <span class="text-text-weak group-hover:text-text-base transition-colors">{cost()}</span>
+                        </Show>
+                      }
+                    >
+                      <Show when={limit()}>
+                        {(value) => (
+                          <>
+                            <span
+                              aria-hidden="true"
+                              class="flex w-1 shrink-0 items-center justify-center text-text-weak"
+                            >
+                              /
+                            </span>
+                            <span class="text-text-weak group-hover:text-text-base transition-colors">{value()}</span>
+                          </>
+                        )}
+                      </Show>
+                    </Show>
+                  </span>
+                </Button>
+              }
+            >
+              <div
+                data-slot="session-context-trigger"
+                data-variant="badge"
+                class="inline-flex shrink-0 h-7 items-center rounded-full border border-border-base bg-background-base px-2.5 shadow-xs"
+              >
+                <span class="flex items-center gap-1.5 whitespace-nowrap font-mono text-11-medium tabular-nums">
+                  {compactCircle()}
+                  <span class="text-text-strong font-medium">{tokens()}</span>
                   <Show when={limit()}>
                     {(value) => (
                       <>
-                        <span aria-hidden="true" class="flex w-1.5 shrink-0 items-center justify-center">
+                        <span aria-hidden="true" class="flex w-1 shrink-0 items-center justify-center text-text-weak">
                           /
                         </span>
-                        <span>{value()}</span>
+                        <span class="text-text-weak">{value()}</span>
                       </>
                     )}
                   </Show>
-                </Show>
-              </span>
-            </Button>
+                </span>
+              </div>
+            </Show>
           }
         >
           {circle()}

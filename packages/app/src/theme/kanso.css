@@ -580,36 +580,12 @@ html[data-theme="kanso"] [data-slot="session-usage-content"] {
   padding: 28px 28px 48px;
 }
 
-html[data-theme="kanso"] [data-slot="session-usage-content"] > .grid {
-  grid-template-columns: minmax(0, 1fr);
-  gap: 0;
-  border-top: 1px solid var(--kanso-rule);
-}
-
-html[data-theme="kanso"] [data-slot="session-usage-content"] > .grid > div {
-  display: flex;
-  flex-direction: row;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 16px;
-  border-bottom: 1px solid var(--kanso-rule);
-  padding: 11px 0;
-}
-
-html[data-theme="kanso"] [data-slot="session-usage-content"] > .grid > div > div:first-child {
-  font-family: var(--kanso-serif);
-  font-size: 11px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--v2-text-text-faint);
-}
-
-html[data-theme="kanso"] [data-slot="session-usage-content"] > .grid > div > div:last-child {
-  font-family: var(--kanso-serif);
-  font-size: 15px;
-  font-weight: 400;
-  color: var(--v2-text-text-base);
-  text-align: end;
+html[data-theme="kanso"] [data-slot="session-context-identity"],
+html[data-theme="kanso"] [data-slot="session-context-occupancy"],
+html[data-theme="kanso"] [data-slot="session-context-totals"] > div,
+html[data-theme="kanso"] [data-slot="session-context-limit"] {
+  border-radius: 0;
+  border-color: var(--kanso-rule);
 }
 
 /* ── Home and settings ────────────────────────────────────────────────── */

@@ -10,7 +10,6 @@ import {
 import { createData } from "@opencode/client/solid"
 import { ExtensionContext, useExtension, type Context, type MountedSession, type ServerRef } from "../sdk"
 import SessionContextTab from "./tab"
-import { SessionContextUsage } from "./indicator"
 
 function LimitFixture() {
   const base = useExtension()
@@ -165,7 +164,6 @@ function LimitFixture() {
         </div>
         <pre aria-label="Writes">{state.writes.join("\n")}</pre>
         <Show when={ready() && state.mounted}>
-          <SessionContextUsage session={mounted[state.selected]!} variant="composer" />
           <div class="h-[900px] max-w-2xl">
             <SessionContextTab session={mounted[state.selected]!} />
           </div>
