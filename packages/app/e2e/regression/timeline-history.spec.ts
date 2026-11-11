@@ -10,7 +10,9 @@ import {
   setupTimeline,
   status,
   textPart,
+  toolPart,
   userMessage,
+  userText,
 } from "../utils/timeline"
 import { expectSessionTitle } from "../utils/waits"
 
@@ -351,11 +353,174 @@ test.describe("timeline history", () => {
       }
     })
   }
+
+  test("keeps visible rows monotonic while wheeling upward from an expanded activity group into unmeasured turns", async ({
+    page,
+  }) => {
+    const turns = Array.from({ length: 14 }, (_, index) => {
+      const id = `msg_upward_user_${String(index).padStart(2, "0")}`
+
+      return [
+        userMessage([userText(`User prompt ${index}: ${"context line ".repeat(18)}`)], {
+          id,
+          created: 1700000000000 + index * 2_000,
+        }),
+        assistantMessage(
+          index === 13
+            ? [
+                ...Array.from({ length: 18 }, (_, toolIndex) =>
+                  toolPart(`upward_tool_${toolIndex}`, "shell", "completed", {
+                    command: `echo step ${toolIndex}`,
+                  }),
+                ),
+                textPart("upward_final_reply", "Completed the final inspection."),
+              ]
+            : [
+                textPart(
+                  `upward_reply_${index}`,
+                  [
+                    `## Earlier reply ${index}`,
+                    Array.from({ length: 6 }, (_, line) => `- Detailed paragraph ${index}.${line} ${"words ".repeat(12)}`).join(
+                      "\n",
+                    ),
+                  ].join("\n\n"),
+                ),
+              ],
+          {
+            id: `msg_upward_assistant_${String(index).padStart(2, "0")}`,
+            parentID: id,
+            created: 1700000001000 + index * 2_000,
+          },
+        ),
+      ]
+    }).flat()
+
+    await setupTimeline(page, {
+      messages: turns,
+      viewport: { width: 1280, height: 800 },
+    })
+
+    const scroller = timelineScroller(page)
+    const groupTrigger = page.getByRole("button", { name: "Used 18 Shell", exact: true })
+    await expect(groupTrigger).toBeVisible()
+    await groupTrigger.click()
+    await expect(page.locator('[data-slot="context-tool-group-item"]')).toHaveCount(18)
+
+    await page.evaluate(() => {
+      const root = [...document.querySelectorAll<HTMLElement>(".scroll-view__viewport")].find((element) =>
+        element.querySelector("[data-timeline-row]"),
+      )!
+
+      const samples: UpwardSample[] = []
+      let frame = 0
+      let handle = 0
+
+      const tick = () => {
+        const view = root.getBoundingClientRect()
+
+        const rows = Object.fromEntries(
+          [...root.querySelectorAll<HTMLElement>("[data-timeline-key]")].flatMap((row) => {
+            const rect = row.getBoundingClientRect()
+
+            if (rect.bottom <= view.top || rect.top >= view.bottom) return []
+
+            return [
+              [
+                row.dataset.timelineKey!,
+                {
+                  top: Math.round((rect.top - view.top) * 10) / 10,
+                  height: Math.round(rect.height * 10) / 10,
+                },
+              ] as const,
+            ]
+          }),
+        )
+
+        samples.push({ frame, scrollTop: Math.round(root.scrollTop * 10) / 10, rows })
+        frame += 1
+        handle = requestAnimationFrame(tick)
+      }
+
+      window.__upwardProbe = {
+        samples,
+        stop: () => cancelAnimationFrame(handle),
+      }
+      handle = requestAnimationFrame(tick)
+    })
+
+    await scroller.hover()
+
+    for (let step = 0; step < 65; step++) {
+      const before = await scroller.evaluate((element) => element.scrollTop)
+
+      if (before <= 1) break
+      await page.mouse.wheel(0, -320)
+      await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).not.toBe(before)
+    }
+
+    const firstReply = page.getByRole("heading", { name: "Earlier reply 0", exact: true })
+    await expect(firstReply).toBeVisible()
+    // Wait until every mounted markdown block has finished rendering and the sampler has observed that frame.
+    await expect(page.locator('[data-component="markdown"]:not([data-markdown-ready])')).toHaveCount(0)
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const last =
+            window.__upwardProbe?.samples.at(-1)?.rows[
+              "assistant-part:part:part:msg_upward_assistant_00:msg_upward_assistant_00:text:0"
+            ]
+
+          return (last?.height ?? 0) > 200
+        }),
+      )
+      .toBe(true)
+
+    const samples = await page.evaluate(() => {
+      const probe = window.__upwardProbe!
+      probe.stop()
+
+      return probe.samples
+    })
+
+    // During strictly upward wheel input, any row visible in consecutive frames must move downward on screen
+    // (top increasing or staying equal), never jumping upward against the scroll gesture or lunging downward
+    // by hundreds of pixels on a static frame when earlier markdown finishes.
+    const jumps = samples.slice(1).flatMap((sample, index) => {
+      const previous = samples[index]!
+      const scrollTopDelta = Math.round((sample.scrollTop - previous.scrollTop) * 10) / 10
+
+      return Object.entries(sample.rows).flatMap(([key, row]) => {
+        const before = previous.rows[key]
+
+        if (before === undefined) return []
+
+        // A row that was already measured at its full height represents settled content the user is reading.
+        // During upward wheeling, settled content must move monotonically downward on screen (delta >= 0) and
+        // never lunge downward by more than the 320px wheel step when earlier rows mount or finish markdown.
+        if (row.height !== before.height) return []
+
+        const delta = Math.round((row.top - before.top) * 10) / 10
+
+        if (delta >= -2 && delta <= 340) return []
+
+        return [{ frame: sample.frame, key, beforeTop: before.top, afterTop: row.top, delta, scrollTopDelta }]
+      })
+    })
+
+    expect(jumps).toEqual([])
+  })
 })
+
+type UpwardSample = {
+  frame: number
+  scrollTop: number
+  rows: Record<string, { top: number; height: number }>
+}
 
 declare global {
   interface Window {
     __historyRootProbe?: { arm(): string[]; hidden: boolean; settle(final: ProbeFinal): void; settled: boolean }
+    __upwardProbe?: { samples: UpwardSample[]; stop(): void }
   }
 }
 

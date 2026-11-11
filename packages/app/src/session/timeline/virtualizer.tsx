@@ -191,6 +191,7 @@ export function createTimelineVirtualizer(input: Input) {
   let pointerHeld = false
   let maxScroll = 0
   let virtualContent: HTMLDivElement | undefined
+  let scrollDirection: "up" | "down" | undefined
   let scrollTop = 0
   let reportOffset: ((offset: number, scrolling: boolean) => void) | undefined
   let reportRect: ((rect: { width: number; height: number }) => void) | undefined
@@ -323,7 +324,7 @@ export function createTimelineVirtualizer(input: Input) {
       resizeScheduled = false
 
       if (!pendingSizes.size) return
-      const sizes = [...pendingSizes]
+      const sizes = [...pendingSizes].sort(([a], [b]) => a - b)
       pendingSizes.clear()
 
       if (!active()) return
@@ -364,15 +365,33 @@ export function createTimelineVirtualizer(input: Input) {
     })
   }
 
-  onCleanup(() => pendingSizes.clear())
+  const deferredPending = new Set<string>()
+  onCleanup(() => {
+    pendingSizes.clear()
+    deferredPending.clear()
+  })
   virtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item, delta, instance) => {
-    // Prepended rows can resize more than once as deferred content mounts. Keep
-    // compensating while they remain entirely above the visible content fold.
+    const key = String(item.key)
+    const unmeasured = !instance.itemSizeCache.has(item.key)
+    const pending = deferredPending.has(key)
+
+    // The first measurement of a pending markdown row records only its empty shell
+    // while the worker finishes in the microtask; clear pending once a post-mount
+    // resize runs with the ready DOM.
+    if (pending && !unmeasured && !virtualizer.elementsCache.get(item.key)?.querySelector(pendingMarkdown))
+      deferredPending.delete(key)
+    const offset = (instance.scrollOffset ?? 0) + instance.scrollAdjustments
+    const fold = offset + instance.options.scrollMargin
     const first = instance.range?.startIndex
 
-    const adjust = addedKeys.has(String(item.key))
-      ? item.end <= (instance.scrollOffset ?? 0) + instance.scrollAdjustments + instance.options.scrollMargin
-      : first !== undefined && item.index < first
+    // Prepended rows can resize more than once as deferred content mounts. While
+    // scrolling upward, unmeasured and deferred-markdown rows entering at the top
+    // also grow toward the settled content below them when scrollTop can absorb it.
+    const adjust = addedKeys.has(key)
+      ? item.end <= fold
+      : (unmeasured || pending) && scrollDirection === "up" && !touchScrolling
+        ? offset > 0 && offset + delta >= 0 && item.start < fold + (instance.scrollRect ?? instance.options.initialRect).height
+        : first !== undefined && item.index < first
 
     if (!touchScrolling || input.pinned()) return adjust
 
@@ -468,6 +487,7 @@ export function createTimelineVirtualizer(input: Input) {
   }
 
   function prepareNavigation() {
+    scrollDirection = undefined
     releaseAnchor()
 
     if (touchStart === undefined) touchScrolling = false
@@ -634,6 +654,7 @@ export function createTimelineVirtualizer(input: Input) {
 
     if (measuredSessionKey !== key) {
       measuredSessionKey = key
+      deferredPending.clear()
       virtualizer.measure()
     }
   })
@@ -664,6 +685,8 @@ export function createTimelineVirtualizer(input: Input) {
     if (event.deltaY < 0 && scrollKeyOwner(event.currentTarget, event.target, "up") !== event.currentTarget) return
     releaseAnchor()
     input.onUserScroll(event.target)
+
+    if (event.deltaY !== 0) scrollDirection = event.deltaY < 0 ? "up" : "down"
 
     if (event.deltaY < 0) input.onUnpin()
   }
@@ -700,6 +723,8 @@ export function createTimelineVirtualizer(input: Input) {
     if (!active()) return
 
     // Dragging the content downward reveals earlier messages.
+    if (current !== previous) scrollDirection = current > previous ? "up" : "down"
+
     if (current <= previous) return
 
     // A nested scrollport owns the intent. If it chains into the timeline at a
@@ -755,6 +780,7 @@ export function createTimelineVirtualizer(input: Input) {
     if (scrollKeyOwner(event.currentTarget, event.target, key) !== event.currentTarget) return
     releaseAnchor()
     input.onUserScroll(event.currentTarget)
+    scrollDirection = upwardKeys.has(key) ? "up" : "down"
 
     if (upwardKeys.has(key)) input.onUnpin()
   }
@@ -773,8 +799,15 @@ export function createTimelineVirtualizer(input: Input) {
     const arrived = scrollTop > previousTop + endEpsilon || maxScroll < previousMaxScroll
 
     // An anchor holds its tool even when reaching it lands at the end; only the user's own scroll lets it go.
-    if (maxScroll <= 1 || (atEnd && arrived && !rendering.anchor)) input.onPin()
-    else if ((pointerHeld || touchScrolling) && scrollTop < previousTop - endEpsilon) input.onUnpin()
+    if (maxScroll <= 1 || (atEnd && arrived && !rendering.anchor)) {
+      scrollDirection = "down"
+      input.onPin()
+    } else if ((pointerHeld || touchScrolling) && Math.abs(scrollTop - previousTop) > endEpsilon) {
+      scrollDirection = scrollTop < previousTop ? "up" : "down"
+
+      if (scrollTop < previousTop) input.onUnpin()
+    }
+
     settleColdBottom()
     input.onScheduleScrollState(root)
     input.onHistoryScroll()
@@ -790,10 +823,23 @@ export function createTimelineVirtualizer(input: Input) {
       const [ready, setReady] = createSignal(initialItem.size <= fallbackItemSize || !props.deferred(initialRow))
       let contentMeasureFrame: number | undefined
 
-      onMount(() => virtualizer.measureElement(element))
+      onMount(() => {
+        const unmeasured = !virtualizer.itemSizeCache.has(rowProps.rowKey)
+
+        if ((unmeasured || deferredPending.has(rowProps.rowKey)) && element.querySelector(pendingMarkdown))
+          deferredPending.add(rowProps.rowKey)
+        virtualizer.measureElement(element)
+
+        if (!virtualizer.isScrolling || coldPending || !unmeasured) return
+        // TanStack's measureElement skips synchronous reads while scrolling, leaving newly
+        // exposed 60px estimates visible for a frame before ResizeObserver pushes rows down.
+        virtualizer.resizeItem(item().index, element.offsetHeight)
+      })
       // Prepending history changes data-index, not the keyed element's identity.
       // Its observer reads the current index and delivers any actual size change.
       onCleanup(() => {
+        if (!virtualizer.itemSizeCache.has(rowProps.rowKey)) deferredPending.delete(rowProps.rowKey)
+
         if (contentMeasureFrame !== undefined) cancelAnimationFrame(contentMeasureFrame)
         queueMicrotask(() => virtualizer.measureElement(null))
       })
