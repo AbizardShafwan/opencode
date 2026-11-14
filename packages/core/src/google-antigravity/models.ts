@@ -42,6 +42,14 @@ type Entry = {
 
 const catalog: readonly Entry[] = [
   {
+    id: "gemini-4-hydrogen",
+    name: "Gemini 4 Hydrogen",
+    context: 1_048_576,
+    output: 65_536,
+    input: ["text", "image"],
+    efforts: ["low", "medium", "high", "xhigh"],
+  },
+  {
     id: "gemini-4-argon",
     name: "Gemini 4 Argon",
     context: 1_048_576,
@@ -133,7 +141,7 @@ const catalog: readonly Entry[] = [
   },
 ]
 
-const DISPLAY_SUFFIX = /\s*\((?:extra[- ]low|minimal|low|medium|high|tiered|thinking)\)\s*$/i
+const DISPLAY_SUFFIX = /\s*\((?:extra[- ]low|minimal|low|medium|high|xhigh|tiered|thinking)\)\s*$/i
 
 function familyName(value: string | undefined): string | undefined {
   const trimmed = value?.replace(DISPLAY_SUFFIX, "").trim()

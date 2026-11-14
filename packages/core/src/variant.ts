@@ -117,9 +117,12 @@ const openResponses: Protocol = (_, support) => {
   return efforts(support.values ?? EFFORTS, responsesEffort)
 }
 
-const googleInteractions: Protocol = (_, support) => {
+const geminiEfforts = (model: Model.Info) =>
+  modelID(model).toLowerCase().includes("gemini-4-hydrogen") ? [...EFFORTS, "xhigh"] : EFFORTS
+
+const googleInteractions: Protocol = (model, support) => {
   if (support.type !== "effort") return []
-  return efforts(support.values ?? EFFORTS, (effort) => ({
+  return efforts(support.values ?? geminiEfforts(model), (effort) => ({
     settings: { thinkingLevel: effort, thinkingSummaries: "auto" },
   }))
 }
@@ -412,7 +415,7 @@ const zaiMessages: Protocol = (model, support) => {
 const gemini: Protocol = (model, support) => {
   switch (support.type) {
     case "effort":
-      return efforts(support.values ?? EFFORTS, (effort) => ({
+      return efforts(support.values ?? geminiEfforts(model), (effort) => ({
         settings: { thinkingConfig: { includeThoughts: true, thinkingLevel: effort } },
       }))
     case "toggle":

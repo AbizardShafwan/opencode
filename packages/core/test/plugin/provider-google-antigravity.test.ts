@@ -107,6 +107,18 @@ describe("Antigravity model routing", () => {
     const available = Schema.decodeUnknownSync(GoogleAntigravityModels.AvailableModels)({
       models: {
         argon: { displayName: "Argon", supportsImages: false, supportsThinking: false },
+        "gemini-4-hydrogen-low": { displayName: "Gemini 4 Hydrogen (Low)", supportsImages: true, supportsThinking: true },
+        "gemini-4-hydrogen-medium": {
+          displayName: "Gemini 4 Hydrogen (Medium)",
+          supportsImages: true,
+          supportsThinking: true,
+        },
+        "gemini-4-hydrogen-high": { displayName: "Gemini 4 Hydrogen (High)", supportsImages: true, supportsThinking: true },
+        "gemini-4-hydrogen-xhigh": {
+          displayName: "Gemini 4 Hydrogen (XHigh)",
+          supportsImages: true,
+          supportsThinking: true,
+        },
         "gemini-4-argon-high": { displayName: "Gemini 4 Argon (High)", supportsImages: true, supportsThinking: true },
         "gemini-4-argon-medium": {
           displayName: "Gemini 4 Argon (Medium)",
@@ -162,6 +174,7 @@ describe("Antigravity model routing", () => {
     const result = GoogleAntigravityModels.models(new Map(), GoogleAntigravityModels.supportedInventory(available))
     expect(result.map((model) => String(model.id))).toEqual([
       "argon",
+      "gemini-4-hydrogen",
       "gemini-4-argon",
       "claude-opus-5-5",
       "claude-sonnet-5-5",
@@ -179,38 +192,46 @@ describe("Antigravity model routing", () => {
       variants: [],
     })
     expect(result[1]).toMatchObject({
+      id: "gemini-4-hydrogen",
+      modelID: "gemini-4-hydrogen",
+      name: "Gemini 4 Hydrogen",
+      capabilities: { input: ["text", "image"] },
+      limit: { context: 1_048_576, output: 65_536 },
+    })
+    expect(result[1]?.variants.map((variant) => String(variant.id))).toEqual(["low", "medium", "high", "xhigh"])
+    expect(result[2]).toMatchObject({
       id: "gemini-4-argon",
       modelID: "gemini-4-argon",
       name: "Gemini 4 Argon",
       capabilities: { input: ["text", "image"] },
     })
-    expect(result[1]?.variants.map((variant) => String(variant.id))).toEqual(["low", "medium", "high"])
-    expect(result[2]).toMatchObject({
+    expect(result[2]?.variants.map((variant) => String(variant.id))).toEqual(["low", "medium", "high"])
+    expect(result[3]).toMatchObject({
       id: "claude-opus-5-5",
       modelID: "claude-opus-5-5",
       name: "Claude Opus 5.5",
       limit: { context: 250_000, output: 64_000 },
     })
-    expect(result[2]?.variants.map((variant) => String(variant.id))).toEqual(["low", "medium", "high"])
-    expect(result[3]).toMatchObject({
+    expect(result[3]?.variants.map((variant) => String(variant.id))).toEqual(["low", "medium", "high"])
+    expect(result[4]).toMatchObject({
       id: "claude-sonnet-5-5",
       modelID: "claude-sonnet-5-5",
       name: "Claude Sonnet 5.5",
       limit: { context: 200_000, output: 64_000 },
     })
-    expect(result[3]?.variants.map((variant) => String(variant.id))).toEqual(["low", "medium", "high"])
-    expect(result[4]).toMatchObject({
+    expect(result[4]?.variants.map((variant) => String(variant.id))).toEqual(["low", "medium", "high"])
+    expect(result[5]).toMatchObject({
       id: "gemini-3.8-flash",
       name: "Gemini 3.8 Flash",
     })
-    expect(result[4]?.variants.map((variant) => String(variant.id))).toEqual(["low", "medium", "high"])
-    expect(result[5]?.variants.map((variant) => String(variant.id))).toEqual(["low"])
-    expect(result[6]?.variants).toEqual([])
-    expect(result[7]).toMatchObject({
+    expect(result[5]?.variants.map((variant) => String(variant.id))).toEqual(["low", "medium", "high"])
+    expect(result[6]?.variants.map((variant) => String(variant.id))).toEqual(["low"])
+    expect(result[7]?.variants).toEqual([])
+    expect(result[8]).toMatchObject({
       id: "future-model",
       name: "Future Model",
     })
-    expect(result[7]?.variants.map((variant) => String(variant.id))).toEqual(["low", "high"])
+    expect(result[8]?.variants.map((variant) => String(variant.id))).toEqual(["low", "high"])
     expect(GoogleAntigravityModels.models(new Map(), { models: {} })).toEqual([])
   })
 
@@ -236,6 +257,8 @@ describe("Antigravity model routing", () => {
       models: {
         "gemini-3.6-flash-low": {},
         "gemini-3.6-flash-high": { isInternal: true },
+        "gemini-4-hydrogen-high": { model: "MODEL_HYDROGEN_HIGH" },
+        "gemini-4-hydrogen-xhigh": { model: "MODEL_HYDROGEN_XHIGH" },
         "gemini-4-argon-low": { model: "MODEL_ARGON_LOW" },
         "gemini-4-argon-medium": { model: "MODEL_ARGON_MEDIUM" },
         "gemini-4-argon-high": { model: "MODEL_ARGON_HIGH" },
@@ -267,6 +290,23 @@ describe("Antigravity model routing", () => {
     ).toMatchObject({
       model: "gemini-4-argon-high",
       request: { labels: { model_enum: "MODEL_ARGON_HIGH" } },
+    })
+    expect(
+      wrapRequest(
+        { contents: [], generationConfig: { thinkingConfig: { includeThoughts: true, thinkingLevel: "xhigh" } } },
+        {
+          project: "p1",
+          modelID: "gemini-4-hydrogen",
+          sessionID: "ses_1",
+          availableModels: available.models,
+        },
+      ),
+    ).toMatchObject({
+      model: "gemini-4-hydrogen-xhigh",
+      request: {
+        generationConfig: { thinkingConfig: { includeThoughts: true, thinkingBudget: -1 } },
+        labels: { model_enum: "MODEL_HYDROGEN_XHIGH" },
+      },
     })
     expect(
       wrapRequest(
@@ -333,6 +373,7 @@ describe("Antigravity model routing", () => {
   })
 
   test("selects the runtime model for each thinking effort", () => {
+    expect(runtimeModel("gemini-4-hydrogen", { thinkingLevel: "xhigh" })).toBe("gemini-4-hydrogen-xhigh")
     expect(runtimeModel("gemini-4-argon", { thinkingLevel: "low" })).toBe("gemini-4-argon-low")
     expect(runtimeModel("gemini-4-argon", { thinkingLevel: "medium" })).toBe("gemini-4-argon-medium")
     expect(runtimeModel("gemini-4-argon", { thinkingLevel: "high" })).toBe("gemini-4-argon-high")
@@ -352,6 +393,14 @@ describe("Antigravity model routing", () => {
   })
 
   test("translates thinking levels into Antigravity budgets", () => {
+    expect(thinkingFor("gemini-4-hydrogen-xhigh", { thinkingLevel: "xhigh" })).toEqual({
+      includeThoughts: true,
+      thinkingBudget: -1,
+    })
+    expect(thinkingFor("gemini-4-hydrogen-xhigh", undefined)).toEqual({
+      includeThoughts: true,
+      thinkingBudget: -1,
+    })
     expect(thinkingFor("gemini-4-argon-low", { thinkingLevel: "low" })).toEqual({
       includeThoughts: true,
       thinkingBudget: 1000,

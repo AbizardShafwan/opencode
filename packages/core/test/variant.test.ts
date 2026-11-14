@@ -543,6 +543,21 @@ test("spells Google Interactions variants as thinking levels", () => {
       { id: "low", settings: { thinkingLevel: "low", thinkingSummaries: "auto" } },
       { id: "high", settings: { thinkingLevel: "high", thinkingSummaries: "auto" } },
     ])
+
+  expect(resolve(model("@opencode/ai/providers/google", "gemini-4-hydrogen"), [{ type: "effort" }])).toEqual(
+    ["low", "medium", "high", "xhigh"].map((effort) => ({
+      id: effort,
+      settings: { thinkingConfig: { includeThoughts: true, thinkingLevel: effort } },
+    })),
+  )
+  expect(
+    resolve(model("@opencode/ai/providers/google/interactions", "gemini-4-hydrogen"), [{ type: "effort" }]),
+  ).toEqual(
+    ["low", "medium", "high", "xhigh"].map((effort) => ({
+      id: effort,
+      settings: { thinkingLevel: effort, thinkingSummaries: "auto" },
+    })),
+  )
 })
 
 test("reads models.dev v2 reasoning as variant support", () => {
