@@ -56,10 +56,9 @@ export type Thinking = {
 
 type Json = Record<string, unknown>
 
-export const EFFORT_ORDER = ["minimal", "low", "medium", "high", "xhigh"] as const
+export const EFFORT_ORDER = ["minimal", "low", "medium", "high"] as const
 
 export type PublicModelID =
-  | "gemini-4-hydrogen"
   | "gemini-4-argon"
   | "gemini-3.8-flash"
   | "gemini-3.7-flash"
@@ -153,8 +152,8 @@ function effortOf(thinking: Thinking | undefined) {
   return "high"
 }
 
-const RUNTIME_SUFFIX = /-(extra-low|minimal|low|medium|high|xhigh|tiered|thinking)$/i
-const EFFORT_SUFFIX = /-(extra-low|minimal|low|medium|high|xhigh)$/i
+const RUNTIME_SUFFIX = /-(extra-low|minimal|low|medium|high|tiered|thinking)$/i
+const EFFORT_SUFFIX = /-(extra-low|minimal|low|medium|high)$/i
 
 export function isRoutedModel(modelID: string): boolean {
   return modelID in ROUTED
@@ -174,7 +173,7 @@ function runtimeEffort(runtime: string): string | undefined {
   const suffix = EFFORT_SUFFIX.exec(runtime)?.[1]?.toLowerCase()
   if (suffix) return suffix === "extra-low" ? "low" : suffix
   for (const values of Object.values(ROUTED)) {
-    for (const effort of ["xhigh", "high", "medium", "low", "minimal"] as const) {
+    for (const effort of ["high", "medium", "low", "minimal"] as const) {
       if (values[effort] === runtime) return effort
     }
   }
@@ -218,7 +217,6 @@ export function resolveRuntime(
     `${modelID}-thinking`,
     modelID,
     ...runtimeForEffort(modelID, "high"),
-    ...runtimeForEffort(modelID, "xhigh"),
     ...runtimeForEffort(modelID, "medium"),
     ...runtimeForEffort(modelID, "low"),
     ...runtimeForEffort(modelID, "minimal"),

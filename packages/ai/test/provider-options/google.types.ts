@@ -39,11 +39,5 @@ LLM.request({
 LLM.request({
   model,
   prompt: "Hello",
-  providerOptions: { thinkingConfig: { thinkingLevel: "xhigh", includeThoughts: true } },
-})
-
-LLM.request({
-  model,
-  prompt: "Hello",
   providerOptions: { thinkingConfig: { thinkingLevel: "maximum" } },
 })

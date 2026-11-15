@@ -27,7 +27,7 @@ export const DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1bet
 // =============================================================================
 // Public Model Input
 // =============================================================================
-const ThinkingLevel = knownString<"minimal" | "low" | "medium" | "high" | "xhigh">()
+const ThinkingLevel = knownString<"minimal" | "low" | "medium" | "high">()
 const Options = Schema.Struct({
   previousInteractionId: lenient(Schema.String),
   store: lenient(Schema.Boolean),
