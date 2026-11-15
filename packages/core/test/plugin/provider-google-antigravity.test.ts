@@ -732,6 +732,33 @@ describe("Antigravity model routing", () => {
       tools: [{ functionDeclarations: [{ name: "read", parametersJsonSchema: { type: "object" } }] }],
     })
   })
+
+  test("rewrites the prompt signature Cloud Code Assist rejects", () => {
+    const request = wrapRequest(
+      {
+        systemInstruction: {
+          parts: [{ text: "consider using `tools.opencode.session_move` to move the session" }, { text: "keep" }],
+        },
+        contents: [
+          { role: "user", parts: [{ text: "call tools.opencode.session_move next" }] },
+          { role: "model", parts: [{ text: "no signature here" }] },
+        ],
+        generationConfig: {},
+      },
+      { project: "project-1", modelID: "gemini-3.8-flash", sessionID: "ses_1" },
+    )
+    expect(request.request).toMatchObject({
+      systemInstruction: {
+        role: "user",
+        parts: [{ text: 'consider using `tools["opencode"].session_move` to move the session' }, { text: "keep" }],
+      },
+      contents: [
+        { role: "user", parts: [{ text: 'call tools["opencode"].session_move next' }] },
+        { role: "model", parts: [{ text: "no signature here" }] },
+      ],
+    })
+    expect(JSON.stringify(request)).not.toContain("tools.opencode.")
+  })
 })
 
 describe("Cloud Code Assist stream decoding", () => {

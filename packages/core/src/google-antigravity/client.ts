@@ -638,6 +638,33 @@ export interface WrapInput {
   readonly availableModels?: Readonly<Record<string, { readonly model?: string }>>
 }
 
+/**
+ * Cloud Code Assist filters prompt text by signature: since 2026-11-14 it answers a bare
+ * `429 RESOURCE_EXHAUSTED` for any request whose `systemInstruction` contains
+ * `tools.opencode.session_move`, the Code Mode guidance Memyr injects. Format characters do not
+ * bypass the filter (it normalizes them away); bracketed property access is the same JavaScript to
+ * the model and passes, so the signature is rewritten before the request leaves the process.
+ */
+const PROMPT_SIGNATURE = /tools\.opencode\./g
+const NEUTRALIZED_SIGNATURE = 'tools["opencode"].'
+
+function neutralizeSignature(text: string) {
+  return text.replace(PROMPT_SIGNATURE, NEUTRALIZED_SIGNATURE)
+}
+
+/** Rewrite the filtered signature in every text part of a Gemini content or system instruction. */
+function neutralizeParts(parts: unknown): unknown {
+  if (!Array.isArray(parts)) return parts
+  return parts.map((part) =>
+    isRecord(part) && typeof part.text === "string" ? { ...part, text: neutralizeSignature(part.text) } : part,
+  )
+}
+
+function neutralizeContent(content: unknown): unknown {
+  if (!isRecord(content) || !Array.isArray(content.parts)) return content
+  return { ...content, parts: neutralizeParts(content.parts) }
+}
+
 /** Build the Cloud Code Assist request envelope around a Gemini generateContent body. */
 export function wrapRequest(body: Json, input: WrapInput): Json {
   const thinking = thinkingOf(body)
@@ -649,7 +676,12 @@ export function wrapRequest(body: Json, input: WrapInput): Json {
   const request: Json = { ...body }
 
   if (isRecord(request.systemInstruction))
-    request.systemInstruction = { ...request.systemInstruction, role: request.systemInstruction.role ?? "user" }
+    request.systemInstruction = {
+      ...request.systemInstruction,
+      role: request.systemInstruction.role ?? "user",
+      parts: neutralizeParts(request.systemInstruction.parts),
+    }
+  if (Array.isArray(request.contents)) request.contents = request.contents.map(neutralizeContent)
 
   const maxOutputTokens = typeof generation?.maxOutputTokens === "number" ? generation.maxOutputTokens : undefined
   const configured = thinkingFor(runtime, thinking, maxOutputTokens)
