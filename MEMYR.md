@@ -1,12 +1,12 @@
 # Memyr fork
 
-Memyr's CLI version is **1.0.0**, set by `memyrVersion` in the root `package.json`.
+Memyr's CLI version is **2.0.18**, set by `memyrVersion` in the root `package.json`.
 Memyr-channel builds use this product version; upstream `@opencode/*` package
 versions remain separate.
 
 ```sh
 memyr --version
-# memyr v1.0.0
+# memyr v2.0.18
 ```
 
 ## Install, update, uninstall
