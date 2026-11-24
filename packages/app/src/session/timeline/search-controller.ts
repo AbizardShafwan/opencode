@@ -304,6 +304,8 @@ export function createTimelineSearchController(input: {
       activeIndex,
       count: () => matches().length,
       move,
+      previousLabel: () => language.t("ui.fileSearch.previousMatch"),
+      nextLabel: () => language.t("ui.fileSearch.nextMatch"),
     },
     element: {
       setInput: (element: HTMLInputElement) => (inputEl = element),
