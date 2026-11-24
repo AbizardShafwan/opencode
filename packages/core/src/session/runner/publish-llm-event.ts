@@ -614,7 +614,6 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
     if (tool.name !== name)
       return yield* Effect.die(new Error(`Tool execution name changed for ${id}: ${tool.name} -> ${name}`))
     if (tool.settled) return yield* Effect.die(new Error(`Duplicate tool execution: ${id}`))
-    tool.settled = true
     const content = result.content
     if (!isReadonlyArrayNonEmpty(content)) return yield* Effect.die(new Error(`Tool execution has no content: ${id}`))
     yield* bus.publish(SessionEvent.Tool.Success, {
@@ -625,6 +624,7 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
       ...(result.metadata === undefined ? {} : { metadata: result.metadata }),
       executed: tool.providerExecuted,
     })
+    tool.settled = true
   })
 
   return {

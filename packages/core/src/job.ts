@@ -16,6 +16,7 @@ import {
 } from "effect"
 import { makeGlobalNode } from "@opencode/util/effect/app-node"
 import { KV } from "./kv.js"
+import { JobList } from "./job/list.js"
 import { SessionMessage } from "./session/message.js"
 import { SessionSchema } from "./session/schema.js"
 
@@ -38,8 +39,17 @@ const Background = Schema.Struct({
       /** Present on review launches; older persisted jobs omit it. */
       mode: Schema.optionalKey(Schema.Literal("review")),
     }),
+    Schema.Struct({
+      kind: Schema.Literal("image"),
+      sessionID: SessionSchema.ID,
+      path: Schema.String,
+      model: Schema.String,
+    }),
   ]),
   status: Schema.Literals(["running", "completed", "error", "cancelled"]),
+  title: Schema.optionalKey(Schema.String),
+  started_at: Schema.optionalKey(Schema.Number),
+  completed_at: Schema.optionalKey(Schema.Number),
   output: Schema.optionalKey(Schema.String),
   error: Schema.optionalKey(Schema.String),
 })
@@ -168,6 +178,7 @@ export interface Interface {
   readonly cancel: (id: string, owner?: object) => Effect.Effect<Info | undefined>
   readonly pendingBackground: Effect.Effect<readonly Background[]>
   readonly runningBackground: Effect.Effect<readonly Recovery[]>
+  readonly backgroundJobs: Effect.Effect<readonly JobList.Item[]>
   readonly completeBackground: (notificationID: SessionMessage.ID) => Effect.Effect<void>
 }
 
@@ -238,6 +249,9 @@ export const make = Effect.gen(function* () {
       notificationID: job.info.notificationID,
       recovery: job.recovery,
       status: job.info.status,
+      ...(job.info.title !== undefined ? { title: job.info.title } : {}),
+      started_at: job.info.started_at,
+      ...(job.info.completed_at !== undefined ? { completed_at: job.info.completed_at } : {}),
       ...(job.info.output !== undefined ? { output: job.info.output } : {}),
       ...(job.info.error !== undefined ? { error: job.info.error } : {}),
     })
@@ -521,6 +535,8 @@ export const make = Effect.gen(function* () {
     Effect.withSpan("Job.runningBackground"),
   )
 
+  const backgroundJobs: Interface["backgroundJobs"] = JobList.read(pendingBackground, state.jobs)
+
   const completeBackground: Interface["completeBackground"] = Effect.fn("Job.completeBackground")((notificationID) =>
     SynchronizedRef.updateEffect(state.jobs, (jobs) =>
       Effect.gen(function* () {
@@ -546,6 +562,7 @@ export const make = Effect.gen(function* () {
     cancel,
     pendingBackground,
     runningBackground,
+    backgroundJobs,
     completeBackground,
   })
 })

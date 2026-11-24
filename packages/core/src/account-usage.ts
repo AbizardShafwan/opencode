@@ -89,15 +89,18 @@ const fetchSource = (
   value: Value,
 ): Effect.Effect<Usage.Info | undefined> => {
   const json = (request: HttpClientRequest.HttpClientRequest) =>
-    http.execute(request).pipe(
-      Effect.flatMap((response) =>
-        response.status >= 200 && response.status < 300
-          ? HttpClientResponse.schemaBodyJson(Schema.Unknown)(response)
-          : Effect.succeed(undefined),
-      ),
-      Effect.timeout(requestTimeout),
-      Effect.orElseSucceed(() => undefined),
-    )
+    HttpClient.withScope(http)
+      .execute(request)
+      .pipe(
+        Effect.flatMap((response) =>
+          response.status >= 200 && response.status < 300
+            ? HttpClientResponse.schemaBodyJson(Schema.Unknown)(response)
+            : Effect.succeed(undefined),
+        ),
+        Effect.scoped,
+        Effect.timeout(requestTimeout),
+        Effect.orElseSucceed(() => undefined),
+      )
 
   switch (source) {
     case "deepseek-balance": {

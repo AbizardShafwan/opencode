@@ -160,7 +160,18 @@ const layer = Layer.effect(
       const agent = yield* agents.select(session.agent)
       if (!agent.info) return yield* new AgentNotFoundError({ sessionID: session.id, agent: session.agent ?? agent.id })
       // Session permissions narrow discovery the same way they narrow the tool snapshot.
-      const permissions = Permission.merge(agent.info.permissions, session.permissions ?? [])
+      // Keep agent-level `browser: deny` intact unless the session explicitly grants `browser: allow`,
+      // so wildcard full-access rules (`*: allow`) never expose a disconnected desktop browser plugin.
+      const sessionPermissions = session.permissions ?? []
+      const explicitBrowser = sessionPermissions.some(
+        (rule) => rule.action === "browser" && rule.effect === "allow",
+      )
+      const agentDeniesBrowser = Permission.evaluate("browser", "*", agent.info.permissions).effect === "deny"
+      const permissions = Permission.merge(
+        agent.info.permissions,
+        sessionPermissions,
+        agentDeniesBrowser && !explicitBrowser ? [{ action: "browser", resource: "*", effect: "deny" }] : [],
+      )
       const loaded = yield* Effect.all(
         {
           tools: registry.snapshot(permissions, session.authority),

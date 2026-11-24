@@ -54,6 +54,7 @@ import { Tool } from "./tool.js"
 import { ToolOutput } from "./tool-output.js"
 import { Vcs } from "./vcs.js"
 import { AccountUsage } from "./account-usage.js"
+import { UsageLimits } from "./usage-limits.js"
 
 export * as Instance from "./instance.js"
 export { Service, node, type Interface } from "./instance/service.js"
@@ -73,6 +74,7 @@ const nodes = [
   Model.node,
   ModelResolver.node,
   AccountUsage.node,
+  UsageLimits.node,
   AISDK.node,
   Plugin.node,
   PluginHooks.node,

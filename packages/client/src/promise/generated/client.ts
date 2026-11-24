@@ -232,6 +232,8 @@ import type {
   ExperimentalPersistentPtyRemoveOutput,
   ExperimentalPersistentPtyConnectTokenInput,
   ExperimentalPersistentPtyConnectTokenOutput,
+  JobListInput,
+  JobListOutput,
   ShellListInput,
   ShellListOutput,
   ShellCreateInput,
@@ -281,6 +283,8 @@ import type {
   ConfigUpdateOutput,
   UsageReadInput,
   UsageReadOutput,
+  UsageLimitsInput,
+  UsageLimitsOutput,
 } from "./types.js"
 import { ClientError } from "./client-error.js"
 
@@ -2015,6 +2019,20 @@ export function make(options: ClientOptions) {
           ).then((value) => value.data),
       },
     },
+    job: {
+      list: (input?: JobListInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: JobListOutput }>(
+          {
+            method: "GET",
+            path: `/api/experimental/job`,
+            query: { sessionID: input?.["sessionID"], kind: input?.["kind"], descendants: input?.["descendants"] },
+            successStatus: 200,
+            declaredStatuses: [400, 401, 404],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+    },
     shell: {
       list: (input?: ShellListInput, requestOptions?: RequestOptions) =>
         request<ShellListOutput>(
@@ -2354,6 +2372,18 @@ export function make(options: ClientOptions) {
             method: "GET",
             path: `/api/usage`,
             query: { location: input["location"], providerID: input["providerID"] },
+            successStatus: 200,
+            declaredStatuses: [400, 401, 404, 503],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      limits: (input?: UsageLimitsInput, requestOptions?: RequestOptions) =>
+        request<UsageLimitsOutput>(
+          {
+            method: "GET",
+            path: `/api/experimental/usage/limits`,
+            query: { location: input?.["location"] },
             successStatus: 200,
             declaredStatuses: [400, 401, 404, 503],
             empty: false,

@@ -234,6 +234,8 @@ import type {
   ExperimentalPersistentPtyRemoveOutput,
   ExperimentalPersistentPtyConnectTokenInput,
   ExperimentalPersistentPtyConnectTokenOutput,
+  JobListInput,
+  JobListOutput,
   ShellListInput,
   ShellListOutput,
   ShellCreateInput,
@@ -283,6 +285,8 @@ import type {
   ConfigUpdateOutput,
   UsageReadInput,
   UsageReadOutput,
+  UsageLimitsInput,
+  UsageLimitsOutput,
 } from "../api/api.js"
 import { ClientError } from "./client-error.js"
 
@@ -1505,6 +1509,18 @@ const adaptGroupExperimental = (raw: RawClient["server.experimental"]) => ({
   },
 })
 
+const EndpointJobList = (raw: RawClient["server.job"]) => (input?: JobListInput) =>
+  preserveEffect<JobListOutput>()(
+    raw["job.list"]({
+      query: { sessionID: input?.["sessionID"], kind: input?.["kind"], descendants: input?.["descendants"] },
+    }).pipe(
+      Effect.mapError(mapClientError),
+      Effect.map((value) => value.data),
+    ),
+  )
+
+const adaptGroupJob = (raw: RawClient["server.job"]) => ({ list: EndpointJobList(raw) })
+
 const EndpointShellList = (raw: RawClient["server.shell"]) => (input?: ShellListInput) =>
   preserveEffect<ShellListOutput>()(
     raw["shell.list"]({ query: { location: input?.["location"] } }).pipe(Effect.mapError(mapClientError)),
@@ -1706,7 +1722,15 @@ const EndpointUsageRead = (raw: RawClient["server.usage"]) => (input: UsageReadI
     ),
   )
 
-const adaptGroupUsage = (raw: RawClient["server.usage"]) => ({ read: EndpointUsageRead(raw) })
+const EndpointUsageLimits = (raw: RawClient["server.usage"]) => (input?: UsageLimitsInput) =>
+  preserveEffect<UsageLimitsOutput>()(
+    raw["usage.limits"]({ query: { location: input?.["location"] } }).pipe(Effect.mapError(mapClientError)),
+  )
+
+const adaptGroupUsage = (raw: RawClient["server.usage"]) => ({
+  read: EndpointUsageRead(raw),
+  limits: EndpointUsageLimits(raw),
+})
 
 const adaptClient = (raw: RawClient) => ({
   server: adaptGroupServer(raw["server.server"]),
@@ -1732,6 +1756,7 @@ const adaptClient = (raw: RawClient) => ({
   event: adaptGroupEvent(raw["server.event"]),
   pty: adaptGroupPty(raw["server.pty"]),
   experimental: adaptGroupExperimental(raw["server.experimental"]),
+  job: adaptGroupJob(raw["server.job"]),
   shell: adaptGroupShell(raw["server.shell"]),
   reference: adaptGroupReference(raw["server.reference"]),
   worktree: adaptGroupWorktree(raw["server.worktree"]),

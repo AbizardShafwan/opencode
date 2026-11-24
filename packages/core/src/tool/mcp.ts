@@ -6,6 +6,7 @@ import { Context, Effect, Fiber, type JsonSchema, Layer, Option, PubSub, Schema,
 import { makeLocationNode } from "@opencode/util/effect/app-node"
 import { extension } from "mime-types"
 import { Bus } from "../bus.js"
+import { Location } from "../location.js"
 
 import { Mcp } from "../mcp/index.js"
 import { Mime } from "../mime.js"
@@ -21,6 +22,8 @@ const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unkno
  */
 export const namespace = (server: string) => server.replace(/[^a-zA-Z0-9_-]/g, "_")
 export const name = (server: string, tool: string) => `${namespace(server)}_${tool.replace(/[^a-zA-Z0-9_-]/g, "_")}`
+export const isCodeMode = (tool: Pick<Mcp.Tool, "server" | "name" | "codemode">) =>
+  tool.codemode ?? !(tool.server.startsWith("t3-code-") && name(tool.server, tool.name).length <= 64)
 
 export interface Interface {
   /** Wait for the initial MCP tool registration to settle. */
@@ -35,21 +38,43 @@ export const layer = Layer.effect(
     const mcp = yield* Mcp.Service
     const tools = yield* Tool.Service
     const bus = yield* Bus.Service
+    const location = yield* Location.Service
     const permission = yield* Permission.Service
     const toolOutput = yield* ToolOutput.Service
     const lock = Semaphore.makeUnsafe(1)
     let discovered: Mcp.Tool[] = []
+    let seen = 0
+    let reconciled = 0
+
+    // Servers announce tools in bursts and each read loads the whole catalog, so settle and refresh
+    // once. Listen synchronously before initial discovery so `seen` updates before `bus.publish` returns.
+    const changes = yield* PubSub.sliding<void>(1)
+    const unsubscribe = yield* bus.listen((event) => {
+      if (event.type !== McpEvent.ToolsChanged.type) return Effect.void
+      if (
+        event.location?.directory !== location.directory ||
+        event.location?.workspaceID !== location.workspaceID
+      )
+        return Effect.void
+      seen += 1
+      return PubSub.publish(changes, undefined).pipe(Effect.asVoid)
+    })
+    yield* Effect.addFinalizer(() => unsubscribe)
 
     // Register once after initial discovery; only subsequent updates need a debounced reload.
     const initial = yield* lock
       .withPermit(
         Effect.gen(function* () {
+          const target = seen
           discovered = yield* mcp.tools()
           yield* tools.transform((editor) => {
             for (const tool of discovered) {
               editor.add({
                 name: tool.name,
-                options: { namespace: namespace(tool.server), codemode: tool.codemode !== false },
+                options: {
+                  namespace: namespace(tool.server),
+                  codemode: isCodeMode(tool),
+                },
                 description: tool.description ?? "",
                 input: (tool.inputSchema ?? { type: "object", properties: {} }) as JsonSchema.JsonSchema,
                 output: (tool.outputSchema ?? {}) as JsonSchema.JsonSchema,
@@ -117,30 +142,30 @@ export const layer = Layer.effect(
               })
             }
           })
+          reconciled = Math.max(reconciled, target)
         }),
       )
       .pipe(Effect.forkScoped)
     const reconcile = lock.withPermit(
       Effect.gen(function* () {
+        const target = seen
         discovered = yield* mcp.tools()
         yield* tools.reload()
+        reconciled = Math.max(reconciled, target)
       }),
     )
 
-    // Servers announce tools in bursts and each read loads the whole catalog, so settle and refresh
-    // once. The bus subscription stays eager; only the already-open sliding subscription is debounced.
-    const changes = yield* PubSub.sliding<void>(1)
-    yield* bus.subscribe(McpEvent.ToolsChanged).pipe(
-      Stream.runForEach(() => PubSub.publish(changes, undefined)),
-      Effect.forkScoped({ startImmediately: true }),
-    )
     const updates = yield* PubSub.subscribe(changes)
     yield* Stream.fromSubscription(updates).pipe(
       Stream.debounce("100 millis"),
       Stream.runForEach(() => reconcile),
       Effect.forkScoped({ startImmediately: true }),
     )
-    return Service.of({ flush: Effect.asVoid(Fiber.await(initial)) })
+    const flush = Effect.gen(function* () {
+      yield* Fiber.await(initial)
+      if (reconciled < seen) yield* reconcile
+    })
+    return Service.of({ flush })
   }),
 )
 
@@ -165,5 +190,5 @@ const toContent = Effect.fnUntraced(function* (part: Mcp.ToolResultContent, tool
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [Tool.node, Mcp.node, Bus.node, Permission.node, ToolOutput.node],
+  deps: [Tool.node, Mcp.node, Bus.node, Location.node, Permission.node, ToolOutput.node],
 })

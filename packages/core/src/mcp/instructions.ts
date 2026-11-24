@@ -91,18 +91,16 @@ export const layer = Layer.effect(
         // Instructions are useful only when this Session can reach at least one server tool.
         const visible = instructions
           .flatMap((item) => {
-            const owned = tools.filter((tool) => tool.server === item.server)
-            const codemode = owned[0]?.codemode !== false
-            if (codemode && !canExecute) return []
-            if (
-              !owned.some(
-                (tool) =>
-                  Permission.evaluate(McpTool.name(tool.server, tool.name), "*", permissions).effect !== "deny",
-              )
+            const reachable = tools.filter(
+              (tool) =>
+                tool.server === item.server &&
+                Permission.evaluate(McpTool.name(tool.server, tool.name), "*", permissions).effect !== "deny" &&
+                (!McpTool.isCodeMode(tool) || canExecute),
             )
-              return []
+            if (reachable.length === 0) return []
+            const usesCodeMode = reachable.some((tool) => McpTool.isCodeMode(tool))
             return [
-              codemode
+              usesCodeMode
                 ? { server: item.server, instructions: item.instructions }
                 : { server: item.server, instructions: item.instructions, codemode: false as const },
             ]

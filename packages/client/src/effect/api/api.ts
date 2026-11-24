@@ -36,11 +36,13 @@ import type { FileSystem } from "@opencode/schema/filesystem"
 import type { Command } from "@opencode/schema/command"
 import type { OpenCodeEvent } from "@opencode/protocol/groups/event"
 import type { Pty } from "@opencode/schema/pty"
+import type { Job } from "@opencode/schema/job"
 import type { Reference } from "@opencode/schema/reference"
 import type { Worktree } from "@opencode/schema/worktree"
 import type { Vcs } from "@opencode/schema/vcs"
 import type { WebSearch } from "@opencode/schema/websearch"
 import type { Config } from "@opencode/schema/config"
+import type { UsageLimits } from "@opencode/schema/usage-limits"
 
 export type ServerInfoOutput = {
   readonly version: string
@@ -2144,6 +2146,18 @@ export interface ExperimentalApi<E = never> {
   }
 }
 
+export type JobListInput = {
+  readonly sessionID?: Session.ID | undefined
+  readonly kind?: "shell" | "subagent" | "image" | undefined
+  readonly descendants?: boolean | undefined
+}
+export type JobListOutput = ReadonlyArray<Job.Info>
+export type JobListOperation<E = never> = (input?: JobListInput) => Effect.Effect<JobListOutput, E>
+
+export interface JobApi<E = never> {
+  readonly list: JobListOperation<E>
+}
+
 export type ShellListInput = { readonly location?: { readonly directory?: string | undefined } | undefined }
 export type ShellListOutput = { readonly location: Location.PublicRef; readonly data: ReadonlyArray<Shell.Info> }
 export type ShellListOperation<E = never> = (input?: ShellListInput) => Effect.Effect<ShellListOutput, E>
@@ -2411,8 +2425,13 @@ export type UsageReadOutput = {
 }
 export type UsageReadOperation<E = never> = (input: UsageReadInput) => Effect.Effect<UsageReadOutput, E>
 
+export type UsageLimitsInput = { readonly location?: { readonly directory?: string | undefined } | undefined }
+export type UsageLimitsOutput = { readonly location: Location.PublicRef; readonly data: UsageLimits.Info | null }
+export type UsageLimitsOperation<E = never> = (input?: UsageLimitsInput) => Effect.Effect<UsageLimitsOutput, E>
+
 export interface UsageApi<E = never> {
   readonly read: UsageReadOperation<E>
+  readonly limits: UsageLimitsOperation<E>
 }
 
 export interface AppApi<E = never> {
@@ -2439,6 +2458,7 @@ export interface AppApi<E = never> {
   readonly event: EventApi<E>
   readonly pty: PtyApi<E>
   readonly experimental: ExperimentalApi<E>
+  readonly job: JobApi<E>
   readonly shell: ShellApi<E>
   readonly reference: ReferenceApi<E>
   readonly worktree: WorktreeApi<E>

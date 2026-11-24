@@ -13,6 +13,7 @@ import { Form } from "@opencode/schema/form"
 import { Instruction } from "@opencode/schema/instruction"
 import { InstructionEntry } from "@opencode/schema/instruction-entry"
 import { Integration } from "@opencode/schema/integration"
+import { Job } from "@opencode/schema/job"
 import { Location } from "@opencode/schema/location"
 import { Mcp } from "@opencode/schema/mcp"
 import { Model } from "@opencode/schema/model"
@@ -36,6 +37,7 @@ import { SessionInbox } from "@opencode/schema/session-inbox"
 import { Shell } from "@opencode/schema/shell"
 import { Skill } from "@opencode/schema/skill"
 import { Snapshot } from "@opencode/schema/snapshot"
+import { UsageLimits } from "@opencode/schema/usage-limits"
 import { Vcs } from "@opencode/schema/vcs"
 import { WebSearch } from "@opencode/schema/websearch"
 import { Workspace } from "@opencode/schema/workspace"
@@ -57,6 +59,7 @@ const effectTypeReferences = [
   ...namespaceTypes("Instruction", "@opencode/schema/instruction", Instruction),
   ...namespaceTypes("InstructionEntry", "@opencode/schema/instruction-entry", InstructionEntry),
   ...namespaceTypes("Integration", "@opencode/schema/integration", Integration),
+  ...namespaceTypes("Job", "@opencode/schema/job", Job),
   typeReference("Location.PublicRef", "@opencode/schema/location", Location.PublicRef),
   typeReference("Location.PublicInfo", "@opencode/schema/location", Location.PublicInfo),
   ...namespaceTypes("Mcp", "@opencode/schema/mcp", Mcp),
@@ -79,6 +82,7 @@ const effectTypeReferences = [
   ...namespaceTypes("Shell", "@opencode/schema/shell", Shell),
   ...namespaceTypes("Skill", "@opencode/schema/skill", Skill),
   ...namespaceTypes("Snapshot", "@opencode/schema/snapshot", Snapshot),
+  ...namespaceTypes("UsageLimits", "@opencode/schema/usage-limits", UsageLimits),
   ...namespaceTypes("Vcs", "@opencode/schema/vcs", Vcs),
   ...namespaceTypes("WebSearch", "@opencode/schema/websearch", WebSearch),
   ...namespaceTypes("Workspace", "@opencode/schema/workspace", Workspace),

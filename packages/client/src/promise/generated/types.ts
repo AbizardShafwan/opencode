@@ -291,6 +291,11 @@ export type SessionStatus =
 
 export type PersistentPtyHandoff = { directory: string; instanceID: string; ticket: string; expiresAt: number }
 
+export type JobTime = {
+  started: number | "Infinity" | "-Infinity" | "NaN"
+  completed?: number | "Infinity" | "-Infinity" | "NaN"
+}
+
 export type ReferenceGitSource = { type: "git"; repository: string; branch?: string }
 
 export type VcsBranch = { current?: string; default?: string }
@@ -325,6 +330,8 @@ export type UsageSource = "deepseek-balance" | "codex-rate-limit" | "ollama-bala
 export type UsageBalance = { currency: string; total: string; granted?: string; toppedUp?: string }
 
 export type UsageWindow = { id: string; label: string; remainingPercent: number; resetsAt?: number }
+
+export type UsageLimitsMeter = { percent: number; limited: boolean; resetsAt: number }
 
 export type LocationPublicRef = { directory: AbsolutePath }
 
@@ -411,6 +418,8 @@ export type SessionMessageCompactionRunning = {
   reason: "auto" | "manual"
   summary: string
 }
+
+export type UsageLimitsBudgetModel = { providerID: ProviderID; modelID: string; name: string; spent?: MoneyUSD }
 
 export type FileSystemEntry = { path: RelativePath; type: "file" | "directory" }
 
@@ -869,6 +878,40 @@ export type FormMultiselectField1 = {
 
 export type FormAnswer1 = { [x: string]: FormValue1 }
 
+export type JobShell = {
+  kind: "shell"
+  id: string
+  sessionID: SessionID
+  status: "running" | "completed" | "error" | "cancelled"
+  title?: string
+  time: JobTime
+  shellID: string
+  command: string
+}
+
+export type JobSubagent = {
+  kind: "subagent"
+  id: string
+  sessionID: SessionID
+  status: "running" | "completed" | "error" | "cancelled"
+  title?: string
+  time: JobTime
+  childSessionID: SessionID
+  agent: string
+  description: string
+}
+
+export type JobImage = {
+  kind: "image"
+  id: string
+  sessionID: SessionID
+  status: "running" | "completed" | "error" | "cancelled"
+  title?: string
+  time: JobTime
+  path: string
+  model: string
+}
+
 export type VcsInfo = { provider?: string; branch: VcsBranch }
 
 export type WebSearchProvider = { id: WebSearchID; name: string }
@@ -888,6 +931,8 @@ export type UsageInfo = {
   balances?: Array<UsageBalance>
   windows?: Array<UsageWindow>
 }
+
+export type UsageLimitsGo = { rolling: UsageLimitsMeter; weekly: UsageLimitsMeter; monthly: UsageLimitsMeter }
 
 export type SessionMessageLocationSwitched = {
   id: SessionMessageID
@@ -962,6 +1007,21 @@ export type ModelVariant = {
 }
 
 export type PermissionRuleset = Array<PermissionRule>
+
+export type UsageLimitsBudget = {
+  id: string
+  limit: MoneyUSD
+  spent: MoneyUSD
+  scope: "each" | "combined"
+  per: "set" | "model"
+  coverage: "all" | "models"
+  models: Array<UsageLimitsBudgetModel>
+  vendors: Array<string>
+  inputPriceAtLeast?: MoneyUSDPerMillionTokens
+  picked: boolean
+  shared: boolean
+  resetsAt: number
+}
 
 export type SessionMessageUser = {
   id: SessionMessageID
@@ -2056,6 +2116,8 @@ export type FormReplied = {
   data: { id: FormID; sessionID: string; answer: FormAnswer1 }
 }
 
+export type JobInfo = JobShell | JobSubagent | JobImage
+
 export type UsageResult = UsageInfo | null
 
 export type SessionInboxMove = {
@@ -2400,6 +2462,12 @@ export type ConfigEntry =
     }
   | { type: "directory"; path: AbsolutePath }
 
+export type UsageLimitsInfo = {
+  workspace: { id: string; name?: string; usageURL: string }
+  go?: UsageLimitsGo
+  budgets: Array<UsageLimitsBudget>
+}
+
 export type SessionInboxUser = {
   id: SessionMessageID
   sessionID: SessionID
@@ -2454,6 +2522,8 @@ export type CredentialEntry = {
 }
 
 export type FormFields2 = [FormField1, ...Array<FormField1>]
+
+export type JobList = { data: Array<JobInfo> }
 
 export type SessionsResponse = {
   data: Array<SessionInfo>
@@ -5898,6 +5968,26 @@ export type ExperimentalPersistentPtyConnectTokenInput = {
 
 export type ExperimentalPersistentPtyConnectTokenOutput = { data: PtyTicketConnectToken }["data"]
 
+export type JobListInput = {
+  readonly sessionID?: {
+    readonly sessionID?: string | undefined
+    readonly kind?: "shell" | "subagent" | "image" | undefined
+    readonly descendants?: boolean | undefined
+  }["sessionID"]
+  readonly kind?: {
+    readonly sessionID?: string | undefined
+    readonly kind?: "shell" | "subagent" | "image" | undefined
+    readonly descendants?: boolean | undefined
+  }["kind"]
+  readonly descendants?: {
+    readonly sessionID?: string | undefined
+    readonly kind?: "shell" | "subagent" | "image" | undefined
+    readonly descendants?: boolean | undefined
+  }["descendants"]
+}
+
+export type JobListOutput = JobList["data"]
+
 export type ShellListInput = {
   readonly location?: { readonly location?: { readonly directory?: string | undefined } | undefined }["location"]
 }
@@ -6185,3 +6275,9 @@ export type UsageReadInput = {
 }
 
 export type UsageReadOutput = { location: LocationPublicRef; data: UsageResult }
+
+export type UsageLimitsInput = {
+  readonly location?: { readonly location?: { readonly directory?: string | undefined } | undefined }["location"]
+}
+
+export type UsageLimitsOutput = { location: LocationPublicRef; data: UsageLimitsInfo | null }

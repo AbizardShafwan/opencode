@@ -10,6 +10,8 @@ import { Config } from "effect"
 // name is still honored.
 export const password = Config.Redacted(`${Global.envPrefix}_PASSWORD`).pipe(
   Config.orElse(() => Config.Redacted(`${Global.envPrefix}_SERVER_PASSWORD`)),
+  Config.orElse(() => Config.Redacted("OPENCODE_PASSWORD")),
+  Config.orElse(() => Config.Redacted("OPENCODE_SERVER_PASSWORD")),
   Config.withDefault(undefined),
 )
 

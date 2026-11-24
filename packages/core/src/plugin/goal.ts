@@ -115,11 +115,26 @@ export const Plugin = define({
     })
 
     const pauseActive = (sessionID: Session.ID, reason: string, expected?: { id: string; updatedAt: number }) =>
-      read(sessionID).pipe(
-        Effect.flatMap((goal) => {
-          if (goal?.status !== "active") return Effect.void
-          if (expected && (goal.id !== expected.id || goal.updatedAt !== expected.updatedAt)) return Effect.void
-          return settle(sessionID, goal, "paused", reason)
+      sessionLocks.withLock(sessionID)(
+        read(sessionID).pipe(
+          Effect.flatMap((goal) => {
+            if (goal?.status !== "active") return Effect.void
+            if (expected && (goal.id !== expected.id || goal.updatedAt !== expected.updatedAt)) return Effect.void
+            return settleLocked(sessionID, goal, "paused", reason)
+          }),
+        ),
+      )
+
+    const pauseActiveFromExecution = (sessionID: Session.ID, reason: string, shouldPause = true) =>
+      sessionLocks.withLock(sessionID)(
+        Effect.gen(function* () {
+          const expected = executionGoals.get(sessionID)
+          executionGoals.delete(sessionID)
+          if (!shouldPause) return
+          const goal = yield* read(sessionID)
+          if (goal?.status !== "active") return
+          if (expected && (goal.id !== expected.id || goal.updatedAt !== expected.updatedAt)) return
+          yield* settleLocked(sessionID, goal, "paused", reason)
         }),
       )
 
@@ -240,11 +255,12 @@ export const Plugin = define({
         reason: verdict.reason,
         updatedAt: Math.max(now, (latest.updatedAt ?? 0) + 1),
       }
-      if (!(yield* replace(sessionID, latest, next))) return
       const admitted = yield* sessionLocks.withLock(sessionID)(
         Effect.gen(function* () {
-          const current = yield* read(sessionID)
-          if (!current || current.id !== next.id || current.status !== "active") return false
+          if (!(yield* replaceLocked(sessionID, latest, next))) return false
+          if (executionGoals.get(sessionID)?.id === next.id) {
+            executionGoals.set(sessionID, { id: next.id, updatedAt: next.updatedAt })
+          }
           // No description: timelines hide the continuation, and the pinned goal shows that the loop is still running.
           yield* ctx.session
             .synthetic({
@@ -314,6 +330,7 @@ export const Plugin = define({
     const store = yield* Effect.serviceOption(SessionStore.Service)
     const timers = yield* FiberMap.make<string>()
     const executionGoals = new Map<string, { id: string; updatedAt: number }>()
+    const admittedGoals = new Map<string, { sessionID: Session.ID; goalID: string }>()
     const watch = (sessionID: Session.ID): Effect.Effect<void> =>
       read(sessionID).pipe(
         Effect.flatMap((goal) =>
@@ -368,10 +385,40 @@ export const Plugin = define({
         switch (event.type) {
           case "session.deleted":
             compacted.delete(event.data.sessionID)
-            executionGoals.delete(event.data.sessionID)
-            return FiberMap.remove(timers, event.data.sessionID).pipe(
-              Effect.andThen(ctx.storage.remove(PREFIX + event.data.sessionID)),
+            for (const [inboxID, pending] of admittedGoals) {
+              if (pending.sessionID === event.data.sessionID) admittedGoals.delete(inboxID)
+            }
+            return sessionLocks.withLock(event.data.sessionID)(
+              Effect.sync(() => {
+                executionGoals.delete(event.data.sessionID)
+              }).pipe(
+                Effect.andThen(FiberMap.remove(timers, event.data.sessionID)),
+                Effect.andThen(ctx.storage.remove(PREFIX + event.data.sessionID)),
+              ),
             )
+          case "session.inbox.cancelled":
+            admittedGoals.delete(event.data.inboxID)
+            return Effect.void
+          case "session.inbox.delivered": {
+            const pending = admittedGoals.get(event.data.inboxID)
+            if (!pending || pending.sessionID !== event.data.sessionID) return Effect.void
+            admittedGoals.delete(event.data.inboxID)
+            return sessionLocks.withLock(event.data.sessionID)(
+              Effect.gen(function* () {
+                const goal = yield* read(event.data.sessionID)
+                if (goal?.status === "active" && goal.id === pending.goalID) {
+                  executionGoals.set(event.data.sessionID, { id: goal.id, updatedAt: goal.updatedAt })
+                }
+              }),
+            ).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logWarning("failed to track delivered goal input", {
+                  sessionID: event.data.sessionID,
+                  cause,
+                }),
+              ),
+            )
+          }
           case "session.step.started":
           case "session.step.ended":
             return touch(event.data.sessionID).pipe(
@@ -380,38 +427,54 @@ export const Plugin = define({
               ),
             )
           case "session.execution.started":
-            return Effect.gen(function* () {
-              const goal = yield* read(event.data.sessionID)
-              if (goal?.status === "active") {
-                if (goal.boot !== boot()) {
-                  yield* settle(event.data.sessionID, goal, "paused", "The server restarted while the goal was active")
-                } else {
-                  executionGoals.set(event.data.sessionID, { id: goal.id, updatedAt: goal.updatedAt })
-                }
-              }
-              return yield* FiberMap.remove(timers, event.data.sessionID)
-            }).pipe(
-              Effect.catchCause((cause) =>
-                Effect.logWarning("failed to check boot on execution start", {
-                  sessionID: event.data.sessionID,
-                  cause,
+            return sessionLocks
+              .withLock(event.data.sessionID)(
+                Effect.gen(function* () {
+                  const goal = yield* read(event.data.sessionID)
+                  if (goal?.status === "active") {
+                    if (goal.boot !== boot()) {
+                      yield* settleLocked(
+                        event.data.sessionID,
+                        goal,
+                        "paused",
+                        "The server restarted while the goal was active",
+                      )
+                    } else {
+                      executionGoals.set(event.data.sessionID, { id: goal.id, updatedAt: goal.updatedAt })
+                    }
+                  }
                 }),
-              ),
-            )
+              )
+              .pipe(
+                Effect.andThen(FiberMap.remove(timers, event.data.sessionID)),
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("failed to check boot on execution start", {
+                    sessionID: event.data.sessionID,
+                    cause,
+                  }),
+                ),
+              )
           case "session.execution.succeeded":
-            executionGoals.delete(event.data.sessionID)
-            return watch(event.data.sessionID).pipe(
-              Effect.catchCause((cause) =>
-                Effect.logWarning("failed to watch a waiting goal", { sessionID: event.data.sessionID, cause }),
-              ),
-            )
+            return sessionLocks
+              .withLock(event.data.sessionID)(
+                Effect.sync(() => {
+                  executionGoals.delete(event.data.sessionID)
+                }),
+              )
+              .pipe(
+                Effect.andThen(watch(event.data.sessionID)),
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("failed to watch a waiting goal", { sessionID: event.data.sessionID, cause }),
+                ),
+              )
           case "session.execution.interrupted": {
             compacted.delete(event.data.sessionID)
-            const expected = executionGoals.get(event.data.sessionID)
-            executionGoals.delete(event.data.sessionID)
             // Shutdown keeps the goal active; the next process sees the boot change and pauses it.
-            if (event.data.reason !== "user") return Effect.void
-            return pauseActive(event.data.sessionID, "Stopped by the user", expected).pipe(
+            return pauseActiveFromExecution(
+              event.data.sessionID,
+              "Stopped by the user",
+              event.data.reason === "user",
+            ).pipe(
               Effect.catchCause((cause) =>
                 Effect.logWarning("failed to pause goal", { sessionID: event.data.sessionID, cause }),
               ),
@@ -419,9 +482,10 @@ export const Plugin = define({
           }
           case "session.execution.failed": {
             compacted.delete(event.data.sessionID)
-            const expected = executionGoals.get(event.data.sessionID)
-            executionGoals.delete(event.data.sessionID)
-            return pauseActive(event.data.sessionID, `The session failed: ${event.data.error.message}`, expected).pipe(
+            return pauseActiveFromExecution(
+              event.data.sessionID,
+              `The session failed: ${event.data.error.message}`,
+            ).pipe(
               Effect.catchCause((cause) =>
                 Effect.logWarning("failed to pause goal", { sessionID: event.data.sessionID, cause }),
               ),
@@ -485,7 +549,8 @@ export const Plugin = define({
               return yield* sessionLocks.withLock(input.sessionID)(
                 Effect.gen(function* () {
                   const current = yield* read(input.sessionID)
-                  if (current?.status !== "active") return yield* Effect.fail(new Error("No active goal to pause."))
+                  if (!current) return yield* Effect.fail(new Error("No goal is set."))
+                  if (current.status !== "active") return yield* Effect.fail(new Error("No active goal to pause."))
                   compacted.delete(input.sessionID)
                   const now = yield* Clock.currentTimeMillis
                   return yield* write(input.sessionID, {
@@ -526,11 +591,13 @@ export const Plugin = define({
                       metadata: { source: "goal", goalID: resumed.id },
                     })
                     .pipe(
-                      Effect.andThen(
+                      Effect.tap((item) =>
                         Effect.sync(() => {
                           admitted = true
+                          admittedGoals.set(item.id, { sessionID: input.sessionID, goalID: resumed.id })
                         }),
                       ),
+                      Effect.asVoid,
                       Effect.uninterruptible,
                     )
                   return res
@@ -611,11 +678,13 @@ export const Plugin = define({
                       delivery: input.delivery,
                     })
                     .pipe(
-                      Effect.andThen(
+                      Effect.tap((item) =>
                         Effect.sync(() => {
                           admitted = true
+                          admittedGoals.set(item.id, { sessionID: input.sessionID, goalID: created.id })
                         }),
                       ),
+                      Effect.asVoid,
                       Effect.uninterruptible,
                     )
                   return res
@@ -629,11 +698,13 @@ export const Plugin = define({
                     delivery: input.delivery,
                   })
                   .pipe(
-                    Effect.andThen(
+                    Effect.tap((item) =>
                       Effect.sync(() => {
                         admitted = true
+                        admittedGoals.set(item.id, { sessionID: input.sessionID, goalID: created.id })
                       }),
                     ),
+                    Effect.asVoid,
                     Effect.uninterruptible,
                   )
                 return res

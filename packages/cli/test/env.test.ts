@@ -1,5 +1,18 @@
 import { expect, test } from "bun:test"
+import { ConfigProvider, Effect, Redacted } from "effect"
 import { Env } from "../src/env"
+
+test("password falls back to OPENCODE_SERVER_PASSWORD when branded password is unset", () => {
+  const provider = ConfigProvider.fromEnv({
+    env: { OPENCODE_SERVER_PASSWORD: "host-password" },
+  })
+  const value = Effect.runSync(
+    Effect.gen(function* () {
+      return yield* Env.password
+    }).pipe(Effect.provide(ConfigProvider.layer(provider))),
+  )
+  expect(value && Redacted.value(value)).toBe("host-password")
+})
 
 test("session environment omits server credentials", () => {
   const previousPassword = process.env.OPENCODE_PASSWORD

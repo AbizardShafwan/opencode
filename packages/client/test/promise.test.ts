@@ -28,6 +28,7 @@ test("exposes every standard HTTP API group", () => {
     "event",
     "pty",
     "experimental",
+    "job",
     "shell",
     "reference",
     "worktree",
@@ -36,6 +37,7 @@ test("exposes every standard HTTP API group", () => {
     "migration",
     "websearch",
     "config",
+    "usage",
   ])
   expect(Object.keys(client.debug)).toEqual(["heapDump", "location"])
   expect(Object.keys(client.debug.location)).toEqual(["list", "evict"])

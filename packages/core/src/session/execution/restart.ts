@@ -165,7 +165,7 @@ export const layer = (options?: Options) =>
       const recoverSubagent = Effect.fnUntraced(function* (
         background: Job.Background,
         recovery: Extract<Job.Recovery, { kind: "subagent" }>,
-        suspended: ReadonlySet<SessionSchema.ID>,
+        suspended: Set<SessionSchema.ID>,
         restored: Map<SessionSchema.ID, Job.Handle>,
       ) {
         const child = yield* store.get(recovery.childSessionID)
@@ -243,6 +243,42 @@ export const layer = (options?: Options) =>
           Effect.flatMap((result) => (result.info ? notify(result.info) : Effect.void)),
           Effect.forkIn(scope),
         )
+        suspended.delete(recovery.childSessionID)
+      })
+
+      const recoverImage = Effect.fnUntraced(function* (
+        background: Job.Background,
+        recovery: Extract<Job.Recovery, { kind: "image" }>,
+      ) {
+        const state = background.status === "running" ? "cancelled" : background.status
+        const text =
+          state === "completed"
+            ? (background.output ?? `Saved image: ${recovery.path} (${recovery.model}).`)
+            : state === "error"
+              ? `Image generation failed: ${background.error ?? "Unknown error"} (${recovery.model}).`
+              : `Image generation cancelled (server restarted). Output path: ${recovery.path} (${recovery.model}).`
+        yield* sessions
+          .synthetic({
+            id: background.notificationID,
+            sessionID: recovery.sessionID,
+            description: "Image generation finished",
+            text,
+            metadata: {
+              source: "experimental_image_generate",
+              jobID: background.id,
+              state,
+              path: recovery.path,
+              model: recovery.model,
+            },
+            resume: false,
+          })
+          .pipe(
+            Effect.catchTags({
+              "Session.NotFoundError": () => Effect.void,
+              "Session.SyntheticConflictError": () => Effect.void,
+            }),
+          )
+        yield* jobs.completeBackground(background.notificationID)
       })
 
       return Service.of({
@@ -270,7 +306,15 @@ export const layer = (options?: Options) =>
                 yield* recoverShell(background, recovery)
                 return
               }
-              if (active.has(recovery.childSessionID) && background.status === "running") return
+              if (recovery.kind === "image") {
+                if ((yield* jobs.get(background.id))?.status === "running") return
+                yield* recoverImage(background, recovery)
+                return
+              }
+              if (active.has(recovery.childSessionID) && background.status === "running") {
+                suspended.delete(recovery.childSessionID)
+                return
+              }
               yield* recoverSubagent(background, recovery, suspended, restored)
             }),
             { discard: true },

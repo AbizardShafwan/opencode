@@ -84,20 +84,22 @@ export const install = Effect.fn("AgentThreadTools.install")(function* (ctx: Con
       limit: 1,
     })
     const last = messages[0]
+    const thinking = last?.type === "assistant" ? last.thinking : undefined
+    const lastResponse = last ? SubagentCompletion.text(last) : undefined
     return {
       sessionID: entry.session.id,
       path: entry.path,
-      parentID: entry.session.parentID,
-      agent: entry.session.agent,
-      title: entry.session.title,
-      model: entry.session.model,
-      thinking: last?.type === "assistant" ? last.thinking : undefined,
+      ...(entry.session.parentID === undefined ? {} : { parentID: entry.session.parentID }),
+      ...(entry.session.agent === undefined ? {} : { agent: entry.session.agent }),
+      ...(entry.session.title === undefined ? {} : { title: entry.session.title }),
+      ...(entry.session.model === undefined ? {} : { model: entry.session.model }),
+      ...(thinking === undefined ? {} : { thinking }),
       status: entry.session.time.archived
         ? "closed"
         : active.has(entry.session.id)
           ? "running"
           : (job?.status ?? entry.session.outcome ?? "idle"),
-      last_response: last ? SubagentCompletion.text(last) : undefined,
+      ...(lastResponse === undefined ? {} : { last_response: lastResponse }),
     }
   })
 
