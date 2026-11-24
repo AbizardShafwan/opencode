@@ -7,7 +7,7 @@ import { useLanguage } from "@/runtime/i18n/language"
 import { useLayout } from "@/shell/state/layout"
 import { useComposerState } from "@/composer/persistence"
 import { useServerSDK } from "@/runtime/server/client"
-import { useData } from "@/runtime/server/current"
+import { useData, useServer } from "@/runtime/server/current"
 import { formatServerError } from "@/runtime/server/errors"
 import { projectSettingsKey, useSettings } from "@/settings/model"
 import { showToast } from "@/shell/notifications/toast"
@@ -18,6 +18,8 @@ import type { SessionRevert } from "@/session/revert"
 import { Command } from "@opencode/gui-extensions/sdk"
 import { useExtensionHost } from "@/runtime/extension/host"
 import type { Region } from "@/runtime/extension/panels"
+import { notifySessionTabsRemoved } from "@/shell/titlebar/session-events"
+import { useQueryClient } from "@tanstack/solid-query"
 
 type SessionCommandSource = {
   identity: SessionModel["identity"]
@@ -55,11 +57,13 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   const language = useLanguage()
   const prompt = useComposerState()
   const serverSDK = useServerSDK()
+  const server = useServer()
   const data = useData()
   const settings = useSettings()
   const platform = usePlatform()
   const layout = useLayout()
   const host = useExtensionHost()
+  const queryClient = useQueryClient()
 
   const openDialog = async <T,>(load: () => Promise<T>, show: (value: T) => void) => {
     const owner = actions.session.ownership.capture()
@@ -298,6 +302,30 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     })
   }
 
+  // Root sessions only, as in the sidebar. Removing the session's tab moves the view to the next open session.
+  const archivable = () => {
+    const info = actions.session.data.info()
+
+    return !!info && !info.parentID && info.time.archived === undefined
+  }
+
+  const archiveSession = async () => {
+    const info = actions.session.data.info()
+
+    if (!info || !archivable()) return
+
+    try {
+      await serverSDK.api.session.update({ sessionID: info.id, archived: true })
+    } catch (cause) {
+      showToast({ title: formatServerError(cause, language.t, language.t("common.requestFailed")) })
+
+      return
+    }
+
+    void queryClient.invalidateQueries({ queryKey: ["home-sessions", server.conn], exact: true })
+    notifySessionTabsRemoved({ server: server.key, directory: info.location.directory, sessionIDs: [info.id] })
+  }
+
   const undo = actions.revert.undo
   const redo = actions.revert.redo
 
@@ -325,7 +353,6 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     sessionCommand({
       id: "session.new",
       title: language.t("command.session.new"),
-      keybind: "mod+shift+s",
       slash: "new",
       onSelect: (source) => command.trigger("tab.new", source),
     }),
@@ -381,6 +408,13 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       title: language.t("command.session.copyID"),
       disabled: !actions.session.identity.params.id,
       onSelect: copySessionID,
+    }),
+    sessionCommand({
+      id: "session.archive",
+      title: language.t("command.session.archive"),
+      keybind: "mod+shift+s",
+      disabled: !archivable(),
+      onSelect: archiveSession,
     }),
   ]
 

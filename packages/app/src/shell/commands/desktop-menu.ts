@@ -97,8 +97,8 @@ export const DESKTOP_MENU: DesktopMenu[] = [
       {
         type: "item",
         labelKey: "desktop.menu.newSession",
-        command: "session.new",
-        accelerator: { macos: "Shift+Cmd+S" },
+        command: "tab.new",
+        accelerator: { macos: "Cmd+N" },
       },
       {
         type: "item",
