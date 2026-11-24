@@ -320,7 +320,7 @@ export type ConfigModelReasoning =
 
 export type ConfigShellOption = { path: string; name: string; acceptable: boolean }
 
-export type UsageSource = "deepseek-balance" | "antigravity-quota" | "codex-rate-limit" | "ollama-balance"
+export type UsageSource = "deepseek-balance" | "codex-rate-limit" | "ollama-balance"
 
 export type UsageBalance = { currency: string; total: string; granted?: string; toppedUp?: string }
 
@@ -881,7 +881,13 @@ export type ConfigModelCapabilities = {
   reasoning?: ConfigModelReasoning
 }
 
-export type UsageGroup = { label: string; description?: string; windows: Array<UsageWindow> }
+export type UsageInfo = {
+  providerID: ProviderID
+  source: UsageSource
+  fetchedAt: number
+  balances?: Array<UsageBalance>
+  windows?: Array<UsageWindow>
+}
 
 export type SessionMessageLocationSwitched = {
   id: SessionMessageID
@@ -2050,14 +2056,7 @@ export type FormReplied = {
   data: { id: FormID; sessionID: string; answer: FormAnswer1 }
 }
 
-export type UsageInfo = {
-  providerID: ProviderID
-  source: UsageSource
-  fetchedAt: number
-  balances?: Array<UsageBalance>
-  windows?: Array<UsageWindow>
-  groups?: Array<UsageGroup>
-}
+export type UsageResult = UsageInfo | null
 
 export type SessionInboxMove = {
   id: SessionMessageID
@@ -2455,8 +2454,6 @@ export type CredentialEntry = {
 }
 
 export type FormFields2 = [FormField1, ...Array<FormField1>]
-
-export type UsageResult = UsageInfo | null
 
 export type SessionsResponse = {
   data: Array<SessionInfo>

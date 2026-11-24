@@ -2388,7 +2388,7 @@ export type UsageReadOutput = {
   readonly data:
     | {
         readonly providerID: Provider.ID
-        readonly source: "deepseek-balance" | "antigravity-quota" | "codex-rate-limit" | "ollama-balance"
+        readonly source: "deepseek-balance" | "codex-rate-limit" | "ollama-balance"
         readonly fetchedAt: number
         readonly balances?:
           | ReadonlyArray<{
@@ -2404,18 +2404,6 @@ export type UsageReadOutput = {
               readonly label: string
               readonly remainingPercent: number
               readonly resetsAt?: number | undefined
-            }>
-          | undefined
-        readonly groups?:
-          | ReadonlyArray<{
-              readonly label: string
-              readonly description?: string | undefined
-              readonly windows: ReadonlyArray<{
-                readonly id: string
-                readonly label: string
-                readonly remainingPercent: number
-                readonly resetsAt?: number | undefined
-              }>
             }>
           | undefined
       }

@@ -1,14 +1,11 @@
 import { For, Show } from "solid-js"
 import type { UsageBalance, UsageInfo } from "@opencode/client/promise"
-import { Icon } from "@opencode/ui/icon"
-import { Tooltip } from "@opencode/ui/tooltip"
 import { createLatest, useExtension, type MountedSession } from "../sdk"
 
 /**
- * The selected model's provider usage inside the context panel: DeepSeek balance, Codex,
- * Claude Code, or Ollama Cloud windows, or Antigravity quota pools. The server picks the
- * source from the provider's active credential, so a provider with nothing to read renders
- * nothing here.
+ * The selected model's provider usage inside the context panel: DeepSeek balance, or Codex and
+ * Ollama Cloud windows. The server picks the source from the provider's active credential, so a
+ * provider with nothing to read renders nothing here.
  */
 export function SessionProviderUsage(props: { session: MountedSession; providerID: string | undefined }) {
   const ctx = useExtension()
@@ -53,8 +50,6 @@ export function SessionProviderUsage(props: { session: MountedSession; providerI
     switch (source) {
       case "deepseek-balance":
         return ctx.t("usage.deepseek.title")
-      case "antigravity-quota":
-        return ctx.t("usage.antigravity.title")
       case "codex-rate-limit":
         return ctx.t("usage.codex.title")
       case "ollama-balance":
@@ -83,96 +78,11 @@ export function SessionProviderUsage(props: { session: MountedSession; providerI
                 </div>
               )}
             </For>
-            <For each={value().groups ?? []}>
-              {(group) => {
-                const parsed = () => parseGroupDescription(group.description)
-
-                return (
-                  <div class="flex flex-col gap-3 p-3.5 rounded-lg border border-border-base bg-surface-base shadow-xs hover:border-border-strong/40 transition-colors">
-                    <div class="flex items-center justify-between gap-2 flex-wrap">
-                      <div class="flex items-center gap-2 flex-wrap min-w-0">
-                        <span class="text-13-medium text-text-strong font-medium truncate">{group.label}</span>
-
-                        <Show when={parsed().models}>
-                          {(models) => (
-                            <div class="flex items-center gap-1 flex-wrap">
-                              <For each={models()}>
-                                {(model) => (
-                                  <span class="inline-flex items-center px-1.5 py-0.5 rounded text-10-medium bg-surface-inset-base text-text-weak border border-border-base">
-                                    {model}
-                                  </span>
-                                )}
-                              </For>
-                            </div>
-                          )}
-                        </Show>
-                      </div>
-
-                      <Show when={parsed().info}>
-                        {(info) => (
-                          <Tooltip value={<div class="max-w-xs text-12-regular leading-relaxed p-1">{info()}</div>}>
-                            <button
-                              type="button"
-                              class="text-text-weak hover:text-text-base transition-colors p-0.5 rounded focus:outline-none cursor-pointer"
-                              aria-label={ctx.t("usage.planInfo")}
-                            >
-                              <Icon name="info" size="small" />
-                            </button>
-                          </Tooltip>
-                        )}
-                      </Show>
-                    </div>
-
-                    <div class="flex flex-col gap-1 divide-y divide-border-base/30">
-                      <For each={group.windows}>
-                        {(window) => (
-                          <QuotaRow
-                            label={window.label}
-                            remaining={window.remainingPercent}
-                            value={ctx.t("usage.remaining", { percent: percent(window.remainingPercent) })}
-                            detail={reset(window.resetsAt)}
-                          />
-                        )}
-                      </For>
-                    </div>
-                  </div>
-                )
-              }}
-            </For>
           </div>
         </div>
       )}
     </Show>
   )
-}
-
-interface GroupDescriptionInfo {
-  readonly models?: readonly string[]
-  readonly info?: string
-}
-
-function parseGroupDescription(raw: string | undefined): GroupDescriptionInfo {
-  if (!raw) return {}
-
-  const match = raw.match(/^Models within this group:\s*(.+)$/i)
-
-  if (match && match[1]) {
-    const list = match[1]
-      .split(/,\s*/)
-      .map((item) => item.trim())
-      .filter((item) => item.length > 0)
-
-    return { models: list }
-  }
-
-  return { info: raw }
-}
-
-function cleanWindowLabel(label: string): string {
-  return label
-    .replace(/\s+Limit\s+Remaining$/i, "")
-    .replace(/^Five\s+Hour/i, "5-Hour")
-    .trim()
 }
 
 function quotaBarColor(remaining: number): string {
@@ -203,12 +113,10 @@ function duration(remaining: number) {
  * readable and a screen reader announces a percentage, not a shape.
  */
 function QuotaRow(props: { label: string; value: string; remaining: number; detail?: string }) {
-  const cleanLabel = () => cleanWindowLabel(props.label)
-
   return (
     <div class="flex flex-col gap-1.5 py-1">
       <div class="flex items-center justify-between gap-2">
-        <span class="text-12-medium text-text-base">{cleanLabel()}</span>
+        <span class="text-12-medium text-text-base">{props.label}</span>
 
         <Show when={props.detail}>
           {(detail) => <span class="text-11-regular text-text-weak font-mono">{detail()}</span>}

@@ -1,8 +1,8 @@
 export * as AccountUsage from "./account-usage.js"
 
 /**
- * Provider account usage for the selected model: DeepSeek balance, Antigravity quota
- * pools, Codex rate-limit windows, and Ollama Cloud limits.
+ * Provider account usage for the selected model: DeepSeek balance, Codex rate-limit windows,
+ * and Ollama Cloud limits.
  *
  * Provider credentials live on the server, so a client never fetches these values itself.
  * A provider without a supported subscription, or one whose endpoint fails, reads as
@@ -16,12 +16,6 @@ import { makeLocationNode } from "@opencode/util/effect/app-node"
 import { httpClient } from "@opencode/util/effect/app-node-platform"
 import { Clock, Context, Effect, Layer, Option, Ref, Schema } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http"
-import {
-  ENDPOINT as ANTIGRAVITY_ENDPOINT,
-  METHOD_ID as ANTIGRAVITY_METHOD_ID,
-  USER_AGENT as ANTIGRAVITY_USER_AGENT,
-  projectIdFromPayload,
-} from "./google-antigravity/client.js"
 import { Integration } from "./integration.js"
 import { IntegrationConnection } from "./integration/connection.js"
 
@@ -31,14 +25,10 @@ const openAIMethods = new Set(["chatgpt-browser", "chatgpt-headless", "chatgpt-t
 const deepseekBalanceURL = "https://api.deepseek.com/user/balance"
 const ollamaBalanceURL = "https://ollama.com/api/balance"
 const codexUsageURL = "https://chatgpt.com/backend-api/wham/usage"
-/** Antigravity's daily host first, as the provider plugin uses, then the production host. */
-const antigravityHosts = [ANTIGRAVITY_ENDPOINT, "https://cloudcode-pa.googleapis.com"]
 
 /** Long enough that both UIs share one request, short enough that reopening a panel refetches. */
 const cacheTTL = 60_000
 const requestTimeout = "10 seconds"
-/** Caps the Antigravity host and endpoint fallbacks so one open never waits on every attempt. */
-const antigravityTimeout = "20 seconds"
 
 export interface Interface {
   /** Usage for the provider the selected model belongs to, or `undefined` when it has none. */
@@ -154,64 +144,7 @@ const fetchSource = (
         }),
       )
     }
-    case "antigravity-quota": {
-      if (value.type !== "oauth") return Effect.succeed(undefined)
-      return antigravityGroups(json, value).pipe(
-        Effect.timeout(antigravityTimeout),
-        Effect.orElseSucceed(() => undefined),
-        Effect.map((groups) => (groups?.length ? { providerID, source, fetchedAt, groups } : undefined)),
-      )
-    }
   }
-}
-
-const antigravityGroups = (
-  json: (request: HttpClientRequest.HttpClientRequest) => Effect.Effect<unknown>,
-  value: Extract<Value, { type: "oauth" }>,
-) => {
-  const headers = {
-    authorization: `Bearer ${value.access}`,
-    "user-agent": ANTIGRAVITY_USER_AGENT,
-    "client-metadata": JSON.stringify({
-      ideType: "IDE_UNSPECIFIED",
-      platform: "PLATFORM_UNSPECIFIED",
-      pluginType: "GEMINI",
-    }),
-  }
-  // The daily host serves one account's Cloud Code project; the production host covers the rest.
-  const post = (path: string, body: Readonly<Record<string, unknown>>): Effect.Effect<unknown> => {
-    const attempt = (index: number): Effect.Effect<unknown> => {
-      const host = antigravityHosts[index]
-      if (!host) return Effect.succeed(undefined)
-      const request = HttpClientRequest.post(`${host}${path}`).pipe(
-        HttpClientRequest.bodyJsonUnsafe(body),
-        HttpClientRequest.setHeaders(headers),
-      )
-      return json(request).pipe(Effect.flatMap((payload) => (payload ? Effect.succeed(payload) : attempt(index + 1))))
-    }
-    return attempt(0)
-  }
-
-  return Effect.gen(function* () {
-    const summary = yield* post("/v1internal:retrieveUserQuotaSummary", {})
-    const pools = summary === undefined ? undefined : parseAntigravityGroups(summary)
-    if (pools?.length) return pools
-    // Free accounts get no aggregate summary; their per-model quota still groups into pools.
-    const project = yield* projectID(value, post)
-    const models = yield* post("/v1internal:fetchAvailableModels", { project })
-    return models === undefined ? undefined : parseAntigravityModels(models)
-  })
-}
-
-const projectID = (
-  value: Extract<Value, { type: "oauth" }>,
-  post: (path: string, body: Readonly<Record<string, unknown>>) => Effect.Effect<unknown>,
-) => {
-  const stored = typeof value.metadata?.projectId === "string" ? value.metadata.projectId.trim() : ""
-  if (stored) return Effect.succeed(stored)
-  return post("/v1internal:loadCodeAssist", { metadata: { ideType: "ANTIGRAVITY" } }).pipe(
-    Effect.map((payload) => (payload === undefined ? "" : (projectIdFromPayload(payload) ?? ""))),
-  )
 }
 
 /** Picks the usage source the active credential supports; other API-key accounts have none. */
@@ -222,7 +155,6 @@ function resolveSource(providerID: Provider.ID, value: Value): Usage.Source | un
     return undefined
   }
   if (value.type !== "oauth") return undefined
-  if (providerID === Provider.ID.google && value.methodID === ANTIGRAVITY_METHOD_ID) return "antigravity-quota"
   if (providerID === Provider.ID.openai && openAIMethods.has(value.methodID)) return "codex-rate-limit"
   return undefined
 }
@@ -372,96 +304,6 @@ function resetTime(value: string | number | undefined) {
   if (Number.isFinite(epoch) && epoch > 0) return epoch > 1e12 ? epoch : epoch * 1000
   const parsed = Date.parse(value)
   return Number.isFinite(parsed) ? parsed : undefined
-}
-
-const AntigravityBucket = Schema.Struct({
-  bucketId: Schema.optional(Schema.String),
-  displayName: Schema.optional(Schema.String),
-  resetTime: Schema.optional(Schema.String),
-  remainingFraction: Schema.optional(Schema.Number),
-})
-
-const AntigravityGroup = Schema.Struct({
-  displayName: Schema.optional(Schema.String),
-  description: Schema.optional(Schema.String),
-  buckets: Schema.optional(Schema.Array(AntigravityBucket)),
-})
-
-const AntigravitySummary = Schema.Struct({
-  groups: Schema.optional(Schema.Array(AntigravityGroup)),
-})
-
-/**
- * Shared Antigravity pools as the service groups them, for example the Gemini pool and the
- * Claude and GPT pool. Buckets without a remaining fraction carry no value and are dropped.
- */
-export function parseAntigravityGroups(payload: unknown): Usage.Group[] | undefined {
-  const decoded = Schema.decodeUnknownOption(AntigravitySummary)(payload)
-  if (Option.isNone(decoded) || !decoded.value.groups) return undefined
-  return decoded.value.groups.flatMap((group) => {
-    const windows = (group.buckets ?? []).flatMap((bucket) => {
-      if (bucket.remainingFraction === undefined) return []
-      const label = bucket.displayName ?? bucket.bucketId
-      if (!label) return []
-      const resetsAt = resetTime(bucket.resetTime)
-      return [
-        {
-          id: bucket.bucketId ?? label,
-          label,
-          remainingPercent: percent(bucket.remainingFraction * 100),
-          ...(resetsAt === undefined ? {} : { resetsAt }),
-        },
-      ]
-    })
-    if (windows.length === 0) return []
-    return [
-      {
-        label: group.displayName ?? "Antigravity",
-        ...(group.description ? { description: group.description } : {}),
-        windows,
-      },
-    ]
-  })
-}
-
-const AntigravityModel = Schema.Struct({
-  displayName: Schema.optional(Schema.String),
-  quotaInfo: Schema.optional(
-    Schema.Struct({
-      remainingFraction: Schema.optional(Schema.Number),
-      resetTime: Schema.optional(Schema.String),
-    }),
-  ),
-})
-
-const AntigravityModels = Schema.Struct({
-  models: Schema.optional(Schema.Record(Schema.String, AntigravityModel)),
-})
-
-/**
- * Free-tier fallback: the aggregate summary needs a paid subscription, so group per-model
- * remaining quota into the two pools Antigravity advertises.
- */
-export function parseAntigravityModels(payload: unknown): Usage.Group[] | undefined {
-  const decoded = Schema.decodeUnknownOption(AntigravityModels)(payload)
-  if (Option.isNone(decoded) || !decoded.value.models) return undefined
-  const pools = new Map<string, Usage.Window[]>()
-  for (const [id, model] of Object.entries(decoded.value.models)) {
-    if (/^(chat_|tab_)/.test(id) || /image/i.test(id)) continue
-    const remaining = model.quotaInfo?.remainingFraction
-    if (remaining === undefined) continue
-    const label = id.startsWith("gemini") ? "Gemini" : "Claude and GPT"
-    const resetsAt = resetTime(model.quotaInfo?.resetTime)
-    const windows = pools.get(label) ?? []
-    windows.push({
-      id,
-      label: model.displayName ?? id,
-      remainingPercent: percent(remaining * 100),
-      ...(resetsAt === undefined ? {} : { resetsAt }),
-    })
-    pools.set(label, windows)
-  }
-  return Array.from(pools, ([label, windows]) => ({ label, windows }))
 }
 
 export const node = makeLocationNode({

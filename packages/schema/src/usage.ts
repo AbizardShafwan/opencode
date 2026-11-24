@@ -9,26 +9,24 @@ import { optional } from "./schema.js"
  * applies, so a client never mixes two providers' quotas in one view.
  *
  * - `deepseek-balance`: DeepSeek prepaid account balance.
- * - `antigravity-quota`: Antigravity / Cloud Code Assist shared quota pools.
  * - `codex-rate-limit`: OpenAI Codex subscription 5-hour and weekly windows.
  * - `ollama-balance`: Ollama Cloud session (5-hour) and weekly limits.
  */
 export const Source = Schema.Literals([
   "deepseek-balance",
-  "antigravity-quota",
   "codex-rate-limit",
   "ollama-balance",
 ]).annotate({ identifier: "Usage.Source" })
 export type Source = typeof Source.Type
 
 /**
- * A quota window such as Codex or Ollama Cloud's 5-hour and weekly limits, or one
- * Antigravity pool bucket. It reports what remains rather than what was consumed, because that is
- * what a client draws: the last percentage of a window is not the same as an empty allowance.
+ * A quota window such as Codex or Ollama Cloud's 5-hour and weekly limits. It reports what remains
+ * rather than what was consumed, because that is what a client draws: the last percentage of a
+ * window is not the same as an empty allowance.
  */
 export interface Window extends Schema.Schema.Type<typeof Window> {}
 export const Window = Schema.Struct({
-  /** Stable machine identifier, for example `5h`, `weekly`, or a quota bucket id. */
+  /** Stable machine identifier, for example `5h` or `weekly`. */
   id: Schema.String,
   /** The provider's own label for the window, for example `5h` or `weekly`. */
   label: Schema.String,
@@ -51,20 +49,9 @@ export const Balance = Schema.Struct({
   toppedUp: Schema.String.pipe(optional),
 }).annotate({ identifier: "Usage.Balance" })
 
-/** One Antigravity quota pool, for example the Gemini pool or the Claude and GPT pool. */
-export interface Group extends Schema.Schema.Type<typeof Group> {}
-export const Group = Schema.Struct({
-  /** The provider's own pool label. */
-  label: Schema.String,
-  /** Optional provider description of what the pool covers. */
-  description: Schema.String.pipe(optional),
-  windows: Schema.Array(Window),
-}).annotate({ identifier: "Usage.Group" })
-
 /**
  * Usage for the selected model's provider. Only the fields owned by `source` are present:
- * `balances` for `deepseek-balance`, `groups` for `antigravity-quota`, and `windows` for
- * `codex-rate-limit` and `ollama-balance`.
+ * `balances` for `deepseek-balance` and `windows` for `codex-rate-limit` and `ollama-balance`.
  */
 export interface Info extends Schema.Schema.Type<typeof Info> {}
 export const Info = Schema.Struct({
@@ -76,8 +63,6 @@ export const Info = Schema.Struct({
   balances: Schema.Array(Balance).pipe(optional),
   /** Codex or Ollama Cloud rate-limit windows. */
   windows: Schema.Array(Window).pipe(optional),
-  /** Antigravity quota pools. */
-  groups: Schema.Array(Group).pipe(optional),
 }).annotate({ identifier: "Usage.Info" })
 
 /** What a read returns: a snapshot, or nothing when the provider offers no usage to read. */

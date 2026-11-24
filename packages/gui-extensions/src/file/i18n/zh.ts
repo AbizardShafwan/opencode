@@ -14,7 +14,6 @@ export default {
   "open.app.cursor": "Cursor",
   "open.app.zed": "Zed",
   "open.app.textmate": "TextMate",
-  "open.app.antigravity": "Antigravity",
   "open.app.terminal": "终端",
   "open.app.iterm2": "iTerm2",
   "open.app.ghostty": "Ghostty",

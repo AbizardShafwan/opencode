@@ -17,7 +17,6 @@ const MAC_OPEN_APPS = [
   { id: "cursor", label: "open.app.cursor", icon: "cursor", openWith: "Cursor" },
   { id: "zed", label: "open.app.zed", icon: "zed", openWith: "Zed" },
   { id: "textmate", label: "open.app.textmate", icon: "textmate", openWith: "TextMate" },
-  { id: "antigravity", label: "open.app.antigravity", icon: "antigravity", openWith: "Antigravity" },
   { id: "terminal", label: "open.app.terminal", icon: "terminal", openWith: "Terminal" },
   { id: "iterm2", label: "open.app.iterm2", icon: "iterm2", openWith: "iTerm" },
   { id: "ghostty", label: "open.app.ghostty", icon: "ghostty", openWith: "Ghostty" },

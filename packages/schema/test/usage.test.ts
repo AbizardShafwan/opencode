@@ -30,18 +30,6 @@ test("a window percentage stays within the share it describes", () => {
   expect(() => decode({ id: "weekly", label: "weekly", remainingPercent: 100.5 })).toThrow()
 })
 
-test("an Antigravity pool carries the same windows as a rate-limited account", () => {
-  expect(
-    Schema.decodeUnknownSync(Usage.Group)({
-      label: "Gemini Models",
-      windows: [{ id: "gemini-weekly", label: "Weekly Limit Remaining", remainingPercent: 25 }],
-    }),
-  ).toEqual({
-    label: "Gemini Models",
-    windows: [{ id: "gemini-weekly", label: "Weekly Limit Remaining", remainingPercent: 25 }],
-  })
-})
-
 test("a read result may carry nothing for a provider without usage", () => {
   expect(Schema.decodeUnknownSync(Usage.Result)(undefined)).toBeUndefined()
 })

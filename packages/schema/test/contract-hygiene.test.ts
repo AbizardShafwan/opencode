@@ -237,7 +237,6 @@ describe("contract hygiene", () => {
       Usage.Source,
       Usage.Window,
       Usage.Balance,
-      Usage.Group,
       Usage.Info,
       Usage.Result,
       Vcs.Branch,

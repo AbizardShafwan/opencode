@@ -14367,7 +14367,7 @@
             }
           }
         },
-        "description": "Read the selected model provider's account usage: DeepSeek balance, Antigravity quota pools, or Codex and Ollama Cloud rate-limit windows. Returns nothing when the provider has no usage to read or its endpoint fails.",
+        "description": "Read the selected model provider's account usage: DeepSeek balance, or Codex and Ollama Cloud rate-limit windows. Returns nothing when the provider has no usage to read or its endpoint fails.",
         "summary": "Read provider usage"
       }
     }
@@ -21227,25 +21227,6 @@
         "required": ["currency", "total"],
         "additionalProperties": false
       },
-      "Usage.Group": {
-        "type": "object",
-        "properties": {
-          "label": {
-            "type": "string"
-          },
-          "description": {
-            "type": "string"
-          },
-          "windows": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Usage.Window"
-            }
-          }
-        },
-        "required": ["label", "windows"],
-        "additionalProperties": false
-      },
       "Usage.Info": {
         "type": "object",
         "properties": {
@@ -21269,12 +21250,6 @@
             "items": {
               "$ref": "#/components/schemas/Usage.Window"
             }
-          },
-          "groups": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Usage.Group"
-            }
           }
         },
         "required": ["providerID", "source", "fetchedAt"],
@@ -21292,7 +21267,7 @@
       },
       "Usage.Source": {
         "type": "string",
-        "enum": ["deepseek-balance", "antigravity-quota", "codex-rate-limit", "ollama-balance"]
+        "enum": ["deepseek-balance", "codex-rate-limit", "ollama-balance"]
       },
       "Usage.Window": {
         "type": "object",

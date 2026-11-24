@@ -14,7 +14,6 @@ export default {
   "open.app.cursor": "Cursor އެވެ",
   "open.app.zed": "Zed އެވެ",
   "open.app.textmate": "TextMate އެވެ",
-  "open.app.antigravity": "Antigravity އެވެ",
   "open.app.terminal": "ޓާމިނަލް އެވެ",
   "open.app.iterm2": "iTerm2 އެވެ",
   "open.app.ghostty": "Ghostty އެވެ",

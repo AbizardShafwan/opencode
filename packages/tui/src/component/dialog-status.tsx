@@ -100,15 +100,7 @@ export function DialogStatus() {
                   </text>
                 )}
               </For>
-              <UsageSection windows={value().windows} align={allWindows(value())} columns={columns()} />
-              <For each={value().groups ?? []}>
-                {(group) => (
-                  <box>
-                    <text fg={theme.text.muted}>{group.label}</text>
-                    <UsageSection windows={group.windows} align={allWindows(value())} columns={columns()} />
-                  </box>
-                )}
-              </For>
+              <UsageSection windows={value().windows} columns={columns()} />
             </box>
           )}
         </Show>
@@ -121,8 +113,6 @@ function usageTitle(source: UsageInfo["source"]) {
   switch (source) {
     case "deepseek-balance":
       return "DeepSeek balance"
-    case "antigravity-quota":
-      return "Antigravity quota"
     case "codex-rate-limit":
       return "Codex usage"
     case "ollama-balance":
@@ -133,26 +123,18 @@ function usageTitle(source: UsageInfo["source"]) {
 const BAR_MAX = 20
 const BAR_MIN = 6
 
-/** Every window of one provider, so the bars of its pools stay one width. */
-function allWindows(info: UsageInfo) {
-  return [...(info.windows ?? []), ...(info.groups ?? []).flatMap((group) => group.windows)]
-}
-
 /**
- * The windows of one source or pool. They share the snapshot's bar width so the bars line up, and
+ * The windows of one source. They share the snapshot's bar width so the bars line up, and
  * the snapshot's choice between a reset beside the percentage and a reset on its own line.
  */
-function UsageSection(props: {
-  windows: readonly UsageWindow[] | undefined
-  align: readonly UsageWindow[]
-  columns: number
-}) {
+function UsageSection(props: { windows: readonly UsageWindow[] | undefined; columns: number }) {
   const theme = useTheme().surface("dialog")
+  const windows = () => props.windows ?? []
 
   return (
-    <For each={props.windows ?? []}>
+    <For each={windows()}>
       {(window) => {
-        const row = () => quotaRow(props.align, window, props.columns)
+        const row = () => quotaRow(windows(), window, props.columns)
 
         return (
           <box>

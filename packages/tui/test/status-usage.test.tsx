@@ -12,22 +12,6 @@ const balance: UsageInfo = {
   balances: [{ currency: "USD", total: "27.02", granted: "0.00", toppedUp: "27.02" }],
 }
 
-const antigravity: UsageInfo = {
-  providerID: "google",
-  source: "antigravity-quota",
-  fetchedAt: 0,
-  groups: [
-    {
-      label: "Gemini Models",
-      windows: [{ id: "gemini-weekly", label: "Weekly Limit Remaining", remainingPercent: 0 }],
-    },
-    {
-      label: "Claude and GPT models",
-      windows: [{ id: "3p-weekly", label: "Weekly Limit Remaining", remainingPercent: 100 }],
-    },
-  ],
-}
-
 const windows: UsageInfo = {
   providerID: "openai",
   source: "codex-rate-limit",
@@ -35,6 +19,16 @@ const windows: UsageInfo = {
   windows: [
     { id: "5h", label: "5h", remainingPercent: 88, resetsAt: Date.now() + 3 * 60 * 60 * 1000 },
     { id: "weekly", label: "weekly", remainingPercent: 59 },
+  ],
+}
+
+const longLabelWindows: UsageInfo = {
+  providerID: "openai",
+  source: "codex-rate-limit",
+  fetchedAt: 0,
+  windows: [
+    { id: "spent", label: "Weekly Limit Remaining", remainingPercent: 0 },
+    { id: "full", label: "Session Limit Remaining", remainingPercent: 100 },
   ],
 }
 
@@ -74,18 +68,18 @@ test.each([100, 44])("status shows the selected model provider's balance at widt
   expect(frame).not.toContain("CNY")
 })
 
-test("status groups Antigravity quota into the service's pools", async () => {
-  await using setup = await renderStatus(100, { providerID: "google", usage: antigravity })
+test("status draws empty and full quota bars aligned across windows", async () => {
+  await using setup = await renderStatus(100, { providerID: "openai", usage: longLabelWindows })
   const frame = await settled(
-    (frame) => frame.includes("Claude and GPT models"),
+    (frame) => frame.includes("Session Limit Remaining"),
     () => setup.captureCharFrame(),
   )
-  expect(frame).toContain("Antigravity quota")
-  expect(frame).toContain("Gemini Models")
-  // A spent pool draws an empty track; a full one draws only filled cells.
+  expect(frame).toContain("Codex usage")
+  expect(frame).toContain("Weekly Limit Remaining")
+  // A spent window draws an empty track; a full one draws only filled cells.
   expect(bar(frame, 0)).toMatch(/^░+$/)
   expect(bar(frame, 100)).toMatch(/^█+$/)
-  // Both pools draw the same width, so their bars line up under one another.
+  // Both windows draw the same width, so their bars line up under one another.
   expect(bar(frame, 0)).toHaveLength(bar(frame, 100)!.length)
 })
 
@@ -103,10 +97,10 @@ test("status shows rate-limit windows with their reset time", async () => {
   expect(bar(frame, 59)).toBe(`${"█".repeat(12)}${"░".repeat(8)}`)
 })
 
-test("status keeps the percentage when a pool label leaves no room for a bar", async () => {
-  await using setup = await renderStatus(44, { providerID: "google", usage: antigravity })
+test("status keeps the percentage when a window label leaves no room for a bar", async () => {
+  await using setup = await renderStatus(44, { providerID: "openai", usage: longLabelWindows })
   const frame = await settled(
-    (frame) => frame.includes("Gemini Models"),
+    (frame) => frame.includes("Weekly Limit Remaining"),
     () => setup.captureCharFrame(),
   )
   expect(frame).toContain("Weekly Limit Remaining 0% left")

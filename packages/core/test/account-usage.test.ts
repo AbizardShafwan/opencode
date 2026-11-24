@@ -1,11 +1,5 @@
+import { parseCodex, parseDeepSeek, parseOllama } from "@opencode/core/account-usage"
 import { expect, test } from "bun:test"
-import {
-  parseAntigravityGroups,
-  parseAntigravityModels,
-  parseCodex,
-  parseDeepSeek,
-  parseOllama,
-} from "@opencode/core/account-usage"
 
 test("reads DeepSeek balances per currency", () => {
   expect(
@@ -67,84 +61,4 @@ test("reads Ollama Cloud's remaining session and weekly limits", () => {
   // Credit plans bill per token and report no windows, so the provider has no limits to show.
   expect(parseOllama({ included: { balance_usd: 72.5, allowance_usd: 100 } })).toEqual([])
   expect(parseOllama({ purchased: { balance_usd: 25 } })).toBeUndefined()
-})
-
-test("keeps Antigravity pools and their buckets as the service reports them", () => {
-  expect(
-    parseAntigravityGroups({
-      groups: [
-        {
-          displayName: "Gemini Models",
-          description: "Models within this group: Gemini Flash, Gemini Pro",
-          buckets: [
-            {
-              bucketId: "gemini-weekly",
-              displayName: "Weekly Limit Remaining",
-              window: "weekly",
-              resetTime: "2026-11-03T12:00:00Z",
-              remainingFraction: 0.25,
-            },
-          ],
-        },
-        { displayName: "Claude and GPT models", buckets: [{ bucketId: "3p-weekly", remainingFraction: 1 }] },
-        { displayName: "Empty", buckets: [{ bucketId: "no-fraction" }] },
-      ],
-    }),
-  ).toEqual([
-    {
-      label: "Gemini Models",
-      description: "Models within this group: Gemini Flash, Gemini Pro",
-      windows: [
-        {
-          id: "gemini-weekly",
-          label: "Weekly Limit Remaining",
-          remainingPercent: 25,
-          resetsAt: Date.parse("2026-11-03T12:00:00Z"),
-        },
-      ],
-    },
-    {
-      label: "Claude and GPT models",
-      windows: [{ id: "3p-weekly", label: "3p-weekly", remainingPercent: 100 }],
-    },
-  ])
-})
-
-test("groups per-model Antigravity quota into the Gemini and Claude/GPT pools", () => {
-  expect(
-    parseAntigravityModels({
-      models: {
-        "gemini-3.8-flash-tiered": {
-          displayName: "Gemini 3.8 Flash (High)",
-          quotaInfo: { remainingFraction: 0.5, resetTime: "2026-11-03T12:00:00Z" },
-        },
-        "claude-opus-4-6-thinking": {
-          displayName: "Claude Opus 4.6 (Thinking)",
-          quotaInfo: { remainingFraction: 1 },
-        },
-        "gpt-oss-120b-medium": { quotaInfo: { remainingFraction: 0.75 } },
-        "gemini-3-pro-image": { quotaInfo: { remainingFraction: 0 } },
-        chat_hidden: { quotaInfo: { remainingFraction: 0 } },
-      },
-    }),
-  ).toEqual([
-    {
-      label: "Gemini",
-      windows: [
-        {
-          id: "gemini-3.8-flash-tiered",
-          label: "Gemini 3.8 Flash (High)",
-          remainingPercent: 50,
-          resetsAt: Date.parse("2026-11-03T12:00:00Z"),
-        },
-      ],
-    },
-    {
-      label: "Claude and GPT",
-      windows: [
-        { id: "claude-opus-4-6-thinking", label: "Claude Opus 4.6 (Thinking)", remainingPercent: 100 },
-        { id: "gpt-oss-120b-medium", label: "gpt-oss-120b-medium", remainingPercent: 75 },
-      ],
-    },
-  ])
 })

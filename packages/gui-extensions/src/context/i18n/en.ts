@@ -7,7 +7,6 @@ export default {
   "usage.view": "View context usage",
   "usage.toggle": "Toggle session context",
   "usage.deepseek.title": "DeepSeek balance",
-  "usage.antigravity.title": "Antigravity quota",
   "usage.codex.title": "Codex usage",
   "usage.ollama.title": "Ollama usage",
   "usage.remaining": "{{percent}} left",
@@ -51,5 +50,4 @@ export default {
   "contextLimit.clampingNotice": "Model capacity ({{hardLimit}}) is lower than default soft limit ({{defaultLimit}}). Using {{hardLimit}}.",
   "contextLimit.savedToast": "Saved context limit to memyr.json",
   "usage.exhausted": "Exhausted",
-  "usage.planInfo": "Quota details",
 }

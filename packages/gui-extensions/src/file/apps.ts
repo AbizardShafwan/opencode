@@ -5,7 +5,6 @@ const OPEN_APPS = [
   "cursor",
   "zed",
   "textmate",
-  "antigravity",
   "finder",
   "terminal",
   "iterm2",
