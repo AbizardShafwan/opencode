@@ -4,6 +4,7 @@ import type { Session } from "@opencode/schema/session"
 import { makeGlobalNode } from "@opencode/util/effect/app-node"
 import { FSUtil } from "@opencode/util/fs-util"
 import { Global } from "@opencode/util/global"
+import { sameDirectory } from "@opencode/util/path"
 import { Cause, Context, Effect, Layer, Schema } from "effect"
 import path from "path"
 import { Bus } from "../bus.js"
@@ -51,6 +52,15 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionMove") {}
 
+export function expandHome(value: string, home: string, platform: NodeJS.Platform = process.platform) {
+  const trimmed = value.trim()
+  if (trimmed === "~") return home
+  if (trimmed.startsWith("~/") || (platform === "win32" && trimmed.startsWith("~\\"))) {
+    return path.join(home, trimmed.slice(2))
+  }
+  return trimmed
+}
+
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -75,10 +85,10 @@ const layer = Layer.effect(
       session: Session.Info,
       input: Parameters<Interface["move"]>[0],
     ) {
-      const value = input.directory.trim()
-      const expanded =
-        value === "~" ? global.home : value.startsWith("~/") ? path.join(global.home, value.slice(2)) : value
-      const directory = AbsolutePath.make(path.resolve(session.location.directory, expanded))
+      const expanded = expandHome(input.directory, global.home)
+      const directory = AbsolutePath.make(
+        FSUtil.normalizePath(path.resolve(session.location.directory, FSUtil.windowsPath(expanded))),
+      )
       const info = yield* fs.stat(directory).pipe(Effect.orElseSucceed(() => undefined))
       if (!info) return yield* new DestinationNotFoundError({ directory })
       if (info.type !== "Directory") return yield* new DestinationNotDirectoryError({ directory })
@@ -133,7 +143,7 @@ const layer = Layer.effect(
             // Only recover the placement we probed; active runners retain their step-boundary handoff.
             if (
               unavailable &&
-              latest.location.directory === session.location.directory &&
+              sameDirectory(latest.location.directory, session.location.directory) &&
               latest.location.workspaceID === session.location.workspaceID &&
               !(yield* execution.isActive(input.sessionID))
             ) {

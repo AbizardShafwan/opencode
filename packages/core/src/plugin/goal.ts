@@ -5,6 +5,7 @@ import { define } from "@opencode/plugin/effect/plugin"
 import type { SessionIdleBackground } from "@opencode/plugin/effect/session"
 import { Goal } from "@opencode/schema/goal"
 import { Session } from "@opencode/schema/session"
+import { sameDirectory } from "@opencode/util/path"
 import { isExactRootFallback } from "@opencode/util/session-title-fallback"
 import { Cause, Clock, DateTime, Duration, Effect, FiberMap, Option, Schema, Stream } from "effect"
 import { KeyedMutex } from "../effect/keyed-mutex.js"
@@ -282,29 +283,31 @@ export const Plugin = define({
         reason: verdict.reason,
         updatedAt: Math.max(now, (latest.updatedAt ?? 0) + 1),
       }
-      const admitted = yield* sessionLocks.withLock(sessionID)(
-        Effect.gen(function* () {
-          if (!(yield* replaceLocked(sessionID, latest, next))) return false
-          if (executionGoals.get(sessionID)?.id === next.id) {
-            executionGoals.set(sessionID, { id: next.id, updatedAt: next.updatedAt })
-          }
-          // No description: timelines hide the continuation, and the pinned goal shows that the loop is still running.
-          yield* ctx.session
-            .synthetic({
-              sessionID,
-              text: continuation(next, [verdict.reason, verdict.next_step && `Next step: ${verdict.next_step}`]),
-              metadata: { source: "goal", goalID: next.id },
-            })
-            .pipe(
-              Effect.catchCause((cause) =>
-                settleLocked(sessionID, next, "paused", "The goal stopped after an error").pipe(
-                  Effect.andThen(Effect.failCause(cause)),
+      const admitted = yield* sessionLocks
+        .withLock(sessionID)(
+          Effect.gen(function* () {
+            if (!(yield* replaceLocked(sessionID, latest, next))) return false
+            if (executionGoals.get(sessionID)?.id === next.id) {
+              executionGoals.set(sessionID, { id: next.id, updatedAt: next.updatedAt })
+            }
+            // No description: timelines hide the continuation, and the pinned goal shows that the loop is still running.
+            yield* ctx.session
+              .synthetic({
+                sessionID,
+                text: continuation(next, [verdict.reason, verdict.next_step && `Next step: ${verdict.next_step}`]),
+                metadata: { source: "goal", goalID: next.id },
+              })
+              .pipe(
+                Effect.catchCause((cause) =>
+                  settleLocked(sessionID, next, "paused", "The goal stopped after an error").pipe(
+                    Effect.andThen(Effect.failCause(cause)),
+                  ),
                 ),
-              ),
-            )
-          return true
-        }),
-      )
+              )
+            return true
+          }),
+        )
+        .pipe(Effect.uninterruptible)
       if (!admitted) return
     })
 
@@ -355,6 +358,7 @@ export const Plugin = define({
     // instead of staying active.
     const jobs = yield* Effect.serviceOption(Job.Service)
     const store = yield* Effect.serviceOption(SessionStore.Service)
+    const execution = yield* Effect.serviceOption(SessionExecution.Service)
     const externalWaits = yield* Effect.serviceOption(SessionExternalWait.Service)
     const mcp = yield* Effect.serviceOption(Mcp.Service)
     // Live external leases pause the goal only while their host connection is up.
@@ -368,6 +372,47 @@ export const Plugin = define({
     const executionGoals = new Map<string, { id: string; updatedAt: number }>()
     const admittedGoals = new Map<string, { sessionID: Session.ID; goalID: string }>()
     const forgetAdmitted = (sessionID: string) => forgetAdmissions(admittedGoals, sessionID)
+    const isExecuting = (sessionID: Session.ID) =>
+      executionGoals.has(sessionID)
+        ? Effect.succeed(true)
+        : Option.isSome(execution)
+          ? execution.value.isActive(sessionID)
+          : Effect.succeed(false)
+    const outstandingWork = (sessionID: Session.ID): Effect.Effect<ReadonlyArray<SessionIdleBackground>> => {
+      if (Option.isSome(jobs) && Option.isSome(store)) {
+        return SessionBackground.outstanding(jobs.value, store.value, sessionID, external).pipe(
+          Effect.orElseSucceed(() => []),
+        )
+      }
+      if (Option.isNone(externalWaits)) return Effect.succeed([])
+      return externalWaits.value
+        .list(
+          sessionID,
+          Option.isSome(mcp) ? { isServerLive: (server) => mcp.value.isAttached(server) } : undefined,
+        )
+        .pipe(
+          Effect.map((waits) =>
+            waits.map((wait) => ({
+              kind: "external" as const,
+              sessionID: Session.ID.make(wait.sessionID),
+              waitID: wait.waitID,
+              source: wait.source,
+              server: wait.server,
+              description: wait.description,
+            })),
+          ),
+          Effect.orElseSucceed(() => []),
+        )
+    }
+    const belongsToLocation = Effect.fnUntraced(function* (
+      sessionID: Session.ID,
+      eventLocation?: { readonly directory: string },
+    ) {
+      if (eventLocation) return sameDirectory(eventLocation.directory, ctx.location.directory)
+      const session = yield* ctx.session.get({ sessionID }).pipe(Effect.option)
+      if (Option.isNone(session)) return true
+      return sameDirectory(session.value.location.directory, ctx.location.directory)
+    })
     const watch = (sessionID: Session.ID): Effect.Effect<void> =>
       read(sessionID).pipe(
         Effect.flatMap((goal) =>
@@ -405,6 +450,49 @@ export const Plugin = define({
               ).pipe(Effect.asVoid),
         ),
       )
+
+    const onExternalWaitChanged = Effect.fn("GoalPlugin.onExternalWaitChanged")(function* (
+      sessionID: Session.ID,
+      eventLocation?: { readonly directory: string },
+    ) {
+      if (!(yield* belongsToLocation(sessionID, eventLocation))) return
+      if (yield* isExecuting(sessionID)) return
+      if (!(yield* FiberMap.has(timers, sessionID))) return
+      const current = yield* read(sessionID)
+      if (current?.status !== "active") return yield* FiberMap.remove(timers, sessionID)
+
+      // Replace the 30-minute sleep fiber so incoming execution or goal changes cancel any in-flight review.
+      return yield* FiberMap.run(
+        timers,
+        sessionID,
+        Effect.gen(function* () {
+          if (yield* isExecuting(sessionID)) return
+          const latest = yield* read(sessionID)
+          if (latest?.status !== "active") return
+          const running = yield* outstandingWork(sessionID)
+          yield* idle(sessionID, running, latest)
+          const after = yield* read(sessionID)
+          if (
+            after?.status === "active" &&
+            after.id === latest.id &&
+            after.updatedAt === latest.updatedAt &&
+            !compacted.has(sessionID) &&
+            !(yield* isExecuting(sessionID))
+          ) {
+            return yield* watch(sessionID)
+          }
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause)
+              ? Effect.interrupt
+              : Effect.logWarning("goal continuation failed after external wait settled", { sessionID, cause }).pipe(
+                  Effect.andThen(pauseActive(sessionID, "The goal stopped after an error")),
+                  Effect.catchCause(() => Effect.void),
+                ),
+          ),
+        ),
+      ).pipe(Effect.asVoid)
+    })
 
     // A subagent's executions carry its own Session ID, so a step anywhere below a waiting goal restarts its timer.
     // Otherwise a healthy subagent working past WAIT_LIMIT would pause the goal it works for.
@@ -532,6 +620,28 @@ export const Plugin = define({
               ),
             )
           }
+          case "session.external_wait.changed":
+            return onExternalWaitChanged(event.data.sessionID, event.location).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logWarning("failed to handle external wait change", {
+                  sessionID: event.data.sessionID,
+                  cause,
+                }),
+              ),
+            )
+          case "session.moved":
+            if (!sameDirectory(event.data.location.directory, ctx.location.directory)) {
+              return FiberMap.remove(timers, event.data.sessionID)
+            }
+            return isExecuting(event.data.sessionID).pipe(
+              Effect.flatMap((active) => (active ? Effect.void : watch(event.data.sessionID))),
+              Effect.catchCause((cause) =>
+                Effect.logWarning("failed to update goal watchdog after session move", {
+                  sessionID: event.data.sessionID,
+                  cause,
+                }),
+              ),
+            )
           default:
             return Effect.void
         }
@@ -555,13 +665,12 @@ export const Plugin = define({
                 .get({ sessionID: Session.ID.make(entry.key.slice(PREFIX.length)) })
                 .pipe(Effect.option)
               if (Option.isNone(session)) return yield* ctx.storage.remove(entry.key)
-              if (session.value.location.directory !== ctx.location.directory) return
+              if (!sameDirectory(session.value.location.directory, ctx.location.directory)) return
               const goal = Option.getOrUndefined(decodeState(entry.value))
               if (goal?.status !== "active") return
               if (goal.boot !== boot()) {
                 return yield* settle(session.value.id, goal, "paused", "The server restarted while the goal was active")
               }
-              const execution = yield* Effect.serviceOption(SessionExecution.Service)
               const active = Option.isSome(execution) ? yield* execution.value.isActive(session.value.id) : false
               if (!active) {
                 yield* watch(session.value.id)

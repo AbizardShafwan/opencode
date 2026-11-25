@@ -1,4 +1,5 @@
 import { expect } from "bun:test"
+import { execFileSync } from "node:child_process"
 import { Agent } from "@opencode/core/agent"
 import { Bus } from "@opencode/core/bus"
 import { Config } from "@opencode/core/config"
@@ -92,6 +93,7 @@ const build = (options: Options) =>
         }),
       clearSession: () => Effect.void,
       list: () => Effect.succeed([]),
+      listAll: () => Effect.succeed([]),
     })
     const permissionLayer = Layer.mock(Permission.Service, {
       assert: (input) =>
@@ -383,5 +385,59 @@ it.effect("forwards MCP progress to the tool progress channel", () =>
     expect(result._tag).toBe("Success")
     yield* Effect.forEach(Array.from({ length: 10 }), () => Effect.yieldNow)
     expect(updates).toEqual([{ progress: 1, total: 2, message: "half" }])
+  }),
+)
+
+const fifoEffect = process.platform === "win32" ? it.effect.skip : it.effect
+
+fifoEffect("registers FIFO secret delivery for read protection without draining the pipe", () =>
+  Effect.gen(function* () {
+    const fifo = path.join(outputData, "secret.fifo")
+    yield* Effect.sync(() => execFileSync("mkfifo", [fifo]))
+    const { tools, secretFiles } = yield* build({
+      tools: [mcpTool(hostServer, "request_secret", host)],
+      result: (input) => ({
+        server: Mcp.ServerName.make(input.server),
+        tool: input.name,
+        isError: false,
+        content: [{ type: "text", text: `Secret FIFO ready at ${fifo}` }],
+      }),
+    })
+    yield* run(tools, McpTool.directName(hostServer, "request_secret"), { label: "FIFO", delivery: "fifo" })
+    expect(yield* secretFiles.isProtected(fifo)).toBe(true)
+    const failure = yield* Effect.flip(secretFiles.assertReadable(fifo))
+    expect(failure.message).toBe(SecretFile.PROTECTED_MESSAGE)
+    expect(yield* secretFiles.readSecretBytes(yield* secretFiles.active())).toEqual([])
+  }),
+)
+
+it.effect("extracts POSIX, Windows drive, UNC, and quoted secret paths from host tool output", () =>
+  Effect.sync(() => {
+    expect(McpTool.deliveredFiles(undefined, "Saved to C:\\Users\\Alice\\secret.txt")).toEqual([
+      "C:\\Users\\Alice\\secret.txt",
+    ])
+    expect(McpTool.deliveredFiles(undefined, "Saved to c:/Users/Alice/secret.txt")).toEqual([
+      "c:/Users/Alice/secret.txt",
+    ])
+    expect(McpTool.deliveredFiles(undefined, 'Secret at "C:\\Users\\First Last\\secret.txt" ready')).toEqual([
+      "C:\\Users\\First Last\\secret.txt",
+    ])
+    expect(McpTool.deliveredFiles(undefined, "Secret at 'C:/Users/First Last/secret.txt' ready")).toEqual([
+      "C:/Users/First Last/secret.txt",
+    ])
+    expect(McpTool.deliveredFiles(undefined, "Written to \\\\fileserver\\secrets\\token.txt")).toEqual([
+      "\\\\fileserver\\secrets\\token.txt",
+    ])
+    expect(McpTool.deliveredFiles(undefined, 'Written to "\\\\fileserver\\my share\\tok.txt"')).toEqual([
+      "\\\\fileserver\\my share\\tok.txt",
+    ])
+    expect(McpTool.deliveredFiles(undefined, "Pipe at `/tmp/my secret/pin.fifo` and /var/run/secret")).toEqual([
+      "/tmp/my secret/pin.fifo",
+      "/var/run/secret",
+    ])
+    expect(
+      McpTool.deliveredFiles({ filePath: "C:\\Users\\Alice\\secret.txt" }, "ignored https://example.com/a/b"),
+    ).toEqual(["C:\\Users\\Alice\\secret.txt"])
+    expect(McpTool.deliveredFiles(undefined, "See https://example.com/foo/bar for instructions")).toEqual([])
   }),
 )

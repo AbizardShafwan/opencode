@@ -33,6 +33,8 @@ import type { Session } from "@opencode/schema/session"
 import { isRecord } from "@opencode/util/record"
 import { McpStdio } from "./stdio.js"
 
+export const EXTERNAL_WAIT_SETTLED_METHOD = "notifications/opencode/external_wait_settled"
+
 const DEFAULT_STARTUP_TIMEOUT = 30_000
 const DEFAULT_CATALOG_TIMEOUT = 30_000
 const DEFAULT_EXECUTION_TIMEOUT = 12 * 60 * 60 * 1_000 // 12 hours
@@ -162,6 +164,7 @@ export interface Connection {
   readonly onToolsChanged: (callback: () => void) => void
   readonly onPromptsChanged: (callback: () => void) => void
   readonly onResourcesChanged: (callback: () => void) => void
+  readonly onExternalWaitSettled: (callback: (params: unknown) => void) => void
 }
 
 /** An MCP server reached over a transport someone else already opened, such as a client socket. */
@@ -170,6 +173,8 @@ export interface Attached {
   readonly transport: Transport
   /** Execution timeout override, populated only from a verified trusted-host policy. */
   readonly timeout?: (typeof ConfigMCP.Server.Type)["timeout"]
+  /** True only when the server verified the attachment against the trusted-host token. */
+  readonly trustedHost?: boolean
 }
 
 /**
@@ -192,7 +197,9 @@ export const connect = Effect.fnUntraced(function* (
     config.type === "attached" ? (config.timeout ?? { execution: ATTACHED_EXECUTION_TIMEOUT }) : config.timeout
   // Attached clients run ordinary SDK servers over the initialize handshake.
   const protocol = config.type === "attached" ? "legacy" : config.protocol
+  const trustedAttached = config.type === "attached" && config.trustedHost === true
   const changed = { tools: () => {}, prompts: () => {}, resources: () => {} }
+  const settled: { callback?: (params: unknown) => void } = {}
   const listChanged = (key: keyof typeof changed) => ({
     autoRefresh: false,
     debounceMs: 0,
@@ -253,6 +260,24 @@ export const connect = Effect.fnUntraced(function* (
       )
       client.setNotificationHandler("notifications/elicitation/complete", (notification) =>
         runPromise(elicitation.complete({ server, elicitationID: notification.params.elicitationId })),
+      )
+    }
+    if (trustedAttached) {
+      client.setNotificationHandler(
+        EXTERNAL_WAIT_SETTLED_METHOD,
+        { params: Schema.toStandardSchemaV1(Schema.Unknown) },
+        (_params, notification) => {
+          settled.callback?.(notification.params)
+        },
+      )
+    }
+    if (!trustedAttached && config.type === "attached") {
+      client.setNotificationHandler(
+        EXTERNAL_WAIT_SETTLED_METHOD,
+        { params: Schema.toStandardSchemaV1(Schema.Unknown) },
+        () => {
+          runFork(Effect.logWarning("ignoring external_wait_settled notification from untrusted attachment", { server }))
+        },
       )
     }
 
@@ -527,6 +552,10 @@ export const connect = Effect.fnUntraced(function* (
       },
       onResourcesChanged: (callback) => {
         changed.resources = callback
+      },
+      onExternalWaitSettled: (callback) => {
+        if (!trustedAttached) return
+        settled.callback = callback
       },
     }
     return connection

@@ -1,12 +1,14 @@
 import { describe, expect } from "bun:test"
-import { Duration, Effect } from "effect"
+import { Duration, Effect, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { Bus } from "@opencode/core/bus"
 import { KV } from "@opencode/core/kv"
+import { Location } from "@opencode/core/location"
 import { Session } from "@opencode/core/session"
 import { SessionBackground } from "@opencode/core/session/background"
 import { SessionExternalWait } from "@opencode/core/session/external-wait"
 import { SessionStore } from "@opencode/core/session/store"
+import { AbsolutePath } from "@opencode/schema/schema"
 import { SessionEvent } from "@opencode/schema/session-event"
 import { LayerNode } from "@opencode/util/effect/layer-node"
 import { testEffect } from "./lib/effect"
@@ -134,5 +136,55 @@ describe("SessionExternalWait", () => {
       yield* Effect.forEach(Array.from({ length: 10 }), () => Effect.yieldNow)
       expect((yield* kv.scan({ prefix: `external.wait/${otherSessionID}/` })).entries).toEqual([])
     }),
+  )
+
+  it.effect("lists active waits across all sessions with single-scan pruning and liveness filtering", () =>
+    Effect.gen(function* () {
+      const waits = yield* SessionExternalWait.Service
+      yield* waits.register(wait("pr-watch:1", { server: "live", ttlMs: Duration.toMillis(Duration.minutes(10)) }))
+      yield* waits.register(wait("pr-watch:expired", { server: "live", ttlMs: Duration.toMillis(Duration.minutes(2)) }))
+      yield* waits.register({ ...wait("bg:2", { server: "down" }), sessionID: otherSessionID })
+
+      yield* TestClock.adjust(Duration.minutes(3))
+
+      const liveOnly = yield* waits.listAll({ isServerLive: (name) => Effect.succeed(name === "live") })
+      expect(liveOnly.map((entry) => `${entry.sessionID}:${entry.waitID}`)).toEqual([`${sessionID}:pr-watch:1`])
+
+      // Disconnected host leases stay in KV so re-attachment recovers them.
+      const all = yield* waits.listAll()
+      expect(all.map((entry) => entry.waitID).toSorted()).toEqual(["bg:2", "pr-watch:1"])
+    }),
+  )
+
+  it.effect("emits SessionEvent.ExternalWait.Changed with location only on actual state mutations", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const waits = yield* SessionExternalWait.Service
+        const bus = yield* Bus.Service
+        const ref = Location.Ref.make({ directory: AbsolutePath.make("/repo-wait-bus") })
+        const events: Array<{ sessionID: string; directory?: string }> = []
+
+        yield* bus.subscribe(SessionEvent.ExternalWait.Changed).pipe(
+          Stream.runForEach((event) =>
+            Effect.sync(() => {
+              events.push({ sessionID: event.data.sessionID, directory: event.location?.directory })
+            }),
+          ),
+          Effect.forkScoped({ startImmediately: true }),
+        )
+
+        yield* waits.register({ ...wait("pr-watch:1"), location: ref })
+        yield* waits.clear(sessionID, "pr-watch:missing", { location: ref })
+        yield* waits.clearByPrefix(sessionID, "missing:", { location: ref })
+        yield* waits.clear(sessionID, "pr-watch:1", { location: ref })
+        yield* waits.clear(sessionID, "pr-watch:1", { location: ref })
+        yield* Effect.forEach(Array.from({ length: 10 }), () => Effect.yieldNow)
+
+        expect(events).toEqual([
+          { sessionID, directory: ref.directory },
+          { sessionID, directory: ref.directory },
+        ])
+      }),
+    ),
   )
 })

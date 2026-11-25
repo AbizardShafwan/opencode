@@ -8,6 +8,7 @@ import { SessionEvent } from "@opencode/schema/session-event"
 import { LayerNode } from "@opencode/util/effect/layer-node"
 import { Duration, Effect } from "effect"
 import { TestClock } from "effect/testing"
+import { execFileSync } from "node:child_process"
 import fs from "fs/promises"
 import path from "path"
 import { tmpdirScoped } from "./fixture/tmpdir"
@@ -76,6 +77,58 @@ describe("SecretFile", () => {
       yield* bus.publish(SessionEvent.Deleted, { sessionID: s2 })
       yield* Effect.forEach(Array.from({ length: 10 }), () => Effect.yieldNow)
       expect((yield* kv.scan({ prefix: "secret.file/" })).entries).toEqual([])
+    }),
+  )
+
+  const fifoEffect = process.platform === "win32" ? it.effect.skip : it.effect
+
+  fifoEffect("skips named pipes in readSecretBytes without blocking or draining while keeping read/grep blocked", () =>
+    Effect.gen(function* () {
+      const secretFiles = yield* SecretFile.Service
+      const tmp = (yield* tmpdirScoped()).path
+      const fifo = path.join(tmp, "secret.fifo")
+      const regular = path.join(tmp, "regular.secret")
+      execFileSync("mkfifo", [fifo])
+      yield* Effect.promise(() => fs.writeFile(regular, "regular-secret-value"))
+
+      yield* secretFiles.register(fifo, "ses_fifo")
+      yield* secretFiles.register(regular, "ses_fifo")
+
+      expect(yield* secretFiles.isProtected(fifo)).toBe(true)
+      const failure = yield* Effect.flip(secretFiles.assertReadable(fifo))
+      expect(failure.message).toBe(SecretFile.PROTECTED_MESSAGE)
+
+      // No writer is attached to `fifo`; readSecretBytes must stat and skip it without opening/blocking.
+      expect(yield* secretFiles.readSecretBytes(yield* secretFiles.active())).toEqual(["regular-secret-value"])
+    }),
+  )
+
+  it.effect("normalizes win32 drive casing, slashes, UNC paths, and MSYS prefixes in keys and commands", () =>
+    Effect.sync(() => {
+      expect(SecretFile.normalizeKeyPath("c:\\Users\\Alice\\secret.txt", "win32")).toBe(
+        SecretFile.normalizeKeyPath("C:/users/alice/secret.txt\\", "win32"),
+      )
+      expect(SecretFile.normalizeKeyPath("/Tmp/Secret", "linux")).not.toBe(
+        SecretFile.normalizeKeyPath("/tmp/secret", "linux"),
+      )
+
+      const winEntry = {
+        path: "C:\\Users\\Alice\\my secret\\token.txt",
+        realpath: "C:\\Users\\Alice\\my secret\\token.txt",
+      }
+      expect(SecretFile.matchesCommandPath('cat "C:\\Users\\Alice\\my secret\\token.txt"', winEntry, "win32")).toBe(true)
+      expect(SecretFile.matchesCommandPath('cat "c:/users/ALICE/my secret/token.txt"', winEntry, "win32")).toBe(true)
+      expect(SecretFile.matchesCommandPath('cat "/c/Users/Alice/my secret/token.txt"', winEntry, "win32")).toBe(true)
+      expect(SecretFile.matchesCommandPath("cat /c/Users/Alice/my\\ secret/token.txt", winEntry, "win32")).toBe(true)
+      expect(SecretFile.matchesCommandPath("cat /cygdrive/c/Users/Alice/my\\ secret/token.txt", winEntry, "win32")).toBe(
+        true,
+      )
+      expect(SecretFile.matchesCommandPath("cat /mnt/c/Users/Alice/my\\ secret/token.txt", winEntry, "win32")).toBe(true)
+      expect(SecretFile.matchesCommandPath("cat other.txt", winEntry, "win32")).toBe(false)
+
+      const uncEntry = { path: "\\\\Server\\Secrets\\tok.txt", realpath: "\\\\Server\\Secrets\\tok.txt" }
+      expect(SecretFile.matchesCommandPath("type \\\\server\\secrets\\tok.txt", uncEntry, "win32")).toBe(true)
+      expect(SecretFile.matchesCommandPath("cat //server/SECRETS/tok.txt", uncEntry, "win32")).toBe(true)
     }),
   )
 })

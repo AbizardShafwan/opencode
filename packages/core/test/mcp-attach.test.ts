@@ -4,6 +4,7 @@ import { InMemoryTransport, type JSONRPCMessage, type Transport } from "@modelco
 import { McpServer } from "@modelcontextprotocol/server"
 import { ConfigMCP } from "@opencode/schema/config/mcp"
 import { McpEvent } from "@opencode/schema/mcp-event"
+import { SessionEvent as SchemaSessionEvent } from "@opencode/schema/session-event"
 import { Bus } from "@opencode/core/bus"
 import { Credential } from "@opencode/core/credential"
 import { AppNodeBuilder } from "@opencode/core/effect/app-node-builder"
@@ -14,6 +15,7 @@ import { Location } from "@opencode/core/location"
 import { Mcp } from "@opencode/core/mcp/index"
 import { Permission } from "@opencode/core/permission"
 import { Session } from "@opencode/core/session"
+import { SessionExternalWait } from "@opencode/core/session/external-wait"
 import { Tool } from "@opencode/core/tool"
 import { McpTool } from "@opencode/core/tool/mcp"
 import { LayerNode } from "@opencode/util/effect/layer-node"
@@ -28,7 +30,7 @@ import { executeTool, toolIdentity } from "./lib/tool"
 const unused = () => Effect.die("unused integration service")
 
 const it = testEffect(
-  AppNodeBuilder.build(LayerNode.group([Tool.node, McpTool.node, Mcp.node, Bus.node]), [
+  AppNodeBuilder.build(LayerNode.group([Tool.node, McpTool.node, Mcp.node, Bus.node, Location.node, SessionExternalWait.node]), [
     Config.node.replace(Config.testLayer()),
     Location.node.replace(tempLocationLayer),
     Environment.node.replace(hostEnvironmentLayer),
@@ -405,4 +407,112 @@ it.live("hides attached entries from server status and keeps them across config 
     const result = yield* mcp.callTool({ server: "tui", name: "open_terminal" })
     expect(result.content).toEqual([{ type: "text", text: "tui:open_terminal" }])
   }),
+)
+
+it.live(
+  "clears matching external waits and emits SessionEvent.ExternalWait.Changed only from trusted-host attachments",
+  () =>
+    Effect.gen(function* () {
+      const mcp = yield* Mcp.Service
+      const waits = yield* SessionExternalWait.Service
+      const bus = yield* Bus.Service
+      const loc = yield* Location.Service
+      const settledEvents: Array<{ sessionID: string; directory?: string }> = []
+      yield* bus.subscribe(SchemaSessionEvent.ExternalWait.Changed).pipe(
+        Stream.runForEach((event) =>
+          Effect.sync(() => {
+            settledEvents.push({ sessionID: event.data.sessionID, directory: event.location?.directory })
+          }),
+        ),
+        Effect.forkScoped({ startImmediately: true }),
+      )
+
+      const host = yield* clientServer("t3-code-host", ["ping"])
+      const untrusted = yield* clientServer("untrusted-mcp", ["pong"])
+      yield* mcp.attach("t3-code-host", host.client, { trustedHost: true, permissionNamespace: "t3-code" })
+      yield* mcp.attach("untrusted-mcp", untrusted.client)
+
+      const s1 = Session.ID.make("ses_wait_notify_1")
+      const s2 = Session.ID.make("ses_wait_notify_2")
+      const wait = (sessionID: Session.ID, waitID: string) => ({
+        sessionID,
+        waitID,
+        source: "pull_request_watch",
+        server: "t3-code-host",
+        description: `Wait ${waitID}`,
+      })
+
+      yield* waits.register(wait(s1, "pr-watch:1"))
+      yield* waits.register(wait(s1, "pr-watch:2"))
+      yield* waits.register(wait(s1, "bg:1"))
+      yield* waits.register(wait(s2, "pr-watch:other"))
+      settledEvents.length = 0
+
+      // Untrusted attachments cannot clear or emit wait changes, even with `all: true`.
+      yield* Effect.promise(() =>
+        untrusted.server.server.notification({
+          method: "notifications/opencode/external_wait_settled",
+          params: { sessionID: s1, all: true },
+        }),
+      )
+      yield* Effect.sleep("25 millis")
+      expect((yield* waits.list(s1)).map((entry) => entry.waitID).toSorted()).toEqual(["bg:1", "pr-watch:1", "pr-watch:2"])
+      expect(settledEvents).toEqual([])
+
+      // Malformed trusted payloads fail schema validation and leave waits intact.
+      for (const badParams of [
+        { sessionID: s1 },
+        { sessionID: s1, waitID: "" },
+        { sessionID: s1, waitPrefix: "" },
+        { sessionID: s1, all: false },
+        { waitID: "pr-watch:1" },
+      ]) {
+        yield* Effect.promise(() =>
+          host.server.server.notification({
+            method: "notifications/opencode/external_wait_settled",
+            params: badParams,
+          }),
+        )
+      }
+      yield* Effect.sleep("25 millis")
+      expect((yield* waits.list(s1)).map((entry) => entry.waitID).toSorted()).toEqual(["bg:1", "pr-watch:1", "pr-watch:2"])
+      expect(settledEvents).toEqual([])
+
+      // Trusted host settles exact waitID.
+      yield* Effect.promise(() =>
+        host.server.server.notification({
+          method: "notifications/opencode/external_wait_settled",
+          params: { sessionID: s1, waitID: "bg:1" },
+        }),
+      )
+      yield* waitUntil(() => settledEvents.length === 1)
+      expect((yield* waits.list(s1)).map((entry) => entry.waitID).toSorted()).toEqual(["pr-watch:1", "pr-watch:2"])
+      expect(settledEvents).toEqual([{ sessionID: s1, directory: loc.directory }])
+
+      // Trusted host settles waitPrefix and leaves other sessions untouched.
+      yield* Effect.promise(() =>
+        host.server.server.notification({
+          method: "notifications/opencode/external_wait_settled",
+          params: { sessionID: s1, waitPrefix: "pr-watch:" },
+        }),
+      )
+      yield* waitUntil(() => settledEvents.length === 2)
+      expect(yield* waits.list(s1)).toEqual([])
+      expect((yield* waits.list(s2)).map((entry) => entry.waitID)).toEqual(["pr-watch:other"])
+      expect(settledEvents).toEqual([
+        { sessionID: s1, directory: loc.directory },
+        { sessionID: s1, directory: loc.directory },
+      ])
+
+      // Trusted host settles all for s2.
+      yield* Effect.promise(() =>
+        host.server.server.notification({
+          method: "notifications/opencode/external_wait_settled",
+          params: { sessionID: s2, all: true },
+        }),
+      )
+      yield* waitUntil(() => settledEvents.length === 3)
+      expect(yield* waits.list(s2)).toEqual([])
+      expect(settledEvents[2]).toEqual({ sessionID: s2, directory: loc.directory })
+    }),
 )

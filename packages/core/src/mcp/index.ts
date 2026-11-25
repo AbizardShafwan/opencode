@@ -3,11 +3,26 @@ export * as Mcp from "./index.js"
 import { Mcp } from "@opencode/schema/mcp"
 import { McpEvent } from "@opencode/schema/mcp-event"
 import { ephemeral } from "@opencode/schema/event"
-import type { Session } from "@opencode/schema/session"
+import { Session } from "@opencode/schema/session"
 import type { Transport } from "@modelcontextprotocol/client"
 import { createHash } from "node:crypto"
 import { isDeepStrictEqual } from "node:util"
-import { Cause, Context, Duration, Effect, Exit, FiberSet, Latch, Layer, Schema, Scope, Semaphore, Stream, Types } from "effect"
+import {
+  Cause,
+  Context,
+  Duration,
+  Effect,
+  Exit,
+  FiberSet,
+  Latch,
+  Layer,
+  Option,
+  Schema,
+  Scope,
+  Semaphore,
+  Stream,
+  Types,
+} from "effect"
 import { makeLocationNode } from "@opencode/util/effect/app-node"
 import { Credential } from "../credential.js"
 import { Bus } from "../bus.js"
@@ -17,12 +32,21 @@ import { Integration } from "../integration.js"
 import { KeyedMutex } from "../effect/keyed-mutex.js"
 import { Location } from "../location.js"
 import { waitForAbort } from "@opencode/util/process"
+import { SessionExternalWait } from "../session/external-wait.js"
 import { State } from "../state.js"
 import type { McpClient } from "./client.js"
 
 export const ServerName = Schema.String.pipe(Schema.brand("MCP.ServerName"))
 export type ServerName = typeof ServerName.Type
 export const PromptsChanged = ephemeral({ type: "mcp.prompts.changed", schema: { server: Schema.String } })
+
+export const ExternalWaitSettledParams = Schema.Union([
+  Schema.Struct({ sessionID: Session.ID, waitID: Schema.NonEmptyString }),
+  Schema.Struct({ sessionID: Session.ID, waitPrefix: Schema.NonEmptyString }),
+  Schema.Struct({ sessionID: Session.ID, all: Schema.Literal(true) }),
+])
+export type ExternalWaitSettledParams = typeof ExternalWaitSettledParams.Type
+const decodeExternalWaitSettled = Schema.decodeUnknownOption(ExternalWaitSettledParams)
 
 export const Status = Mcp.Status
 export type Status = Mcp.Status
@@ -212,6 +236,7 @@ export const layer = (options?: Options) =>
       const forms = yield* Form.Service
       const integration = yield* Integration.Service
       const credentials = yield* Credential.Service
+      const externalWaits = yield* Effect.serviceOption(SessionExternalWait.Service)
       const root = yield* Effect.scope
       const fork = yield* FiberSet.makeRuntime<never, void, never>()
       // Server scopes close in parallel on shutdown, so one slow server's stop grace does not delay
@@ -636,6 +661,7 @@ export const layer = (options?: Options) =>
           {
             type: "attached",
             transport,
+            ...(policy?.trustedHost === true ? { trustedHost: true } : {}),
             // The SDK's own execution timeout honors a verified trusted host's override; untrusted
             // attachments stay capped at ATTACHED_EXECUTION_TIMEOUT.
             ...(policy?.trustedHost === true && policy.executionTimeoutMs !== undefined
@@ -691,6 +717,43 @@ export const layer = (options?: Options) =>
           result.connection.onToolsChanged(() =>
             locked(Effect.suspend(() => (attached.get(name)?.at(-1) === entry ? refresh : Effect.void))),
           )
+          // Only verified trusted-host attachments may clear durable external-wait leases via MCP notifications.
+          if (policy?.trustedHost === true) {
+            result.connection.onExternalWaitSettled((params) =>
+              fork(
+                Effect.gen(function* () {
+                  if (!attached.get(name)?.includes(entry) || entry.policy?.trustedHost !== true) return
+                  const decoded = decodeExternalWaitSettled(params)
+                  if (Option.isNone(decoded)) {
+                    return yield* Effect.logWarning("ignoring invalid external_wait_settled notification payload", {
+                      server: name,
+                      params,
+                    })
+                  }
+                  if (Option.isNone(externalWaits)) return
+                  const ref = Location.Ref.make({ directory: location.directory, workspaceID: location.workspaceID })
+                  if ("all" in decoded.value) {
+                    return yield* externalWaits.value.clearSession(decoded.value.sessionID, { location: ref })
+                  }
+                  if ("waitPrefix" in decoded.value) {
+                    return yield* externalWaits.value.clearByPrefix(decoded.value.sessionID, decoded.value.waitPrefix, {
+                      location: ref,
+                    })
+                  }
+                  return yield* externalWaits.value.clear(decoded.value.sessionID, decoded.value.waitID, {
+                    location: ref,
+                  })
+                }).pipe(
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning("failed to handle external_wait_settled notification", {
+                      server: name,
+                      cause,
+                    }),
+                  ),
+                ),
+              ),
+            )
+          }
           yield* Effect.logInfo("mcp client attached", { server: name, tools: entry.tools.length })
           yield* bus.publish(McpEvent.ToolsChanged, { server: name })
           return entry
@@ -1002,7 +1065,7 @@ export function configured(options?: Options) {
   return makeLocationNode({
     service: Service,
     layer: layer(options),
-    deps: [Location.node, Environment.node, Bus.node, Form.node, Integration.node, Credential.node],
+    deps: [Location.node, Environment.node, Bus.node, Form.node, Integration.node, Credential.node, SessionExternalWait.node],
   })
 }
 

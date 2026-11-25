@@ -290,11 +290,21 @@ export const layer = Layer.effect(
                     // Only the verified host may change wait state, so an impostor cannot mask real waits.
                     const externalWaits = yield* Effect.serviceOption(SessionExternalWait.Service)
                     if (Option.isSome(externalWaits) && isHostTool(tool))
-                      yield* trackExternalWait(externalWaits.value, tool, args, result, context.sessionID)
+                      yield* trackExternalWait(
+                        externalWaits.value,
+                        tool,
+                        args,
+                        result,
+                        context.sessionID,
+                        Location.Ref.make({ directory: location.directory, workspaceID: location.workspaceID }),
+                      )
                     const content = yield* Effect.forEach(result.content, (part) => toContent(part, toolOutput))
                     const text = content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n")
-                    // Results stay intact: secret references and file paths are opaque handles the model needs.
-                    if (secretRequest && isRecord(input) && input.delivery === "file")
+                    // Results stay intact: secret references and file/FIFO paths are opaque handles the model needs.
+                    // Registering `delivery: "fifo"` blocks `read`/`grep` and keeps `SecretFile.readSecretBytes`
+                    // from opening or draining one-shot pipes via `stat`. This prevents accidental tool reads at
+                    // the application boundary; OS-level sandboxing of child commands remains outside this layer.
+                    if (secretRequest && isRecord(input) && (input.delivery === "file" || input.delivery === "fifo"))
                       yield* Effect.forEach(
                         deliveredFiles(result.structured, text),
                         (file) => secretFiles.register(file, context.sessionID),
@@ -386,6 +396,7 @@ const trackExternalWait = Effect.fnUntraced(function* (
   input: Record<string, unknown>,
   result: Mcp.ToolResult,
   sessionID: Tool.Context["sessionID"],
+  location: Location.Ref,
 ) {
   const record = resultRecord(result)
   switch (tool.name) {
@@ -397,12 +408,13 @@ const trackExternalWait = Effect.fnUntraced(function* (
         source: "pull_request_watch",
         server: tool.server,
         description: `Watching pull request ${key === "branch" ? "for current branch" : key}`,
+        location,
       })
       return
     }
     case "unwatch_pull_request": {
       const key = pullRequestWaitKey(input, record)
-      yield* waits.clear(sessionID, `pr-watch:${key}`)
+      yield* waits.clear(sessionID, `pr-watch:${key}`, { location })
       return
     }
     case "delegate_task": {
@@ -415,18 +427,19 @@ const trackExternalWait = Effect.fnUntraced(function* (
         source: "delegated_task",
         server: tool.server,
         description: `Delegated task ${String(input.title ?? record.taskId)}`,
+        location,
       })
       return
     }
     case "task_cancel": {
       if (typeof input.taskId !== "string") return
-      yield* waits.clear(sessionID, `delegate:${input.taskId}`)
+      yield* waits.clear(sessionID, `delegate:${input.taskId}`, { location })
       return
     }
     case "task_status": {
       if (typeof input.taskId !== "string") return
       if (!isTaskStatusTerminal(record)) return
-      yield* waits.clear(sessionID, `delegate:${input.taskId}`)
+      yield* waits.clear(sessionID, `delegate:${input.taskId}`, { location })
       return
     }
     case "t3_background_wait": {
@@ -435,7 +448,9 @@ const trackExternalWait = Effect.fnUntraced(function* (
       // `waiting: false`) clears those task IDs.
       if (!Array.isArray(input.taskIds)) return
       if (input.waiting === false || record.waiting === false) {
-        yield* Effect.forEach(input.taskIds, (id) => waits.clear(sessionID, `bg:${String(id)}`), { discard: true })
+        yield* Effect.forEach(input.taskIds, (id) => waits.clear(sessionID, `bg:${String(id)}`, { location }), {
+          discard: true,
+        })
         return
       }
       yield* Effect.forEach(
@@ -447,6 +462,7 @@ const trackExternalWait = Effect.fnUntraced(function* (
             source: "background_wait",
             server: tool.server,
             description: `Waiting on background task ${String(id)}`,
+            location,
           }),
         { discard: true },
       )
@@ -513,16 +529,25 @@ function isTaskStatusTerminal(record: Record<string, unknown>) {
   return record.status === "completed" || record.status === "failed" || record.status === "cancelled"
 }
 
+const isAbsolutePath = (value: string) => path.posix.isAbsolute(value) || path.win32.isAbsolute(value)
+
+const PLAIN_TEXT_PATH_PATTERN =
+  /(?:^|[\s(=,])(?:"((?:[A-Za-z]:[\\/]|\\\\[^\\/"'`\r\n]+[\\/]|\/[^\s"'`\r\n])[^"\r\n]*)"|'((?:[A-Za-z]:[\\/]|\\\\[^\\/"'`\r\n]+[\\/]|\/[^\s"'`\r\n])[^'\r\n]*)'|`((?:[A-Za-z]:[\\/]|\\\\[^\\/"'`\r\n]+[\\/]|\/[^\s"'`\r\n])[^`\r\n]*)`)|(?:^|[\s"'`(=,])((?:[A-Za-z]:[\\/]|\\\\[^\s\\/"'`)]+[\\/]|\/)[^\s"'`)]+)/g
+
 // The host reports a delivered file in structured content or JSON text; either carries an absolute path.
-function deliveredFiles(structured: unknown, text: string) {
+export function deliveredFiles(structured: unknown, text: string) {
   const parsed = structured ?? Option.getOrUndefined(decodeJson(text))
   const record = isRecord(parsed) ? parsed : {}
   const fields = ["path", "file", "filePath"].flatMap((key) => {
     const value = record[key]
-    return typeof value === "string" && path.isAbsolute(value) ? [value] : []
+    return typeof value === "string" && isAbsolutePath(value) ? [value] : []
   })
   if (fields.length > 0) return fields
-  return Array.from(text.matchAll(/(?:^|[\s"'`(])(\/[^\s"'`)]+)/g), (match) => match[1])
+  const matches = Array.from(
+    text.matchAll(PLAIN_TEXT_PATH_PATTERN),
+    (match) => match[1] ?? match[2] ?? match[3] ?? match[4],
+  ).filter((value): value is string => value !== undefined && value.length > 1)
+  return Array.from(new Set(matches))
 }
 
 // Only media the read tool also accepts is sent inline, and only while it fits the same ingest budget the
@@ -565,5 +590,6 @@ export const node = makeLocationNode({
     SessionStore.node,
     Config.node,
     SecretFile.node,
+    SessionExternalWait.node,
   ],
 })

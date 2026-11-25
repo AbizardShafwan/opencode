@@ -1,11 +1,13 @@
 export * as SessionExternalWait from "./external-wait.js"
 
 import { makeGlobalNode } from "@opencode/util/effect/app-node"
+import type { Location } from "@opencode/schema/location"
 import { SessionEvent } from "@opencode/schema/session-event"
 import { Clock, Context, Duration, Effect, Layer, Option, Schema, Stream } from "effect"
 import { Bus } from "../bus.js"
 import { KV } from "../kv.js"
 import type { SessionSchema } from "./schema.js"
+import { SessionStore } from "./store.js"
 
 /**
  * Bounded, KV-persisted external wait leases owned by a verified host (such as PR watches,
@@ -40,6 +42,11 @@ export interface RegisterInput {
   readonly server: string
   readonly description: string
   readonly ttlMs?: number
+  readonly location?: Location.Ref
+}
+
+export interface ChangeOptions {
+  readonly location?: Location.Ref
 }
 
 export interface ListOptions {
@@ -49,10 +56,15 @@ export interface ListOptions {
 
 export interface Interface {
   readonly register: (input: RegisterInput) => Effect.Effect<Entry>
-  readonly clear: (sessionID: SessionSchema.ID, waitID: string) => Effect.Effect<void>
-  readonly clearByPrefix: (sessionID: SessionSchema.ID, waitPrefix: string) => Effect.Effect<void>
-  readonly clearSession: (sessionID: SessionSchema.ID) => Effect.Effect<void>
+  readonly clear: (sessionID: SessionSchema.ID, waitID: string, options?: ChangeOptions) => Effect.Effect<void>
+  readonly clearByPrefix: (
+    sessionID: SessionSchema.ID,
+    waitPrefix: string,
+    options?: ChangeOptions,
+  ) => Effect.Effect<void>
+  readonly clearSession: (sessionID: SessionSchema.ID, options?: ChangeOptions) => Effect.Effect<void>
   readonly list: (sessionID: SessionSchema.ID, options?: ListOptions) => Effect.Effect<ReadonlyArray<Entry>>
+  readonly listAll: (options?: ListOptions) => Effect.Effect<ReadonlyArray<Entry>>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionExternalWait") {}
@@ -71,11 +83,30 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const kv = yield* KV.Service
     const bus = yield* Bus.Service
+    const store = yield* Effect.serviceOption(SessionStore.Service)
 
-    const scanSession = Effect.fnUntraced(function* (sessionID: string) {
+    const resolveLocation = (sessionID: SessionSchema.ID, explicit?: Location.Ref) => {
+      if (explicit) return Effect.succeed(explicit)
+      if (Option.isNone(store)) return Effect.succeed(undefined)
+      return store.value.get(sessionID).pipe(
+        Effect.map((session) => session?.location),
+        Effect.orElseSucceed(() => undefined),
+      )
+    }
+
+    const notifyChanged = (sessionID: SessionSchema.ID, explicit?: Location.Ref) =>
+      Effect.gen(function* () {
+        const location = yield* resolveLocation(sessionID, explicit)
+        yield* bus.publish(
+          SessionEvent.ExternalWait.Changed,
+          { sessionID },
+          location ? { location } : undefined,
+        )
+      })
+
+    const scanPrefix = Effect.fnUntraced(function* (prefix: string) {
       const entries = new Array<{ readonly key: string; readonly entry: Entry }>()
       let after: string | undefined
-      const prefix = sessionPrefix(sessionID)
       do {
         const page = yield* kv.scan({ prefix, after, limit: 1000 })
         for (const item of page.entries) {
@@ -91,6 +122,27 @@ const layer = Layer.effect(
       return entries
     })
 
+    const scanSession = (sessionID: string) => scanPrefix(sessionPrefix(sessionID))
+
+    const filterActive = Effect.fnUntraced(function* (
+      items: ReadonlyArray<{ readonly key: string; readonly entry: Entry }>,
+      options?: ListOptions,
+    ) {
+      const now = yield* Clock.currentTimeMillis
+      const results = yield* Effect.forEach(items, (item) =>
+        Effect.gen(function* () {
+          // Expire leases past TTL or left behind from an earlier server boot without re-confirmation.
+          if (item.entry.expiresAt <= now || item.entry.boot !== currentBoot) {
+            yield* kv.remove(item.key)
+            return undefined
+          }
+          if (options?.isServerLive && !(yield* options.isServerLive(item.entry.server))) return undefined
+          return item.entry
+        }),
+      )
+      return results.filter((entry): entry is Entry => entry !== undefined)
+    })
+
     const register = Effect.fn("SessionExternalWait.register")(function* (input: RegisterInput) {
       const now = yield* Clock.currentTimeMillis
       const entry: Entry = {
@@ -103,47 +155,51 @@ const layer = Layer.effect(
         boot: currentBoot,
       }
       yield* kv.set(storageKey(input.sessionID, input.waitID), entry)
+      yield* notifyChanged(input.sessionID, input.location)
       return entry
     })
 
-    const clear = Effect.fn("SessionExternalWait.clear")(function* (sessionID: SessionSchema.ID, waitID: string) {
-      yield* kv.remove(storageKey(sessionID, waitID))
+    const clear = Effect.fn("SessionExternalWait.clear")(function* (
+      sessionID: SessionSchema.ID,
+      waitID: string,
+      options?: ChangeOptions,
+    ) {
+      const key = storageKey(sessionID, waitID)
+      if ((yield* kv.get(key)) === undefined) return
+      yield* kv.remove(key)
+      yield* notifyChanged(sessionID, options?.location)
     })
 
     const clearByPrefix = Effect.fn("SessionExternalWait.clearByPrefix")(function* (
       sessionID: SessionSchema.ID,
       waitPrefix: string,
+      options?: ChangeOptions,
     ) {
-      const items = yield* scanSession(sessionID)
-      for (const item of items) {
-        if (item.entry.waitID.startsWith(waitPrefix)) yield* kv.remove(item.key)
-      }
+      const items = (yield* scanSession(sessionID)).filter((item) => item.entry.waitID.startsWith(waitPrefix))
+      if (items.length === 0) return
+      yield* Effect.forEach(items, (item) => kv.remove(item.key), { discard: true })
+      yield* notifyChanged(sessionID, options?.location)
     })
 
-    const clearSession = Effect.fn("SessionExternalWait.clearSession")(function* (sessionID: SessionSchema.ID) {
+    const clearSession = Effect.fn("SessionExternalWait.clearSession")(function* (
+      sessionID: SessionSchema.ID,
+      options?: ChangeOptions,
+    ) {
       const items = yield* scanSession(sessionID)
-      for (const item of items) {
-        yield* kv.remove(item.key)
-      }
+      if (items.length === 0) return
+      yield* Effect.forEach(items, (item) => kv.remove(item.key), { discard: true })
+      yield* notifyChanged(sessionID, options?.location)
     })
 
     const list = Effect.fn("SessionExternalWait.list")(function* (
       sessionID: SessionSchema.ID,
       options?: ListOptions,
     ) {
-      const now = yield* Clock.currentTimeMillis
-      const items = yield* scanSession(sessionID)
-      const active = new Array<Entry>()
-      for (const item of items) {
-        // Expire leases past TTL or left behind from an earlier server boot without re-confirmation.
-        if (item.entry.expiresAt <= now || item.entry.boot !== currentBoot) {
-          yield* kv.remove(item.key)
-          continue
-        }
-        if (options?.isServerLive && !(yield* options.isServerLive(item.entry.server))) continue
-        active.push(item.entry)
-      }
-      return active
+      return yield* filterActive(yield* scanSession(sessionID), options)
+    })
+
+    const listAll = Effect.fn("SessionExternalWait.listAll")(function* (options?: ListOptions) {
+      return yield* filterActive(yield* scanPrefix(PREFIX), options)
     })
 
     yield* bus.subscribe().pipe(
@@ -164,7 +220,7 @@ const layer = Layer.effect(
       Effect.forkScoped({ startImmediately: true }),
     )
 
-    return Service.of({ register, clear, clearByPrefix, clearSession, list })
+    return Service.of({ register, clear, clearByPrefix, clearSession, list, listAll })
   }),
 )
 

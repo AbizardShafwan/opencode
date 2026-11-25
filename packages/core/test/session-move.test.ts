@@ -13,11 +13,15 @@ import { Instance } from "@opencode/core/instance"
 import { Location } from "@opencode/core/location"
 import { LocationServiceMap } from "@opencode/core/location-service-map"
 import type { LocationServices } from "@opencode/core/location-services"
+import { Mcp } from "@opencode/core/mcp/index"
 import { Project } from "@opencode/core/project"
 import { AbsolutePath } from "@opencode/core/schema"
 import { Session } from "@opencode/core/session"
 import { SessionEvent } from "@opencode/core/session/event"
 import { SessionExecution } from "@opencode/core/session/execution"
+import { SessionExternalWait } from "@opencode/core/session/external-wait"
+import { InMemoryTransport } from "@modelcontextprotocol/client"
+import { McpServer } from "@modelcontextprotocol/server"
 import { SessionMove } from "@opencode/core/session/move"
 import { SessionProjector } from "@opencode/core/session/projector"
 import { SessionRunner } from "@opencode/core/session/runner/index"
@@ -88,6 +92,12 @@ const itWithUnavailableDestination = testEffect(
 )
 const itWithExecution = testEffect(
   AppNodeBuilder.build(LayerNode.group([Session.node, SessionExecution.node]), [
+    Global.node.replace(tempGlobalLayer),
+    offlineModels,
+  ]),
+)
+const itWithExternalWait = testEffect(
+  AppNodeBuilder.build(LayerNode.group([Session.node, SessionExecution.node, SessionExternalWait.node, LocationServiceMap.node]), [
     Global.node.replace(tempGlobalLayer),
     offlineModels,
   ]),
@@ -579,5 +589,87 @@ describe("Session.move", () => {
         }),
       ),
     ),
+  )
+
+  it.effect("expands POSIX and win32 home shortcuts in SessionMove.expandHome", () =>
+    Effect.sync(() => {
+      const home = path.join(path.sep, "Users", "alice")
+      expect(SessionMove.expandHome(" ~ ", home, "win32")).toBe(home)
+      expect(SessionMove.expandHome("~/worktree", home, "linux")).toBe(path.join(home, "worktree"))
+      expect(SessionMove.expandHome("~\\worktree", home, "win32")).toBe(path.join(home, "worktree"))
+      expect(SessionMove.expandHome("~\\worktree", home, "linux")).toBe("~\\worktree")
+    }),
+  )
+
+  itWithExternalWait.effect(
+    "preserves SessionExternalWait leases across SessionMove and restores liveness on destination MCP re-attach",
+    () =>
+      Effect.scoped(
+        tmpdirScoped().pipe(
+          Effect.flatMap((tmp) =>
+            Effect.gen(function* () {
+              const session = yield* Session.Service
+              const execution = yield* SessionExecution.Service
+              const waits = yield* SessionExternalWait.Service
+              const locations = yield* LocationServiceMap.Service
+              const source = AbsolutePath.make(path.join(tmp.path, "source"))
+              const destination = AbsolutePath.make(path.join(tmp.path, "destination"))
+              yield* Effect.promise(() => mkdir(source))
+              yield* Effect.promise(() => mkdir(destination))
+
+              const sourceRef = Location.Ref.make({ directory: source })
+              const destRef = Location.Ref.make({ directory: destination })
+              const created = yield* session.create({ location: sourceRef })
+
+              const attachServer = (mcp: Mcp.Interface, serverName: string) =>
+                Effect.gen(function* () {
+                  const server = new McpServer({ name: serverName, version: "1.0.0" })
+                  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+                  yield* Effect.acquireRelease(
+                    Effect.promise(() => server.connect(serverTransport)),
+                    () => Effect.promise(() => server.close()),
+                  )
+                  yield* mcp.attach(serverName, clientTransport, {
+                    trustedHost: true,
+                    permissionNamespace: "t3-code",
+                    codemode: false,
+                  })
+                })
+
+              const mcpSource = yield* Mcp.Service.pipe(Effect.provide(locations.get(sourceRef)))
+              yield* attachServer(mcpSource, "t3-code-host")
+              yield* waits.register({
+                sessionID: created.id,
+                waitID: "pr-watch:acme/repo#42",
+                source: "pull_request_watch",
+                server: "t3-code-host",
+                description: "Watching PR #42",
+              })
+              expect(
+                yield* waits.list(created.id, { isServerLive: (name) => mcpSource.isAttached(name) }),
+              ).toHaveLength(1)
+
+              yield* session.move({ sessionID: created.id, directory: destination })
+              yield* execution.awaitIdle(created.id)
+              expect((yield* session.get(created.id)).location.directory).toBe(destination)
+
+              // Before the host re-attaches on the destination Location, liveness hides the lease without deleting it.
+              const mcpDest = yield* Mcp.Service.pipe(Effect.provide(locations.get(destRef)))
+              expect(
+                yield* waits.list(created.id, { isServerLive: (name) => mcpDest.isAttached(name) }),
+              ).toEqual([])
+              expect((yield* waits.list(created.id)).map((entry) => entry.waitID)).toEqual(["pr-watch:acme/repo#42"])
+
+              // Re-attaching the trusted host at destination makes the preserved lease live again.
+              yield* attachServer(mcpDest, "t3-code-host")
+              expect(
+                (yield* waits.list(created.id, { isServerLive: (name) => mcpDest.isAttached(name) })).map(
+                  (entry) => entry.waitID,
+                ),
+              ).toEqual(["pr-watch:acme/repo#42"])
+            }),
+          ),
+        ),
+      ),
   )
 })

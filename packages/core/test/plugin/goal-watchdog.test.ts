@@ -14,6 +14,7 @@ import { SessionMessage } from "@opencode/core/session/message"
 import { SessionStore } from "@opencode/core/session/store"
 import { AbsolutePath } from "@opencode/core/schema"
 import type { SessionEvent } from "@opencode/core/session/event"
+import type { SessionEvent as SchemaSessionEvent } from "@opencode/schema/session-event"
 import { it } from "../lib/effect"
 import { host } from "./host"
 
@@ -25,7 +26,7 @@ const unrelated = Session.ID.make("ses_goal_watchdog_unrelated")
 const parents: Record<string, Session.ID | undefined> = { [child]: sessionID, [grandchild]: child }
 
 type Execution = SessionEvent.Execution.Started | SessionEvent.Execution.Succeeded
-type Watched = Execution | SessionEvent.Step.Started
+type Watched = Execution | SessionEvent.Step.Started | SchemaSessionEvent.ExternalWait.Changed | SessionEvent.Moved
 
 const execution = (type: Execution["type"], target = sessionID): Execution => ({
   id: Event.ID.create(),
@@ -38,6 +39,23 @@ const execution = (type: Execution["type"], target = sessionID): Execution => ({
 // SAFETY: the plugin reads only the type and Session ID of a step event.
 const step = (stepSessionID: Session.ID) =>
   ({ type: "session.step.started", data: { sessionID: stepSessionID } }) as unknown as SessionEvent.Step.Started
+
+const externalWaitChanged = (target = sessionID, directory = "/workspace") =>
+  ({
+    id: Event.ID.create(),
+    created: 0,
+    type: "session.external_wait.changed",
+    location: { directory: AbsolutePath.make(directory) },
+    data: { sessionID: target },
+  }) as unknown as SchemaSessionEvent.ExternalWait.Changed
+
+const sessionMoved = (target = sessionID, directory = "/other-workspace") =>
+  ({
+    id: Event.ID.create(),
+    created: 0,
+    type: "session.moved",
+    data: { sessionID: target, location: { directory: AbsolutePath.make(directory) } },
+  }) as unknown as SessionEvent.Moved
 
 /** Runs the goal plugin against stubbed domains: plugin storage in memory, and RPC that records what it publishes. */
 const run = Effect.fnUntraced(function* (
@@ -53,6 +71,7 @@ const run = Effect.fnUntraced(function* (
   const commands: CommandDefinition[] = []
   const hooks = new Map<string, (event: never) => Effect.Effect<void>>()
   const judgePrompts: string[] = []
+  const synthetics: Array<{ sessionID: Session.ID; text: string }> = []
   let judgeReply = '{"verdict":"done","reason":"Done."}'
   const info = (id: Session.ID) =>
     // SAFETY: the plugin reads only the id, parent, title and creation time of a Session.
@@ -69,7 +88,12 @@ const run = Effect.fnUntraced(function* (
       Effect.sync(() => void hooks.set(name, callback))) as never,
     get: (input) => Effect.sync(() => info(input.sessionID)),
     update: () => Effect.void,
-    synthetic: () => Effect.succeed({ id: SessionMessage.ID.create() } as never),
+    synthetic: (input) =>
+      Effect.sync(() => {
+        synthetics.push({ sessionID: input.sessionID, text: input.text })
+        return { id: SessionMessage.ID.create() } as never
+      }),
+    context: () => Effect.succeed([]),
     generate: ((input: { readonly prompt: string }) =>
       Effect.sync(() => {
         judgePrompts.push(input.prompt)
@@ -163,6 +187,7 @@ const run = Effect.fnUntraced(function* (
       judgeReply = text
     },
     judgePrompts,
+    synthetics,
     /** Runs the plugin's registered experimental.idle hook as the runner would. */
     idle: (background: unknown[]) => {
       const handler = hooks.get("experimental.idle")
@@ -182,6 +207,14 @@ const run = Effect.fnUntraced(function* (
       Queue.offer(events, execution(type, target)).pipe(Effect.andThen(Effect.yieldNow), Effect.andThen(Effect.yieldNow)),
     step: (stepSessionID: Session.ID) =>
       Queue.offer(events, step(stepSessionID)).pipe(Effect.andThen(Effect.yieldNow), Effect.andThen(Effect.yieldNow)),
+    externalWaitChanged: (target = sessionID, directory = "/workspace") =>
+      Queue.offer(events, externalWaitChanged(target, directory)).pipe(
+        Effect.andThen(Effect.forEach(Array.from({ length: 10 }), () => Effect.yieldNow)),
+      ),
+    moved: (target = sessionID, directory = "/other-workspace") =>
+      Queue.offer(events, sessionMoved(target, directory)).pipe(
+        Effect.andThen(Effect.forEach(Array.from({ length: 10 }), () => Effect.yieldNow)),
+      ),
   }
 })
 
@@ -449,6 +482,57 @@ describe("goal plugin waiting", () => {
         status: "paused",
         reason: "Nothing ran for 30 minutes while the goal waited on background work",
       })
+    }),
+  )
+
+  it.effect("reacts immediately to session.external_wait.changed instead of waiting 30 minutes", () =>
+    Effect.gen(function* () {
+      const plugin = yield* run(undefined, { externalWait: { live: true } })
+      yield* plugin.command("Land the pull request")
+      yield* plugin.emit("session.execution.succeeded")
+      plugin.reply('{"verdict":"continue","reason":"PR watch settled","next_step":"Check merge result"}')
+
+      // Even immediately after settling (well before WAIT_LIMIT), GoalPlugin re-judges and admits continuation.
+      yield* TestClock.adjust(Duration.seconds(5))
+      plugin.setExternalLive(false)
+      yield* plugin.externalWaitChanged(sessionID)
+
+      expect(plugin.judgePrompts).toHaveLength(1)
+      expect(plugin.synthetics).toHaveLength(2)
+      expect(plugin.synthetics[1]?.text).toContain("PR watch settled")
+      expect(plugin.goal()).toMatchObject({ status: "active", rounds: 1, reason: "PR watch settled" })
+
+      // When settled and verdict is done, the goal completes immediately.
+      yield* plugin.emit("session.execution.started")
+      yield* plugin.emit("session.execution.succeeded")
+      plugin.reply('{"verdict":"done","reason":"Pull request merged"}')
+      yield* plugin.externalWaitChanged(sessionID)
+      expect(plugin.goal()).toMatchObject({ status: "complete", reason: "Pull request merged" })
+    }),
+  )
+
+  it.effect("keeps waiting when remaining waits exist on session.external_wait.changed and ignores active executions", () =>
+    Effect.gen(function* () {
+      const plugin = yield* run(undefined, { externalWait: { live: true } })
+      yield* plugin.command("Land the pull request")
+
+      // While execution is active, external wait change notifications do not trigger judge early.
+      yield* plugin.emit("session.execution.started")
+      yield* plugin.externalWaitChanged(sessionID)
+      expect(plugin.judgePrompts).toEqual([])
+
+      // Once idle with remaining external wait and judge answering "wait", the 30-min watchdog resumes.
+      yield* plugin.emit("session.execution.succeeded")
+      plugin.reply('{"verdict":"wait","reason":"Second watch still running"}')
+      yield* plugin.externalWaitChanged(sessionID)
+      expect(plugin.judgePrompts).toHaveLength(1)
+      expect(plugin.goal()).toMatchObject({ status: "active" })
+
+      // Moving the session to another location clears the source location's watchdog timer.
+      yield* plugin.moved(sessionID, "/other-workspace")
+      plugin.setExternalLive(false)
+      yield* TestClock.adjust(GoalPlugin.WAIT_LIMIT)
+      expect(plugin.goal()).toMatchObject({ status: "active" })
     }),
   )
 })

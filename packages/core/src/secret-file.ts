@@ -3,8 +3,11 @@ export * as SecretFile from "./secret-file.js"
 import { ToolFailure } from "@opencode/ai"
 import { SessionEvent } from "@opencode/schema/session-event"
 import { makeGlobalNode } from "@opencode/util/effect/app-node"
+import { FSUtil } from "@opencode/util/fs-util"
+import { comparablePath } from "@opencode/util/path"
 import { createHash } from "node:crypto"
-import { realpath, readFile } from "node:fs/promises"
+import { realpathSync } from "node:fs"
+import { readFile, stat } from "node:fs/promises"
 import path from "path"
 import { Clock, Context, Duration, Effect, Layer, Option, Schema, Stream } from "effect"
 import { Bus } from "./bus.js"
@@ -52,11 +55,45 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SecretFile") {}
 
-const key = (resolved: string) => `${PREFIX}${createHash("sha256").update(resolved).digest("hex")}`
+export function normalizeKeyPath(resolved: string, platform: NodeJS.Platform = process.platform) {
+  if (platform !== "win32") return resolved
+  return comparablePath(resolved).toLowerCase()
+}
+
+const key = (resolved: string) =>
+  `${PREFIX}${createHash("sha256").update(normalizeKeyPath(resolved)).digest("hex")}`
 
 // A missing or unreadable path falls back to its lexical resolution, so lookups never fail.
-const resolve = (file: string) =>
-  Effect.promise(() => realpath(path.resolve(file)).catch(() => path.resolve(file)))
+const resolve = (file: string) => {
+  const lexical = path.resolve(FSUtil.windowsPath(file))
+  return Effect.try(() => realpathSync.native(lexical)).pipe(Effect.orElseSucceed(() => lexical))
+}
+
+function windowsCommandCandidates(file: string) {
+  const forward = file.replaceAll("\\", "/").toLowerCase()
+  const match = /^([a-z]):\/(.*)$/.exec(forward)
+  if (!match) return [forward]
+  const drive = match[1]
+  const rest = match[2]
+  return [forward, `/${drive}/${rest}`, `/${drive}:/${rest}`, `/cygdrive/${drive}/${rest}`, `/mnt/${drive}/${rest}`]
+}
+
+export function matchesCommandPath(
+  command: string,
+  entry: Pick<Entry, "path" | "realpath">,
+  platform: NodeJS.Platform = process.platform,
+) {
+  if (platform !== "win32") return command.includes(entry.path) || command.includes(entry.realpath)
+  const normalizedCommand = command.replaceAll("\\", "/").toLowerCase()
+  const unescapedCommand = command
+    .replaceAll("\\ ", " ")
+    .replaceAll("\\\\", "/")
+    .replaceAll("\\", "/")
+    .toLowerCase()
+  return [entry.path, entry.realpath]
+    .flatMap(windowsCommandCandidates)
+    .some((candidate) => normalizedCommand.includes(candidate) || unescapedCommand.includes(candidate))
+}
 
 const layer = Layer.effect(
   Service,
@@ -73,9 +110,10 @@ const layer = Layer.effect(
     })
 
     const register = Effect.fn("SecretFile.register")(function* (file: string, sessionID: string) {
+      const lexical = path.resolve(FSUtil.windowsPath(file))
       const resolved = yield* resolve(file)
       const expiresAt = (yield* Clock.currentTimeMillis) + Duration.toMillis(TTL)
-      yield* kv.set(key(resolved), { path: path.resolve(file), realpath: resolved, sessionID, expiresAt })
+      yield* kv.set(key(resolved), { path: lexical, realpath: resolved, sessionID, expiresAt })
     })
 
     const isProtected = Effect.fn("SecretFile.isProtected")(function* (file: string) {
@@ -102,12 +140,19 @@ const layer = Layer.effect(
     })
 
     const matchPathsInCommand = Effect.fn("SecretFile.matchPathsInCommand")(function* (command: string) {
-      return (yield* active()).filter((entry) => command.includes(entry.path) || command.includes(entry.realpath))
+      return (yield* active()).filter((entry) => matchesCommandPath(command, entry))
     })
 
     const readSecretBytes = Effect.fn("SecretFile.readSecretBytes")(function* (entries: ReadonlyArray<Entry>) {
+      // Check stat before opening so FIFOs, sockets, and device nodes are never blocked on or drained
+      // before the target command reads them. Regular files remain covered by application scrubbing,
+      // while OS-level sandboxing of child commands is out of scope here.
       const contents = yield* Effect.forEach(entries, (entry) =>
-        Effect.promise(() => readFile(entry.realpath, "utf8").catch(() => "")),
+        Effect.promise(async () => {
+          const info = await stat(entry.realpath).catch(() => undefined)
+          if (!info?.isFile()) return ""
+          return readFile(entry.realpath, "utf8").catch(() => "")
+        }),
       )
       return contents.filter((content) => content.length > 0)
     })
