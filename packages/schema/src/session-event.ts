@@ -662,6 +662,14 @@ export namespace RevertEvent {
   })
 }
 
+export namespace ExternalWait {
+  export const Changed = Event.ephemeral({
+    type: "session.external_wait.changed",
+    schema: Base,
+  })
+  export type Changed = typeof Changed.Type
+}
+
 export const Definitions = Event.inventory(
   Created,
   AgentSelected,
@@ -714,6 +722,7 @@ export const Definitions = Event.inventory(
   RevertEvent.Staged,
   RevertEvent.Cleared,
   RevertEvent.Committed,
+  ExternalWait.Changed,
 )
 
 // Internal and replay-only events are excluded from the public manifest.

@@ -212,4 +212,17 @@ describe("public event manifest", () => {
     expect(SessionEvent.Deleted.data.make({ sessionID })).toEqual({ sessionID })
     expect(SessionEvent.Deleted.durable?.version).toBe(2)
   })
+
+  test("registers ephemeral session.external_wait.changed on the public server manifest", () => {
+    const sessionID = SessionID.make("ses_wait")
+
+    expect(SessionEvent.ExternalWait.Changed.type).toBe("session.external_wait.changed")
+    expect(SessionEvent.ExternalWait.Changed.durability).toBe("ephemeral")
+    expect(EventManifest.ServerDefinitions).toContain(SessionEvent.ExternalWait.Changed)
+    expect(EventManifest.Server.get("session.external_wait.changed")).toBe(SessionEvent.ExternalWait.Changed)
+    expect(EventManifest.Latest.get("session.external_wait.changed")).toBe(SessionEvent.ExternalWait.Changed)
+    expect(EventManifest.Durable.has("session.external_wait.changed")).toBe(false)
+    expect(EventManifest.Durable.has("session.external_wait.changed.1")).toBe(false)
+    expect(SessionEvent.ExternalWait.Changed.data.make({ sessionID })).toEqual({ sessionID })
+  })
 })

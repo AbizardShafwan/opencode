@@ -179,6 +179,8 @@ import type {
   PermissionSavedUpdateOutput,
   PermissionSavedRemoveInput,
   PermissionSavedRemoveOutput,
+  PermissionSavedCleanupLegacyInput,
+  PermissionSavedCleanupLegacyOutput,
   PermissionCreateInput,
   PermissionCreateOutput,
   PermissionListInput,
@@ -1653,6 +1655,18 @@ export function make(options: ClientOptions) {
             },
             requestOptions,
           ),
+        cleanupLegacy: (input: PermissionSavedCleanupLegacyInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: PermissionSavedCleanupLegacyOutput }>(
+            {
+              method: "POST",
+              path: `/api/permission/saved/legacy`,
+              body: { mode: input["mode"], dryRun: input["dryRun"], projectID: input["projectID"] },
+              successStatus: 200,
+              declaredStatuses: [400, 401, 404],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
       },
       create: (input: PermissionCreateInput, requestOptions?: RequestOptions) =>
         request<{ readonly data: PermissionCreateOutput }>(

@@ -4,6 +4,9 @@ import { Bus } from "@opencode/core/bus"
 import { Credential } from "@opencode/schema/credential"
 import { Event } from "@opencode/schema/event"
 import { IntegrationID } from "@opencode/schema/integration-id"
+import { AbsolutePath } from "@opencode/schema/schema"
+import { SessionEvent } from "@opencode/schema/session-event"
+import { SessionID } from "@opencode/schema/session-id"
 import { Deferred, Effect, Exit, Fiber, Option, Schema, Stream } from "effect"
 import { it } from "../../core/test/lib/effect"
 import { EventFeed } from "../src/event-feed"
@@ -131,6 +134,26 @@ describe("EventFeed", () => {
       })
 
       expect(Array.from(yield* Fiber.join(received))).toEqual([Credential.Event.Switched.type])
+    }),
+  )
+
+  it.effect("delivers session external-wait changes with location to public SSE subscribers", () =>
+    Effect.gen(function* () {
+      const source = makeSource()
+      const feed = yield* EventFeed.make(source.observe)
+      const stream = yield* feed.subscribe
+      const received = yield* stream.pipe(Stream.take(1), Stream.runCollect, Effect.forkScoped)
+      const payload = {
+        id: Event.ID.create(),
+        created: Date.now(),
+        location: { directory: AbsolutePath.make("/project") },
+        type: SessionEvent.ExternalWait.Changed.type,
+        data: { sessionID: SessionID.make("ses_wait") },
+      } satisfies Event.Payload<typeof SessionEvent.ExternalWait.Changed>
+
+      yield* source.publish(payload)
+
+      expect(Array.from(yield* Fiber.join(received))).toEqual([EventFeed.frame(payload)])
     }),
   )
 

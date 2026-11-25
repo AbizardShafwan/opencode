@@ -185,6 +185,8 @@ import type {
   PermissionSavedUpdateOutput,
   PermissionSavedRemoveInput,
   PermissionSavedRemoveOutput,
+  PermissionSavedCleanupLegacyInput,
+  PermissionSavedCleanupLegacyOutput,
   PermissionCreateInput,
   PermissionCreateOutput,
   PermissionListInput,
@@ -1233,6 +1235,17 @@ const EndpointPermissionSavedRemove = (raw: RawClient["server.permission"]) => (
     raw["permission.saved.remove"]({ params: { id: input["id"] } }).pipe(Effect.mapError(mapClientError)),
   )
 
+const EndpointPermissionSavedCleanupLegacy =
+  (raw: RawClient["server.permission"]) => (input: PermissionSavedCleanupLegacyInput) =>
+    preserveEffect<PermissionSavedCleanupLegacyOutput>()(
+      raw["permission.saved.cleanupLegacy"]({
+        payload: { mode: input["mode"], dryRun: input["dryRun"], projectID: input["projectID"] },
+      }).pipe(
+        Effect.mapError(mapClientError),
+        Effect.map((value) => value.data),
+      ),
+    )
+
 const EndpointPermissionCreate = (raw: RawClient["server.permission"]) => (input: PermissionCreateInput) =>
   preserveEffect<PermissionCreateOutput>()(
     raw["session.permission.create"]({
@@ -1282,6 +1295,7 @@ const adaptGroupPermission = (raw: RawClient["server.permission"]) => ({
     list: EndpointPermissionSavedList(raw),
     update: EndpointPermissionSavedUpdate(raw),
     remove: EndpointPermissionSavedRemove(raw),
+    cleanupLegacy: EndpointPermissionSavedCleanupLegacy(raw),
   },
   create: EndpointPermissionCreate(raw),
   list: EndpointPermissionList(raw),

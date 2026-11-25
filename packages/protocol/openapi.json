@@ -8951,6 +8951,162 @@
         "summary": "Remove saved permission"
       }
     },
+    "/api/permission/saved/legacy": {
+      "post": {
+        "tags": ["permission"],
+        "operationId": "permission.saved.cleanupLegacy",
+        "parameters": [],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "mode": {
+                          "type": "string",
+                          "enum": ["prune", "migrate"]
+                        },
+                        "dryRun": {
+                          "type": "boolean"
+                        },
+                        "matched": {
+                          "type": "integer"
+                        },
+                        "deleted": {
+                          "type": "integer"
+                        },
+                        "migrated": {
+                          "type": "integer"
+                        },
+                        "deduplicated": {
+                          "type": "integer"
+                        },
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "$ref": "#/components/schemas/PermissionSaved.ID"
+                              },
+                              "projectID": {
+                                "$ref": "#/components/schemas/Project.ID"
+                              },
+                              "action": {
+                                "type": "string"
+                              },
+                              "resource": {
+                                "type": "string"
+                              },
+                              "outcome": {
+                                "type": "string",
+                                "enum": ["deleted", "migrated", "deduplicated"]
+                              },
+                              "targetAction": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": ["id", "projectID", "action", "resource", "outcome"],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": ["mode", "dryRun", "matched", "deleted", "migrated", "deduplicated", "items"],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": ["data"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "LocationNotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocationNotFoundErrorEncoded"
+                }
+              }
+            }
+          }
+        },
+        "description": "Explicitly delete legacy `t3-code-<uuid>_<tool>` saved permissions (`prune`) or migrate them to canonical `t3-code_<tool>` (`migrate`) with duplicate removal.",
+        "summary": "Prune or migrate legacy saved permissions",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": ["prune", "migrate"]
+                  },
+                  "dryRun": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "projectID": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/Project.ID"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": ["mode"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
     "/api/session/{sessionID}/permission": {
       "post": {
         "tags": ["permission"],
@@ -11951,7 +12107,7 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "enum": ["shell", "subagent", "image"]
+                  "enum": ["shell", "subagent", "image", "external"]
                 },
                 {
                   "type": "null"
@@ -12039,7 +12195,7 @@
             }
           }
         },
-        "description": "List running and unacknowledged background jobs of this location, optionally filtered by session and kind.",
+        "description": "List running and unacknowledged background jobs and active external waits of this location, optionally filtered by session and kind.",
         "summary": "List background jobs"
       }
     },
@@ -17530,6 +17686,59 @@
         "required": ["_tag", "message"],
         "additionalProperties": false
       },
+      "Job.External": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["external"]
+          },
+          "id": {
+            "type": "string"
+          },
+          "sessionID": {
+            "$ref": "#/components/schemas/Session.ID"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["running", "completed", "error", "cancelled"]
+          },
+          "title": {
+            "type": "string"
+          },
+          "time": {
+            "$ref": "#/components/schemas/Job.Time"
+          },
+          "waitID": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "server": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "sessionID",
+          "status",
+          "time",
+          "waitID",
+          "source",
+          "server",
+          "description",
+          "expiresAt"
+        ],
+        "additionalProperties": false
+      },
       "Job.Image": {
         "type": "object",
         "properties": {
@@ -17573,6 +17782,9 @@
           },
           {
             "$ref": "#/components/schemas/Job.Image"
+          },
+          {
+            "$ref": "#/components/schemas/Job.External"
           }
         ]
       },
@@ -21714,11 +21926,20 @@
           "id": {
             "type": "string"
           },
+          "unit": {
+            "type": "string",
+            "enum": ["usd", "percent"]
+          },
           "limit": {
             "$ref": "#/components/schemas/Money.USD"
           },
           "spent": {
             "$ref": "#/components/schemas/Money.USD"
+          },
+          "percent": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100
           },
           "scope": {
             "type": "string",
@@ -21758,19 +21979,7 @@
             "description": "Milliseconds since the Unix epoch"
           }
         },
-        "required": [
-          "id",
-          "limit",
-          "spent",
-          "scope",
-          "per",
-          "coverage",
-          "models",
-          "vendors",
-          "picked",
-          "shared",
-          "resetsAt"
-        ],
+        "required": ["id", "scope", "per", "coverage", "models", "vendors", "picked", "shared"],
         "additionalProperties": false
       },
       "UsageLimits.BudgetModel": {

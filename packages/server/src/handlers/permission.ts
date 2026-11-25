@@ -127,5 +127,18 @@ export const PermissionHandler = HttpApiBuilder.group(Api, "server.permission", 
           return HttpApiSchema.NoContent.make()
         }),
       )
+      .handle(
+        "permission.saved.cleanupLegacy",
+        Effect.fn(function* (ctx) {
+          const saved = yield* PermissionSaved.Service
+          return {
+            data: yield* saved.cleanupLegacy({
+              mode: ctx.payload.mode,
+              dryRun: ctx.payload.dryRun,
+              projectID: ctx.payload.projectID,
+            }),
+          }
+        }),
+      )
   }),
 )

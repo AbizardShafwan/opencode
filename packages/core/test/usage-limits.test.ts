@@ -4,11 +4,13 @@ import { AppNodeBuilder } from "@opencode/core/effect/app-node-builder"
 import { Integration } from "@opencode/core/integration"
 import { UsageLimits } from "@opencode/core/usage-limits"
 import { Credential } from "@opencode/schema/credential"
+import { Money } from "@opencode/schema/money"
 import { Provider } from "@opencode/schema/provider"
+import { UsageLimits as UsageLimitsSchema } from "@opencode/schema/usage-limits"
 import { LayerNodePlatform } from "@opencode/util/effect/app-node-platform"
 import { LayerNode } from "@opencode/util/effect/layer-node"
-import { Effect, Layer } from "effect"
-import { HttpClient } from "effect/http"
+import { Effect, Layer, Schema } from "effect"
+import { HttpClient, HttpClientResponse } from "effect/http"
 import { testEffect } from "./lib/effect"
 
 const connection = {
@@ -28,7 +30,12 @@ const network = HttpClient.make(() => Effect.die(new Error("unexpected network r
 
 const unused = () => Effect.die("unused integration method")
 
-const build = (accountUsage: AccountUsage.Interface, active: typeof connection | undefined) =>
+const buildWith = (
+  accountUsage: AccountUsage.Interface,
+  active: typeof connection | undefined,
+  resolved: Credential.Key = credential,
+  http: HttpClient.HttpClient = network,
+) =>
   testEffect(
     AppNodeBuilder.build(LayerNode.group([UsageLimits.node]), [
       Integration.node.replace(
@@ -38,7 +45,7 @@ const build = (accountUsage: AccountUsage.Interface, active: typeof connection |
           revision: () => 0,
           connection: {
             active: () => Effect.succeed(active),
-            resolve: () => Effect.succeed(credential),
+            resolve: () => Effect.succeed(resolved),
             key: unused,
             external: unused,
             activate: unused,
@@ -51,9 +58,12 @@ const build = (accountUsage: AccountUsage.Interface, active: typeof connection |
         }),
       ),
       AccountUsage.node.replace(Layer.mock(AccountUsage.Service, accountUsage)),
-      LayerNodePlatform.httpClient.replace(Layer.succeed(HttpClient.HttpClient, network)),
+      LayerNodePlatform.httpClient.replace(Layer.succeed(HttpClient.HttpClient, http)),
     ]),
   )
+
+const build = (accountUsage: AccountUsage.Interface, active: typeof connection | undefined) =>
+  buildWith(accountUsage, active)
 
 const unusedUsage = { read: () => Effect.succeed(undefined) }
 
@@ -80,28 +90,141 @@ build(
               fetchedAt: 1,
               windows: [
                 { id: "5h", label: "5h", remainingPercent: 75, resetsAt: 1_800_000_000_000 },
-                // A window without a reported reset is omitted rather than given a fabricated one.
+                // Windows without a reported reset stay included as native percentage windows without a fabricated reset.
                 { id: "weekly", label: "weekly", remainingPercent: 50 },
               ],
             },
       ),
   },
   undefined,
-).effect("reports provider windows without a fabricated reset", () =>
+).effect("reports provider windows as native percentage budgets with optional resetsAt", () =>
   Effect.gen(function* () {
     const service = yield* UsageLimits.Service
 
     const info = yield* service.get()
 
     expect(info?.workspace).toEqual({ id: "providers", name: "Connected Providers", usageURL: "" })
-    expect(info?.budgets).toHaveLength(1)
+    expect(info?.budgets).toHaveLength(2)
     expect(info?.budgets[0]).toMatchObject({
       id: "ollama-cloud_5h",
-      limit: 100,
-      spent: 25,
+      unit: "percent",
+      percent: 25,
       resetsAt: 1_800_000_000_000,
       vendors: ["Ollama Cloud"],
       models: [{ providerID: "ollama-cloud", modelID: "5h", name: "Ollama Cloud · 5h" }],
     })
+    expect(info?.budgets[0]?.limit).toBeUndefined()
+    expect(info?.budgets[0]?.spent).toBeUndefined()
+
+    expect(info?.budgets[1]).toMatchObject({
+      id: "ollama-cloud_weekly",
+      unit: "percent",
+      percent: 50,
+      vendors: ["Ollama Cloud"],
+      models: [{ providerID: "ollama-cloud", modelID: "weekly", name: "Ollama Cloud · weekly" }],
+    })
+    expect(info?.budgets[1]?.limit).toBeUndefined()
+    expect(info?.budgets[1]?.spent).toBeUndefined()
+    expect(info?.budgets[1]?.resetsAt).toBeUndefined()
+  }),
+)
+
+const consoleCredential = Credential.Key.make({
+  type: "key",
+  key: "console-secret",
+  metadata: { server: "https://console.example.test", orgID: "wrk_1", orgName: "Acme" },
+})
+
+const consoleHttp = HttpClient.make((request) => {
+  if (request.url.endsWith("/api/policies/current-budgets")) {
+    return Effect.succeed(
+      HttpClientResponse.fromWeb(
+        request,
+        new Response(
+          JSON.stringify([
+            {
+              ruleID: "rule_1",
+              limitDollars: 250,
+              spentDollars: 42.5,
+              scope: "each",
+              per: "set",
+              coverage: "all",
+              models: [],
+              vendors: [],
+              picked: false,
+              shared: true,
+              resetsAt: "2026-12-01T00:00:00.000Z",
+            },
+          ]),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    )
+  }
+  return Effect.succeed(HttpClientResponse.fromWeb(request, new Response(null, { status: 403 })))
+})
+
+buildWith(
+  {
+    read: ({ providerID }) =>
+      Effect.succeed(
+        providerID !== Provider.ID.openai
+          ? undefined
+          : {
+              providerID: Provider.ID.openai,
+              source: "codex-rate-limit" as const,
+              fetchedAt: 2,
+              windows: [{ id: "primary", label: "5h", remainingPercent: 80 }],
+            },
+      ),
+  },
+  connection,
+  consoleCredential,
+  consoleHttp,
+).effect("combines Console USD budgets with native percentage provider windows and preserves backward-compatible decoding", () =>
+  Effect.gen(function* () {
+    const service = yield* UsageLimits.Service
+
+    const info = yield* service.get()
+
+    expect(info?.workspace).toEqual({
+      id: "wrk_1",
+      name: "Acme",
+      usageURL: "https://console.example.test/wrk_1/activity/overview",
+    })
+    expect(info?.budgets).toHaveLength(2)
+    expect(info?.budgets[0]).toMatchObject({
+      id: "rule_1",
+      unit: "usd",
+      limit: 250,
+      spent: 42.5,
+      resetsAt: Date.parse("2026-12-01T00:00:00.000Z"),
+    })
+    expect(info?.budgets[0]?.percent).toBeUndefined()
+    expect(info?.budgets[1]).toMatchObject({
+      id: "openai_primary",
+      unit: "percent",
+      percent: 20,
+      vendors: ["Codex"],
+      models: [{ providerID: "openai", modelID: "primary", name: "Codex · 5h" }],
+    })
+    expect(info?.budgets[1]?.resetsAt).toBeUndefined()
+
+    const legacyDecoded = Schema.decodeUnknownSync(UsageLimitsSchema.Budget)({
+      id: "legacy_rule",
+      limit: 100,
+      spent: 10,
+      scope: "each",
+      per: "set",
+      coverage: "all",
+      models: [],
+      vendors: [],
+      picked: false,
+      shared: false,
+      resetsAt: 1_800_000_000_000,
+    })
+    expect(legacyDecoded.unit).toBeUndefined()
+    expect(legacyDecoded.limit).toBe(Money.USD.make(100))
+    expect(legacyDecoded.spent).toBe(Money.USD.make(10))
   }),
 )

@@ -81,6 +81,42 @@ export const makePermissionGroup = <
         }),
       ),
     )
+    .add(
+      HttpApiEndpoint.post("permission.saved.cleanupLegacy", "/api/permission/saved/legacy", {
+        payload: Schema.Struct({
+          mode: Schema.Literals(["prune", "migrate"]),
+          dryRun: Schema.Boolean.pipe(Schema.optional),
+          projectID: Project.ID.pipe(Schema.optional),
+        }),
+        success: Schema.Struct({
+          data: Schema.Struct({
+            mode: Schema.Literals(["prune", "migrate"]),
+            dryRun: Schema.Boolean,
+            matched: Schema.Int,
+            deleted: Schema.Int,
+            migrated: Schema.Int,
+            deduplicated: Schema.Int,
+            items: Schema.Array(
+              Schema.Struct({
+                id: PermissionSaved.ID,
+                projectID: Project.ID,
+                action: Schema.String,
+                resource: Schema.String,
+                outcome: Schema.Literals(["deleted", "migrated", "deduplicated"]),
+                targetAction: Schema.String.pipe(Schema.optional),
+              }),
+            ),
+          }),
+        }),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "permission.saved.cleanupLegacy",
+          summary: "Prune or migrate legacy saved permissions",
+          description:
+            "Explicitly delete legacy `t3-code-<uuid>_<tool>` saved permissions (`prune`) or migrate them to canonical `t3-code_<tool>` (`migrate`) with duplicate removal.",
+        }),
+      ),
+    )
     // Effect applies group middleware only to endpoints already added; session endpoints use session placement below.
     .middleware(locationMiddleware)
     .add(

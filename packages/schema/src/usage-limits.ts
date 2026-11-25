@@ -37,13 +37,18 @@ export const BudgetModel = Schema.Struct({
   spent: Money.USD.pipe(optional),
 }).annotate({ identifier: "UsageLimits.BudgetModel" })
 
-/** A monthly spend limit the OpenCode Console workspace sets on the member. */
+/** A monthly USD spend limit from OpenCode Console or a percentage allowance window from a connected provider. */
 export interface Budget extends Schema.Schema.Type<typeof Budget> {}
 export const Budget = Schema.Struct({
   id: Schema.String,
-  limit: Money.USD,
-  /** The member's spend this month, or the pooled spend of a combined budget; per model, the most on one model. */
-  spent: Money.USD,
+  /** Whether this budget measures USD spend (`usd`, default when omitted) or allowance usage (`percent`). */
+  unit: Schema.Literals(["usd", "percent"]).pipe(optional),
+  /** The monthly USD spend limit when `unit` is `usd`. */
+  limit: Money.USD.pipe(optional),
+  /** The member's USD spend this month, or the pooled spend of a combined budget; per model, the most on one model. */
+  spent: Money.USD.pipe(optional),
+  /** How much of the window's allowance is used, from 0 to 100, when `unit` is `percent`. */
+  percent: Percent.pipe(optional),
   /** `each` limits every member separately; `combined` pools everyone's spend against one limit. */
   scope: Schema.Literals(["each", "combined"]),
   /** `set` counts spend across the budget's models; `model` limits each model separately. */
@@ -59,7 +64,8 @@ export const Budget = Schema.Struct({
   picked: Schema.Boolean,
   /** Everyone in the workspace pools spend against it, so reaching it pauses model use for all of them. */
   shared: Schema.Boolean,
-  resetsAt: Instant,
+  /** When the budget or allowance window resets, if reported by the provider. */
+  resetsAt: Instant.pipe(optional),
 }).annotate({ identifier: "UsageLimits.Budget" })
 
 /** The usage limits of the OpenCode Console workspace a location is signed in to. */

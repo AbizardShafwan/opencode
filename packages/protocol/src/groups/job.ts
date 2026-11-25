@@ -42,7 +42,7 @@ export const makeJobGroup = <LocationId extends HttpApiMiddleware.AnyId, Locatio
             identifier: "experimental.job.list",
             summary: "List background jobs",
             description:
-              "List running and unacknowledged background jobs of this location, optionally filtered by session and kind.",
+              "List running and unacknowledged background jobs and active external waits of this location, optionally filtered by session and kind.",
           }),
         ),
     )

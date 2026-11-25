@@ -912,6 +912,20 @@ export type JobImage = {
   model: string
 }
 
+export type JobExternal = {
+  kind: "external"
+  id: string
+  sessionID: SessionID
+  status: "running" | "completed" | "error" | "cancelled"
+  title?: string
+  time: JobTime
+  waitID: string
+  source: string
+  server: string
+  description: string
+  expiresAt: number
+}
+
 export type VcsInfo = { provider?: string; branch: VcsBranch }
 
 export type WebSearchProvider = { id: WebSearchID; name: string }
@@ -1010,8 +1024,10 @@ export type PermissionRuleset = Array<PermissionRule>
 
 export type UsageLimitsBudget = {
   id: string
-  limit: MoneyUSD
-  spent: MoneyUSD
+  unit?: "usd" | "percent"
+  limit?: MoneyUSD
+  spent?: MoneyUSD
+  percent?: number
   scope: "each" | "combined"
   per: "set" | "model"
   coverage: "all" | "models"
@@ -1020,7 +1036,7 @@ export type UsageLimitsBudget = {
   inputPriceAtLeast?: MoneyUSDPerMillionTokens
   picked: boolean
   shared: boolean
-  resetsAt: number
+  resetsAt?: number
 }
 
 export type SessionMessageUser = {
@@ -1666,6 +1682,15 @@ export type SessionCompactionDelta = {
   data: { sessionID: SessionID; text: string }
 }
 
+export type SessionExternalWaitChanged = {
+  id: EventID
+  created: number
+  metadata?: { [x: string]: any }
+  type: "session.external_wait.changed"
+  location?: LocationRef
+  data: { sessionID: SessionID }
+}
+
 export type FilesystemChanged = {
   id: EventID
   created: number
@@ -2116,7 +2141,7 @@ export type FormReplied = {
   data: { id: FormID; sessionID: string; answer: FormAnswer1 }
 }
 
-export type JobInfo = JobShell | JobSubagent | JobImage
+export type JobInfo = JobShell | JobSubagent | JobImage | JobExternal
 
 export type UsageResult = UsageInfo | null
 
@@ -2748,6 +2773,7 @@ export type V2Event =
   | SessionRevertStaged
   | SessionRevertCleared
   | SessionRevertCommitted
+  | SessionExternalWaitChanged
   | FilesystemChanged
   | ReferenceUpdated
   | PermissionAsked
@@ -5611,6 +5637,43 @@ export type PermissionSavedRemoveInput = { readonly id: { readonly id: string }[
 
 export type PermissionSavedRemoveOutput = void
 
+export type PermissionSavedCleanupLegacyInput = {
+  readonly mode: {
+    readonly mode: "prune" | "migrate"
+    readonly dryRun?: boolean | undefined
+    readonly projectID?: string | undefined
+  }["mode"]
+  readonly dryRun?: {
+    readonly mode: "prune" | "migrate"
+    readonly dryRun?: boolean | undefined
+    readonly projectID?: string | undefined
+  }["dryRun"]
+  readonly projectID?: {
+    readonly mode: "prune" | "migrate"
+    readonly dryRun?: boolean | undefined
+    readonly projectID?: string | undefined
+  }["projectID"]
+}
+
+export type PermissionSavedCleanupLegacyOutput = {
+  data: {
+    mode: "prune" | "migrate"
+    dryRun: boolean
+    matched: number
+    deleted: number
+    migrated: number
+    deduplicated: number
+    items: Array<{
+      id: PermissionSavedID
+      projectID: ProjectID
+      action: string
+      resource: string
+      outcome: "deleted" | "migrated" | "deduplicated"
+      targetAction?: string | undefined
+    }>
+  }
+}["data"]
+
 export type PermissionCreateInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]
   readonly id?: {
@@ -5979,25 +6042,25 @@ export type JobListInput = {
   readonly location?: {
     readonly location?: { readonly directory?: string | undefined } | undefined
     readonly sessionID?: string | undefined
-    readonly kind?: "shell" | "subagent" | "image" | undefined
+    readonly kind?: "shell" | "subagent" | "image" | "external" | undefined
     readonly descendants?: boolean | undefined
   }["location"]
   readonly sessionID?: {
     readonly location?: { readonly directory?: string | undefined } | undefined
     readonly sessionID?: string | undefined
-    readonly kind?: "shell" | "subagent" | "image" | undefined
+    readonly kind?: "shell" | "subagent" | "image" | "external" | undefined
     readonly descendants?: boolean | undefined
   }["sessionID"]
   readonly kind?: {
     readonly location?: { readonly directory?: string | undefined } | undefined
     readonly sessionID?: string | undefined
-    readonly kind?: "shell" | "subagent" | "image" | undefined
+    readonly kind?: "shell" | "subagent" | "image" | "external" | undefined
     readonly descendants?: boolean | undefined
   }["kind"]
   readonly descendants?: {
     readonly location?: { readonly directory?: string | undefined } | undefined
     readonly sessionID?: string | undefined
-    readonly kind?: "shell" | "subagent" | "image" | undefined
+    readonly kind?: "shell" | "subagent" | "image" | "external" | undefined
     readonly descendants?: boolean | undefined
   }["descendants"]
 }

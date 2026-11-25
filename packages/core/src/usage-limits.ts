@@ -46,33 +46,29 @@ export const layer = Layer.effect(
           accountUsage.read({ providerID }).pipe(
             Effect.map((usage) => {
               if (!usage?.windows?.length) return [] as UsageLimits.Budget[]
-              // A provider window reports a remaining percentage, never money. The Budget contract requires
-              // USD amounts and a reset instant, so a window is expressed on a percentage scale of a $100
-              // limit, and one without a known reset is omitted rather than given a made-up reset time.
-              return usage.windows.flatMap((window): UsageLimits.Budget[] => {
-                if (window.resetsAt === undefined) return []
+              // A provider window reports a remaining percentage, never money. Report native percentage
+              // usage directly instead of scaling onto a synthetic USD budget, keeping windows without resetsAt.
+              return usage.windows.map((window): UsageLimits.Budget => {
                 const used = Math.round(clampPercent(100 - window.remainingPercent) * 100) / 100
-                return [
-                  {
-                    id: `${providerID}_${window.id}`,
-                    limit: Money.USD.make(100),
-                    spent: Money.USD.make(used),
-                    scope: "each",
-                    per: "set",
-                    coverage: "models",
-                    models: [
-                      {
-                        providerID,
-                        modelID: Model.ID.make(window.id),
-                        name: `${label} · ${window.label}`,
-                      },
-                    ],
-                    vendors: [label],
-                    picked: false,
-                    shared: false,
-                    resetsAt: window.resetsAt,
-                  },
-                ]
+                return {
+                  id: `${providerID}_${window.id}`,
+                  unit: "percent",
+                  percent: used,
+                  scope: "each",
+                  per: "set",
+                  coverage: "models",
+                  models: [
+                    {
+                      providerID,
+                      modelID: Model.ID.make(window.id),
+                      name: `${label} · ${window.label}`,
+                    },
+                  ],
+                  vendors: [label],
+                  picked: false,
+                  shared: false,
+                  ...(window.resetsAt === undefined ? {} : { resetsAt: window.resetsAt }),
+                }
               })
             }),
             Effect.timeout(Duration.seconds(2)),
@@ -209,6 +205,7 @@ function readBudgets(http: HttpClient.HttpClient, server: string, credential: Cr
               Effect.map((budgets) =>
                 budgets.map((budget) => ({
                   id: budget.ruleID,
+                  unit: "usd" as const,
                   limit: Money.USD.make(budget.limitDollars),
                   spent: Money.USD.make(budget.spentDollars),
                   scope: budget.scope,

@@ -856,4 +856,168 @@ describe("shell scanner permission impact", () => {
       )
     }
   }
+
+  it.effect("keeps legacy t3-code-<uuid>_* rules untouched until cleanupLegacy is explicitly called", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const saved = yield* PermissionSaved.Service
+      yield* saved.add({
+        projectID: Project.ID.global,
+        action: "t3-code-550e8400-e29b-41d4-a716-446655440000_open_terminal",
+        resources: ["*"],
+      })
+
+      expect((yield* saved.list({ projectID: Project.ID.global })).map((row) => row.action)).toEqual([
+        "t3-code-550e8400-e29b-41d4-a716-446655440000_open_terminal",
+      ])
+    }),
+  )
+
+  it.effect("supports opt-in dry-run and project-scoped pruning of legacy t3-code-<uuid>_* rules", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const { db } = yield* Database.Service
+      const otherProject = Project.ID.make("prj_other")
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: otherProject, worktree: AbsolutePath.make("/other"), sandboxes: [] })
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie)
+
+      const saved = yield* PermissionSaved.Service
+      yield* saved.add({
+        projectID: Project.ID.global,
+        action: "T3-CODE-550E8400-E29B-41D4-A716-446655440000_open_terminal",
+        resources: ["*"],
+      })
+      yield* saved.add({
+        projectID: Project.ID.global,
+        action: "t3-code-host_open_terminal",
+        resources: ["*"],
+      })
+      yield* saved.add({
+        projectID: Project.ID.global,
+        action: "t3-code-550e8400-e29b-41d4-a716-446655440000_",
+        resources: ["*"],
+      })
+      yield* saved.add({
+        projectID: Project.ID.global,
+        action: "t3-code_pull_request_read",
+        resources: ["*"],
+      })
+      yield* saved.add({
+        projectID: otherProject,
+        action: "t3-code-11111111-1111-1111-1111-111111111111_preview",
+        resources: ["*"],
+      })
+
+      const dryRun = yield* saved.cleanupLegacy({
+        mode: "prune",
+        dryRun: true,
+        projectID: Project.ID.global,
+      })
+      expect(dryRun).toMatchObject({
+        mode: "prune",
+        dryRun: true,
+        matched: 1,
+        deleted: 1,
+        migrated: 0,
+        deduplicated: 0,
+      })
+      expect(dryRun.items[0]).not.toHaveProperty("targetAction")
+      expect(yield* saved.list({ projectID: Project.ID.global })).toHaveLength(4)
+
+      const pruned = yield* saved.cleanupLegacy({
+        mode: "prune",
+        projectID: Project.ID.global,
+      })
+      expect(pruned).toMatchObject({
+        mode: "prune",
+        dryRun: false,
+        matched: 1,
+        deleted: 1,
+        migrated: 0,
+        deduplicated: 0,
+      })
+      expect(
+        (yield* saved.list({ projectID: Project.ID.global })).map((row) => row.action).toSorted(),
+      ).toEqual(["t3-code-550e8400-e29b-41d4-a716-446655440000_", "t3-code-host_open_terminal", "t3-code_pull_request_read"])
+      expect((yield* saved.list({ projectID: otherProject })).map((row) => row.action)).toEqual([
+        "t3-code-11111111-1111-1111-1111-111111111111_preview",
+      ])
+    }),
+  )
+
+  it.effect("migrates legacy t3-code-<uuid>_* rules to canonical t3-code_* and deduplicates collisions", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const saved = yield* PermissionSaved.Service
+      const service = yield* Permission.Service
+
+      yield* saved.add({
+        projectID: Project.ID.global,
+        action: "t3-code_pull_request_read",
+        resources: ["repo/*"],
+      })
+      yield* saved.add({
+        projectID: Project.ID.global,
+        action: "t3-code-550e8400-e29b-41d4-a716-446655440000_pull_request_read",
+        resources: ["repo/*"],
+      })
+      yield* saved.add({
+        projectID: Project.ID.global,
+        action: "t3-code-11111111-1111-1111-1111-111111111111_Open_Terminal",
+        resources: ["*"],
+      })
+      yield* saved.add({
+        projectID: Project.ID.global,
+        action: "T3-CODE-22222222-2222-2222-2222-222222222222_Open_Terminal",
+        resources: ["*"],
+      })
+      yield* saved.add({
+        projectID: Project.ID.global,
+        action: "t3-code-33333333-3333-3333-3333-333333333333_pull_request_read",
+        resources: ["other/*"],
+      })
+
+      const preview = yield* saved.cleanupLegacy({ mode: "migrate", dryRun: true })
+      expect(preview).toMatchObject({
+        mode: "migrate",
+        dryRun: true,
+        matched: 4,
+        deleted: 0,
+        migrated: 2,
+        deduplicated: 2,
+      })
+      expect(yield* saved.list({ projectID: Project.ID.global })).toHaveLength(5)
+
+      const migrated = yield* saved.cleanupLegacy({ mode: "migrate" })
+      expect(migrated).toMatchObject({
+        mode: "migrate",
+        dryRun: false,
+        matched: 4,
+        deleted: 0,
+        migrated: 2,
+        deduplicated: 2,
+      })
+      expect(
+        (yield* saved.list({ projectID: Project.ID.global })).map((row) => [row.action, row.resource]).toSorted(),
+      ).toEqual([
+        ["t3-code_Open_Terminal", "*"],
+        ["t3-code_pull_request_read", "other/*"],
+        ["t3-code_pull_request_read", "repo/*"],
+      ])
+
+      expect(
+        yield* service.ask(
+          assertion({
+            id: Permission.ID.create("per_migrated"),
+            action: "t3-code_Open_Terminal",
+            resources: ["*"],
+          }),
+        ),
+      ).toMatchObject({ effect: "allow" })
+    }),
+  )
 })

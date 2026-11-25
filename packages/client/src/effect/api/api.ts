@@ -1808,6 +1808,31 @@ export type PermissionSavedRemoveOperation<E = never> = (
   input: PermissionSavedRemoveInput,
 ) => Effect.Effect<PermissionSavedRemoveOutput, E>
 
+export type PermissionSavedCleanupLegacyInput = {
+  readonly mode: "prune" | "migrate"
+  readonly dryRun?: boolean | undefined
+  readonly projectID?: Project.ID | undefined
+}
+export type PermissionSavedCleanupLegacyOutput = {
+  readonly mode: "prune" | "migrate"
+  readonly dryRun: boolean
+  readonly matched: number
+  readonly deleted: number
+  readonly migrated: number
+  readonly deduplicated: number
+  readonly items: ReadonlyArray<{
+    readonly id: PermissionSaved.ID
+    readonly projectID: Project.ID
+    readonly action: string
+    readonly resource: string
+    readonly outcome: "deleted" | "migrated" | "deduplicated"
+    readonly targetAction?: string | undefined
+  }>
+}
+export type PermissionSavedCleanupLegacyOperation<E = never> = (
+  input: PermissionSavedCleanupLegacyInput,
+) => Effect.Effect<PermissionSavedCleanupLegacyOutput, E>
+
 export type PermissionCreateInput = {
   readonly sessionID: Session.ID
   readonly id?: Permission.ID | undefined
@@ -1848,6 +1873,7 @@ export interface PermissionApi<E = never> {
     readonly list: PermissionSavedListOperation<E>
     readonly update: PermissionSavedUpdateOperation<E>
     readonly remove: PermissionSavedRemoveOperation<E>
+    readonly cleanupLegacy: PermissionSavedCleanupLegacyOperation<E>
   }
   readonly create: PermissionCreateOperation<E>
   readonly list: PermissionListOperation<E>
@@ -2150,7 +2176,7 @@ export interface ExperimentalApi<E = never> {
 export type JobListInput = {
   readonly location?: { readonly directory?: string | undefined } | undefined
   readonly sessionID?: Session.ID | undefined
-  readonly kind?: "shell" | "subagent" | "image" | undefined
+  readonly kind?: "shell" | "subagent" | "image" | "external" | undefined
   readonly descendants?: boolean | undefined
 }
 export type JobListOutput = { readonly location: Location.PublicRef; readonly data: Job.List }

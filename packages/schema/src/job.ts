@@ -7,7 +7,7 @@ import { optional } from "./schema.js"
 export const Status = Schema.Literals(["running", "completed", "error", "cancelled"])
 export type Status = typeof Status.Type
 
-export const Kind = Schema.Literals(["shell", "subagent", "image"])
+export const Kind = Schema.Literals(["shell", "subagent", "image", "external"])
 export type Kind = typeof Kind.Type
 
 export interface Time extends Schema.Schema.Type<typeof Time> {}
@@ -49,8 +49,19 @@ export const Image = Schema.Struct({
   model: Schema.String,
 }).annotate({ identifier: "Job.Image" })
 
-export type Info = Shell | Subagent | Image
-export const Info = Schema.Union([Shell, Subagent, Image]).annotate({ identifier: "Job.Info" })
+export interface External extends Schema.Schema.Type<typeof External> {}
+export const External = Schema.Struct({
+  kind: Schema.Literal("external"),
+  ...Base,
+  waitID: Schema.String,
+  source: Schema.String,
+  server: Schema.String,
+  description: Schema.String,
+  expiresAt: Schema.Finite,
+}).annotate({ identifier: "Job.External" })
+
+export type Info = Shell | Subagent | Image | External
+export const Info = Schema.Union([Shell, Subagent, Image, External]).annotate({ identifier: "Job.Info" })
 
 export interface List extends Schema.Schema.Type<typeof List> {}
 export const List = Schema.Struct({

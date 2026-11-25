@@ -1,9 +1,12 @@
 import { expect } from "bun:test"
 import { Job } from "@opencode/core/job"
+import { Mcp } from "@opencode/core/mcp/index"
 import { Session } from "@opencode/core/session"
+import { SessionExternalWait } from "@opencode/core/session/external-wait"
 import { SessionMessage } from "@opencode/core/session/message"
+import { Job as JobSchema } from "@opencode/schema/job"
 import { AbsolutePath } from "@opencode/schema/schema"
-import { Context, Deferred, Effect, Layer } from "effect"
+import { Context, Deferred, Effect, Layer, Schema } from "effect"
 import { HttpEffect, HttpRouter, HttpServer } from "effect/http"
 import { tmpdirScoped } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
@@ -162,5 +165,146 @@ it.live("lists background jobs with session, kind, and descendant filters", () =
     expect(crossLocation.status).toBe(404)
 
     yield* Deferred.succeed(hold, "done")
+  }),
+)
+
+it.live("lists active external waits filtered by MCP attachment, session, descendants, kind, and location", () =>
+  Effect.gen(function* () {
+    const tmp = yield* tmpdirScoped("opencode-job-external-")
+    const other = yield* tmpdirScoped("opencode-job-external-other-")
+    const attachedServers = new Set(["t3-code-live"])
+    const context = yield* Layer.build(
+      createRoutes(
+        {
+          password: "secret",
+          database: { path: ":memory:" },
+          models: { fetch: false },
+          fs: { filewatcher: false },
+          config: { directory: tmp.path, project: false },
+        },
+        () => [],
+        [
+          Mcp.node.replace(
+            Layer.mock(Mcp.Service, {
+              isAttached: (server) => Effect.succeed(attachedServers.has(String(server))),
+            }),
+          ),
+        ],
+      ).pipe(Layer.provide(HttpServer.layerServices)),
+    )
+    const handler = Context.get(context, HttpRouter.HttpRouter)
+      .asHttpEffect()
+      .pipe(HttpEffect.toWebHandlerWith(context))
+    const sessions = Context.get(context, Session.Service)
+    const waits = Context.get(context, SessionExternalWait.Service)
+
+    const parent = yield* sessions.create({
+      location: { directory: AbsolutePath.make(tmp.path) },
+      title: "parent",
+    })
+    const child = yield* sessions.create({
+      parentID: parent.id,
+      title: "child",
+    })
+    const elsewhere = yield* sessions.create({
+      location: { directory: AbsolutePath.make(other.path) },
+      title: "elsewhere",
+    })
+
+    yield* waits.register({
+      sessionID: parent.id,
+      waitID: "wait_parent_live",
+      source: "pr-watch",
+      server: "t3-code-live",
+      description: "Watching PR #42",
+    })
+    yield* waits.register({
+      sessionID: parent.id,
+      waitID: "wait_parent_dead",
+      source: "pr-watch",
+      server: "t3-code-dead",
+      description: "Stale PR watch",
+    })
+    yield* waits.register({
+      sessionID: child.id,
+      waitID: "wait_child_live",
+      source: "task",
+      server: "t3-code-live",
+      description: "Waiting on sub-task",
+    })
+    yield* waits.register({
+      sessionID: elsewhere.id,
+      waitID: "wait_other_live",
+      source: "pr-watch",
+      server: "t3-code-live",
+      description: "Other workspace wait",
+    })
+
+    const request = (route: string) =>
+      Effect.promise(async (signal) => {
+        const url = new URL(route, "http://opencode.local")
+        url.searchParams.set("location[directory]", tmp.path)
+        const res = await handler(
+          new Request(url, {
+            headers: { authorization: `Basic ${btoa("opencode:secret")}` },
+            signal,
+          }),
+        )
+        return {
+          status: res.status,
+          body: (await res.json()) as { data: unknown },
+        }
+      })
+
+    const allExternal = yield* request("/api/experimental/job?kind=external")
+    expect(allExternal.status).toBe(200)
+    const decodedAll = Schema.decodeUnknownSync(JobSchema.List)(allExternal.body.data)
+    expect(decodedAll.data.map((item) => (item.kind === "external" ? item.waitID : item.id)).toSorted()).toEqual([
+      "wait_child_live",
+      "wait_parent_live",
+    ])
+    expect(decodedAll.data).toContainEqual(
+      expect.objectContaining({
+        kind: "external",
+        sessionID: parent.id,
+        waitID: "wait_parent_live",
+        source: "pr-watch",
+        server: "t3-code-live",
+        description: "Watching PR #42",
+        status: "running",
+      }),
+    )
+
+    const shellOnly = yield* request("/api/experimental/job?kind=shell")
+    expect(shellOnly.status).toBe(200)
+    expect(Schema.decodeUnknownSync(JobSchema.List)(shellOnly.body.data).data).toEqual([])
+
+    const parentDirect = yield* request(`/api/experimental/job?sessionID=${parent.id}`)
+    expect(parentDirect.status).toBe(200)
+    expect(Schema.decodeUnknownSync(JobSchema.List)(parentDirect.body.data).data.map((item) => item.id)).toEqual([
+      `${parent.id}:wait_parent_live`,
+    ])
+
+    const parentDescendants = yield* request(`/api/experimental/job?sessionID=${parent.id}&descendants=true`)
+    expect(parentDescendants.status).toBe(200)
+    expect(
+      Schema.decodeUnknownSync(JobSchema.List)(parentDescendants.body.data).data
+        .map((item) => (item.kind === "external" ? item.waitID : item.id))
+        .toSorted(),
+    ).toEqual(["wait_child_live", "wait_parent_live"])
+
+    // When the owning MCP server detaches, its active waits stop surfacing immediately.
+    attachedServers.delete("t3-code-live")
+    const afterDetach = yield* request("/api/experimental/job?kind=external")
+    expect(afterDetach.status).toBe(200)
+    expect(Schema.decodeUnknownSync(JobSchema.List)(afterDetach.body.data).data).toEqual([])
+
+    attachedServers.add("t3-code-live")
+    yield* waits.clear(parent.id, "wait_parent_live")
+    const afterClear = yield* request("/api/experimental/job")
+    expect(afterClear.status).toBe(200)
+    expect(Schema.decodeUnknownSync(JobSchema.List)(afterClear.body.data).data.map((item) => item.id)).toEqual([
+      `${child.id}:wait_child_live`,
+    ])
   }),
 )
