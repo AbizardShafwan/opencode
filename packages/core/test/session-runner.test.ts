@@ -71,7 +71,10 @@ import { InstructionBuiltIns } from "@opencode/core/instructions/builtins"
 import { InstructionDiscovery } from "@opencode/core/instruction-discovery"
 import { SkillInstructions } from "@opencode/core/skill/instructions"
 import { ReferenceInstructions } from "@opencode/core/reference/instructions"
+import { Mcp } from "@opencode/core/mcp/index"
 import { McpInstructions } from "@opencode/core/mcp/instructions"
+import { McpTool } from "@opencode/core/tool/mcp"
+import { ToolOutput } from "@opencode/core/tool-output"
 import { SessionSystemPrompt } from "@opencode/core/session/system-prompt"
 import { ID, Model } from "@opencode/core/model"
 import { Location } from "@opencode/core/location"
@@ -7134,4 +7137,181 @@ describe("SessionRunnerLLM", () => {
     if (!(defect instanceof Error)) return
     expect(defect.message).toBe("Tool input delta before start: call-1")
   })
+})
+
+describe("session runner external waits layer capture", () => {
+  const hostServer = Mcp.ServerName.make("t3-code-host")
+
+  testEffect(Layer.empty).effect(
+    "captures SessionExternalWait and Mcp in SessionRunnerLLM.layer and McpTool.layer without drain-context services",
+    () =>
+      Effect.gen(function* () {
+        const localLLM = TestLLM.layer({ fallback: [] })
+        const directory = AbsolutePath.make("/project")
+        const idleObserved: Array<ReadonlyArray<unknown>> = []
+        const mcpLayer = Layer.mock(Mcp.Service, {
+          isAttached: (name) => Effect.succeed(name === hostServer),
+          tools: () =>
+            Effect.succeed([
+              {
+                server: hostServer,
+                name: "watch_pull_request",
+                trustedHost: true,
+                permissionNamespace: "t3-code",
+                codemode: false,
+                inputSchema: { type: "object", properties: {} },
+              },
+            ]),
+          callTool: (input) =>
+            Effect.succeed({
+              server: Mcp.ServerName.make(input.server),
+              tool: input.name,
+              isError: false,
+              content: [{ type: "text", text: "ok" }],
+            }),
+        })
+        const services = yield* Layer.build(
+          AppNodeBuilder.build(
+            LayerNode.group([
+              SessionRunnerLLM.node,
+              McpTool.node,
+              Tool.node,
+              Database.node,
+              Bus.node,
+              SessionProjector.node,
+              SessionInbox.node,
+              PluginHooks.node,
+              Agent.node,
+              Model.node,
+            ]),
+            [
+              Snapshot.node.replace(Snapshot.noopLayer),
+              LayerNodePlatform.llmClient.replace(TestLLM.clientLayer.pipe(Layer.provide(localLLM))),
+              SessionRunnerModel.node.replace(
+                Layer.mock(SessionRunnerModel.Service)({
+                  resolve: () =>
+                    Effect.succeed(
+                      SessionRunnerModel.resolved(model, {
+                        capabilities: { tools: true, input: ["text"], output: ["text"] },
+                        cost: [],
+                        limit: defaultModelLimit,
+                      }),
+                    ),
+                }),
+              ),
+              InstructionBuiltIns.node.replace(
+                Layer.mock(InstructionBuiltIns.Service, { load: () => Effect.succeed(Instructions.empty) }),
+              ),
+              InstructionDiscovery.node.replace(
+                Layer.mock(InstructionDiscovery.Service, {
+                  project: true,
+                  global: true,
+                  load: () => Effect.succeed(Instructions.empty),
+                }),
+              ),
+              SkillInstructions.node.replace(
+                Layer.mock(SkillInstructions.Service, { load: () => Effect.succeed(Instructions.empty) }),
+              ),
+              ReferenceInstructions.node.replace(
+                Layer.mock(ReferenceInstructions.Service, { load: () => Effect.succeed(Instructions.empty) }),
+              ),
+              McpInstructions.node.replace(
+                Layer.mock(McpInstructions.Service, { load: () => Effect.succeed(Instructions.empty) }),
+              ),
+              Location.node.replace(Location.boundNode({ directory })),
+              Permission.node.replace(Layer.mock(Permission.Service, { assert: () => Effect.void })),
+              Config.node.replace(Config.testLayer()),
+              PluginSupervisor.node.replace(Layer.empty),
+              Plugin.node.replace(Layer.mock(Plugin.Service, { awaitActivation: Effect.void })),
+              Mcp.node.replace(mcpLayer),
+              ToolOutput.node.replace(
+                Layer.succeed(ToolOutput.Service, ToolOutput.Service.of({} as ToolOutput.Interface)),
+              ),
+            ],
+          ).pipe(Layer.provideMerge(localLLM)),
+        ).pipe(Effect.orDie)
+
+        const { db } = Context.get(services, Database.Service)
+        const llm = Context.get(services, TestLLM.Service)
+        const bus = Context.get(services, Bus.Service)
+        const hooks = Context.get(services, PluginHooks.Service)
+        const agents = Context.get(services, Agent.Service)
+        const tools = Context.get(services, Tool.Service)
+        const inbox = Context.get(services, SessionInbox.Service)
+        const runner = Context.get(services, SessionRunner.Service)
+        yield* Context.get(services, McpTool.Service).flush
+
+        yield* hooks.register("session", "experimental.idle", (event) =>
+          Effect.sync(() => {
+            idleObserved.push(event.background)
+          }),
+        )
+        yield* agents.transform((editor) => {
+          editor.update(Agent.ID.make("build"), (agent) => {
+            agent.mode = "primary"
+          })
+        })
+        yield* db
+          .insert(ProjectTable)
+          .values({ id: Project.ID.global, worktree: directory, sandboxes: [] })
+          .onConflictDoNothing()
+          .run()
+          .pipe(Effect.orDie)
+        const isolatedSession = Session.ID.make("ses_runner_external_layer")
+        yield* db
+          .insert(SessionTable)
+          .values({
+            id: isolatedSession,
+            project_id: Project.ID.global,
+            slug: isolatedSession,
+            directory,
+            title: "test",
+            version: "test",
+          })
+          .onConflictDoNothing()
+          .run()
+          .pipe(Effect.orDie)
+
+        const snapshot = yield* tools.snapshot()
+        const toolResult = yield* snapshot.execute({
+          sessionID: isolatedSession,
+          agent: Agent.ID.make("build"),
+          messageID: SessionMessage.ID.make("msg_wait_tool"),
+          call: {
+            type: "tool-call",
+            id: "call_watch",
+            name: McpTool.directName(hostServer, "watch_pull_request"),
+            input: { url: "https://github.com/Acme/RepoA/pull/42" },
+          },
+        })
+        expect(toolResult.output).toBe("ok")
+
+        yield* inbox
+          .admit({
+            id: SessionMessage.ID.create(),
+            sessionID: isolatedSession,
+            item: SessionInbox.Item.make({ type: "user", payload: { text: "Wait for PR" }, delivery: "steer" }),
+          })
+          .pipe(Effect.orDie)
+        yield* bus.publish(SessionEvent.Execution.Started, { sessionID: isolatedSession })
+        yield* llm.push(
+          TestLLM.stop(LLMEvent.textStart({ id: "t1" }), LLMEvent.textDelta({ id: "t1", text: "Waiting" }), LLMEvent.textEnd({ id: "t1" })),
+        )
+
+        const drained = yield* runner.drain({ sessionID: isolatedSession, force: false }).pipe(Effect.orDie)
+        expect(drained._tag).toBe("Complete")
+        expect(idleObserved).toEqual([
+          [
+            {
+              kind: "external",
+              sessionID: isolatedSession,
+              waitID: "pr-watch:acme/repoa#42",
+              source: "pull_request_watch",
+              server: hostServer,
+              description: "Watching pull request acme/repoa#42",
+            },
+          ],
+        ])
+      }),
+  )
 })

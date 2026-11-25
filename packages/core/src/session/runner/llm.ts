@@ -56,6 +56,9 @@ const layer = Layer.effect(
     const hooks = yield* PluginHooks.Service
     const jobs = yield* Job.Service
     const title = yield* SessionTitle.Service
+    // Capture at layer construction because callers invoke `drain()` from contexts that omit `SessionRunnerLLM.node` deps.
+    const layerWaits = yield* Effect.serviceOption(SessionExternalWait.Service)
+    const layerMcp = yield* Effect.serviceOption(Mcp.Service)
     const steps = yield* SessionStep.make
     // Title generation starts once input is visible and must not delay model execution.
     const titles = yield* FiberMap.make<SessionSchema.ID, void, never>()
@@ -68,9 +71,9 @@ const layer = Layer.effect(
       let entering = true
       let stepped = input.stepped ?? false
       const promotable = input.promotable ?? "input"
-      // Real runtimes provide both; tests that omit them keep their existing idle behavior.
-      const waits = yield* Effect.serviceOption(SessionExternalWait.Service)
-      const mcp = yield* Effect.serviceOption(Mcp.Service)
+      // Real runtimes capture both in the layer; call-time lookup still allows test service overrides.
+      const waits = Option.orElse(yield* Effect.serviceOption(SessionExternalWait.Service), () => layerWaits)
+      const mcp = Option.orElse(yield* Effect.serviceOption(Mcp.Service), () => layerMcp)
       const external = Option.isSome(waits)
         ? {
             waits: waits.value,

@@ -4,6 +4,7 @@ import { Agent } from "@opencode/core/agent"
 import { Bus } from "@opencode/core/bus"
 import { Config } from "@opencode/core/config"
 import { AppNodeBuilder } from "@opencode/core/effect/app-node-builder"
+import { KV } from "@opencode/core/kv"
 import { Location } from "@opencode/core/location"
 import { Mcp } from "@opencode/core/mcp/index"
 import { Permission } from "@opencode/core/permission"
@@ -439,5 +440,39 @@ it.effect("extracts POSIX, Windows drive, UNC, and quoted secret paths from host
       McpTool.deliveredFiles({ filePath: "C:\\Users\\Alice\\secret.txt" }, "ignored https://example.com/a/b"),
     ).toEqual(["C:\\Users\\Alice\\secret.txt"])
     expect(McpTool.deliveredFiles(undefined, "See https://example.com/foo/bar for instructions")).toEqual([])
+  }),
+)
+
+it.effect("persists external waits into KV from McpTool.layer without SessionExternalWait in execute context", () =>
+  Effect.gen(function* () {
+    const mcpLayer = Layer.mock(Mcp.Service, {
+      tools: () => Effect.succeed([mcpTool(hostServer, "watch_pull_request", host)]),
+      callTool: (input) =>
+        Effect.succeed({
+          server: Mcp.ServerName.make(input.server),
+          tool: input.name,
+          isError: false,
+          content: [{ type: "text", text: "ok" }],
+        }),
+    })
+    const services = yield* Layer.build(
+      AppNodeBuilder.build(LayerNode.group([Tool.node, McpTool.node, Bus.node, KV.node]), [
+        Config.node.replace(Config.testLayer()),
+        Location.node.replace(Layer.succeed(Location.Service, location)),
+        Mcp.node.replace(mcpLayer),
+        Permission.node.replace(Layer.mock(Permission.Service, { assert: () => Effect.void })),
+        SessionStore.node.replace(Layer.mock(SessionStore.Service, { get: () => Effect.succeed(undefined) })),
+        ToolOutput.node.replace(Layer.succeed(ToolOutput.Service, ToolOutput.Service.of({} as ToolOutput.Interface))),
+      ]),
+    )
+    const tools = Context.get(services, Tool.Service)
+    const kv = Context.get(services, KV.Service)
+    yield* Context.get(services, McpTool.Service).flush
+    const result = yield* run(tools, McpTool.directName(hostServer, "watch_pull_request"), {
+      url: "https://github.com/Acme/RepoA/pull/42",
+    })
+    expect(result._tag).toBe("Success")
+    const stored = yield* kv.scan({ prefix: `external.wait/${rootID}/` })
+    expect(stored.entries.map((entry) => entry.key)).toEqual([`external.wait/${rootID}/pr-watch:acme/repoa#42`])
   }),
 )

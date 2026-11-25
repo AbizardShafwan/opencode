@@ -117,6 +117,8 @@ export const layer = Layer.effect(
     const sessions = yield* SessionStore.Service
     const config = yield* Config.Service
     const secretFiles = yield* SecretFile.Service
+    // Capture at layer construction because `Instance.Services` does not expose `McpTool.node` deps during `execute()`.
+    const layerExternalWaits = yield* Effect.serviceOption(SessionExternalWait.Service)
     const lock = Semaphore.makeUnsafe(1)
     let discovered: Mcp.Tool[] = []
     let collisions: string[] = []
@@ -288,7 +290,10 @@ export const layer = Layer.effect(
                       })
                     }
                     // Only the verified host may change wait state, so an impostor cannot mask real waits.
-                    const externalWaits = yield* Effect.serviceOption(SessionExternalWait.Service)
+                    const externalWaits = Option.orElse(
+                      yield* Effect.serviceOption(SessionExternalWait.Service),
+                      () => layerExternalWaits,
+                    )
                     if (Option.isSome(externalWaits) && isHostTool(tool))
                       yield* trackExternalWait(
                         externalWaits.value,
