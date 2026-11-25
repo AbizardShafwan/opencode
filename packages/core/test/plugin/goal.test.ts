@@ -1,4 +1,4 @@
-import { describe, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { Deferred, Effect, Layer, Option, Schedule, Schema, Stream } from "effect"
 import { sql } from "drizzle-orm"
 import { AIError, InvalidRequestError, LanguageModel, type LLMRequest } from "@opencode/ai"
@@ -887,3 +887,17 @@ function project() {
     })
   })
 }
+
+describe("GoalPlugin.forgetAdmissions", () => {
+  test("drops only the settled session's admission bookkeeping", () => {
+    const admitted = new Map([
+      ["inbox_1", { sessionID: Session.ID.make("ses_settled") }],
+      ["inbox_2", { sessionID: Session.ID.make("ses_running") }],
+      ["inbox_3", { sessionID: Session.ID.make("ses_settled") }],
+    ])
+
+    GoalPlugin.forgetAdmissions(admitted, "ses_settled")
+
+    expect([...admitted.keys()]).toEqual(["inbox_2"])
+  })
+})

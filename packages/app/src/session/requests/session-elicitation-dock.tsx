@@ -19,10 +19,13 @@ type Field = FormInfo["fields"][number]
 
 const decodeMessage = Schema.decodeUnknownOption(Schema.String)
 
-const inputTypes = { email: "email", uri: "url", date: "text", "date-time": "text" } as const satisfies Record<
-  NonNullable<FormStringField["format"]>,
-  string
->
+const inputTypes = {
+  email: "email",
+  uri: "url",
+  date: "text",
+  "date-time": "text",
+  password: "password",
+} as const satisfies Record<NonNullable<FormStringField["format"]>, string>
 
 export function SessionElicitationDock(props: {
   request: FormInfo & { location?: LocationRef }

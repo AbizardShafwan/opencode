@@ -18,4 +18,17 @@ export const rules: Permission.Ruleset = [
   { action: "read", resource: "*.env.*", effect: "ask" },
   { action: "read", resource: "*.env.example", effect: "allow" },
   { action: "external_directory", resource: "*", effect: "allow" },
+  // Exact read-only T3 Code host actions; never a wildcard over the reserved `t3-code_` namespace.
+  ...[
+    "t3-code_pull_request_read",
+    "t3-code_pull_request_list",
+    "t3-code_ci_logs",
+    "t3-code_read_pull_request_guide",
+    "t3-code_list_issues",
+    "t3-code_read_issue",
+    "t3-code_list_thread_pull_requests",
+    "t3-code_list_thread_issues",
+    "t3-code_html_preview",
+    "t3-code_html_render",
+  ].map((action) => ({ action, resource: "*", effect: "allow" as const })),
 ]

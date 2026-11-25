@@ -64,6 +64,7 @@ import { TestClock } from "effect/testing"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import { ExitCode, makeHandle, ProcessId } from "effect/process/ChildProcessSpawner"
 import { Image } from "@opencode/core/image"
+import { ReadToolFileSystem } from "@opencode/core/tool/read-filesystem"
 import { Global } from "@opencode/util/global"
 import { advance, drain } from "./lib/clock"
 import { testEffect } from "./lib/effect"
@@ -449,6 +450,12 @@ const settled = (service: Mcp.Interface, name = "resources") =>
     return status
   }).pipe(Effect.retry({ times: 200, schedule: Schedule.spaced("10 millis") }))
 
+// MCP tool registration needs a bound Location; the tool service also reads it for host attachments.
+const testLocation = Location.Ref.make({ directory: AbsolutePath.make(import.meta.dir) })
+const locationNode = Location.node.replace(
+  Layer.succeed(Location.Service, Location.Service.of(location(testLocation))),
+)
+
 const mcp = Layer.mock(Mcp.Service, {
   tools: () =>
     Effect.succeed([
@@ -511,9 +518,23 @@ const mcp = Layer.mock(Mcp.Service, {
       } satisfies Mcp.Tool,
       {
         server: Mcp.ServerName.make("direct"),
+        name: "fail_structured",
+        codemode: false,
+        description: "Fails with structured content",
+        inputSchema: { type: "object", properties: {} },
+      } satisfies Mcp.Tool,
+      {
+        server: Mcp.ServerName.make("direct"),
         name: "media",
         codemode: false,
         description: "Returns text and an image",
+        inputSchema: { type: "object", properties: {} },
+      } satisfies Mcp.Tool,
+      {
+        server: Mcp.ServerName.make("direct"),
+        name: "oversized",
+        codemode: false,
+        description: "Returns an image past the inline ingest budget",
         inputSchema: { type: "object", properties: {} },
       } satisfies Mcp.Tool,
       {
@@ -535,6 +556,14 @@ const mcp = Layer.mock(Mcp.Service, {
           isError: true,
           content: [{ type: "text", text: "search index unavailable" }],
         } satisfies Mcp.ToolResult
+      if (input.name === "fail_structured")
+        return {
+          server: Mcp.ServerName.make(input.server),
+          tool: input.name,
+          isError: true,
+          structured: { code: "INDEX_DOWN", retryable: false },
+          content: [{ type: "text", text: "search index unavailable" }],
+        } satisfies Mcp.ToolResult
       if (input.name === "media")
         return {
           server: Mcp.ServerName.make(input.server),
@@ -542,7 +571,21 @@ const mcp = Layer.mock(Mcp.Service, {
           isError: false,
           content: [
             { type: "text", text: "rendered chart" },
-            { type: "media", data: "aGVsbG8=", mimeType: "image/png" },
+            { type: "media", data: "aGVsbG8=", mimeType: "image/png; charset=binary" },
+          ],
+        } satisfies Mcp.ToolResult
+      if (input.name === "oversized")
+        return {
+          server: Mcp.ServerName.make(input.server),
+          tool: input.name,
+          isError: false,
+          content: [
+            {
+              type: "media",
+              data: Buffer.alloc(ReadToolFileSystem.MAX_MEDIA_INGEST_BYTES + 1).toString("base64"),
+              mimeType: "image/png",
+              uri: "file:///oversized.png",
+            },
           ],
         } satisfies Mcp.ToolResult
       if (input.name === "attachments")
@@ -603,14 +646,19 @@ const permissions = Layer.mock(Permission.Service, {
       yield* decision
     }),
 })
-const events = Layer.mock(Bus.Service, { subscribe: () => Stream.never })
+const events = Layer.mock(Bus.Service, {
+  subscribe: () => Stream.never,
+  listen: () => Effect.succeed(Effect.void),
+})
 const outputData = await fs.mkdtemp(path.join(os.tmpdir(), "opencode-mcp-output-"))
 const it = testEffect(
   AppNodeBuilder.build(LayerNode.group([Tool.node, McpTool.node]), [
+    Config.node.replace(Config.testLayer()),
     Mcp.node.replace(mcp),
     Permission.node.replace(permissions),
     Bus.node.replace(events),
     Image.node.replace(imagePassthrough),
+    locationNode,
     Global.node.replace(Global.layerWith({ data: outputData })),
   ]),
 )
@@ -623,6 +671,42 @@ describe("MCP errors", () => {
     ).toBe("failed")
     expect(new McpClient.NeedsAuthError({ server: "demo", message: "Unauthorized" }).message).toBe("Unauthorized")
     expect(new McpClient.ConnectError({ server: "demo", message: "offline" }).message).toBe("offline")
+  })
+})
+
+describe("MCP call results", () => {
+  const sdk = (value: unknown) =>
+    value as unknown as Parameters<typeof McpClient.toCallToolResult>[0]
+
+  test("degrades a missing or non-array content list instead of throwing", () => {
+    expect(McpClient.toCallToolResult(sdk({ content: "not-an-array", structuredContent: { ok: true } }))).toEqual({
+      isError: false,
+      structured: { ok: true },
+      content: [],
+    })
+    expect(McpClient.toCallToolResult(sdk({}))).toEqual({ isError: false, structured: undefined, content: [] })
+  })
+
+  test("drops malformed resource parts and keeps well-formed ones", () => {
+    const result = McpClient.toCallToolResult(
+      sdk({
+        isError: true,
+        content: [
+          { type: "resource" },
+          { type: "resource", resource: null },
+          { type: "resource", resource: { uri: "docs://readme" } },
+          { type: "resource", resource: { uri: "docs://logo", blob: "aGVsbG8=", mimeType: "image/png" } },
+          { type: "text", text: "hello" },
+        ],
+      }),
+    )
+
+    expect(result.isError).toBe(true)
+    expect(result.content).toEqual([
+      { type: "text", text: "docs://readme" },
+      { type: "media", data: "aGVsbG8=", mimeType: "image/png", uri: "docs://logo" },
+      { type: "text", text: "hello" },
+    ])
   })
 })
 
@@ -2454,7 +2538,7 @@ testEffect(Layer.empty).live("preserves plugin transforms through MCP catalog up
       })
 
       yield* Ref.set(catalog, [...healthy, tool("demo", "added")])
-      yield* bus.publish(McpEvent.ToolsChanged, { server: "demo" })
+      yield* bus.publish(McpEvent.ToolsChanged, { server: "demo" }, { location: testLocation })
       yield* waitForTool(registry, "demo_added")
       expect((yield* toolDefinitions(registry)).map((tool) => tool.name)).toEqual([
         "demo_added",
@@ -2491,7 +2575,7 @@ testEffect(Layer.empty).live("preserves plugin transforms through MCP catalog up
         tool("demo", "added"),
         tool("repaired", "lookup"),
       ])
-      yield* bus.publish(McpEvent.ToolsChanged, { server: "demo" })
+      yield* bus.publish(McpEvent.ToolsChanged, { server: "demo" }, { location: testLocation })
       yield* waitForTool(registry, "demo_status")
       expect((yield* toolDefinitions(registry)).map((tool) => tool.name)).toEqual([
         "demo_added",
@@ -2513,7 +2597,7 @@ testEffect(Layer.empty).live("preserves plugin transforms through MCP catalog up
       )
 
       yield* Ref.set(catalog, [tool("demo", "search", "Latest search"), tool("demo", "refreshed")])
-      yield* bus.publish(McpEvent.ToolsChanged, { server: "demo" })
+      yield* bus.publish(McpEvent.ToolsChanged, { server: "demo" }, { location: testLocation })
       yield* waitForTool(registry, "demo_refreshed")
       expect((yield* toolDefinitions(registry)).find((tool) => tool.name === "demo_search")?.description).toBe(
         "Override search",
@@ -2539,6 +2623,7 @@ testEffect(Layer.empty).live("preserves plugin transforms through MCP catalog up
       Effect.provide(
         Layer.fresh(
           AppNodeBuilder.build(LayerNode.group([Tool.node, McpTool.node, Bus.node]), [
+            Config.node.replace(Config.testLayer()),
             Mcp.node.replace(
               Layer.mock(Mcp.Service, {
                 tools: () => Ref.get(catalog),
@@ -2553,6 +2638,7 @@ testEffect(Layer.empty).live("preserves plugin transforms through MCP catalog up
             ),
             Permission.node.replace(Layer.mock(Permission.Service, { assert: () => Effect.void })),
             Image.node.replace(imagePassthrough),
+            locationNode,
           ]),
         ),
       ),
@@ -2570,10 +2656,10 @@ testEffect(Layer.empty).effect("coalesces queued MCP tool notifications after in
     expect(reads).toBe(1)
     expect((yield* toolDefinitions(registry)).map((tool) => tool.name)).toEqual(["demo_read_1", "execute"])
 
-    yield* bus.publish(McpEvent.ToolsChanged, { server: "demo" })
+    yield* bus.publish(McpEvent.ToolsChanged, { server: "demo" }, { location: testLocation })
     yield* advance(() => reads >= 2)
     expect(reads).toBe(2)
-    yield* Effect.forEach(Array.from({ length: 20 }), () => bus.publish(McpEvent.ToolsChanged, { server: "demo" }))
+    yield* Effect.forEach(Array.from({ length: 20 }), () => bus.publish(McpEvent.ToolsChanged, { server: "demo" }, { location: testLocation }))
     yield* advance(() => reads >= 3)
     yield* drain
     expect(reads).toBe(3)
@@ -2581,6 +2667,7 @@ testEffect(Layer.empty).effect("coalesces queued MCP tool notifications after in
   }).pipe(
     Effect.provide(
       AppNodeBuilder.build(LayerNode.group([Tool.node, McpTool.node, Bus.node]), [
+        Config.node.replace(Config.testLayer()),
         Mcp.node.replace(
           Layer.mock(Mcp.Service, {
             tools: () =>
@@ -2596,6 +2683,7 @@ testEffect(Layer.empty).effect("coalesces queued MCP tool notifications after in
         ),
         Permission.node.replace(Layer.mock(Permission.Service, { assert: () => Effect.void })),
         Image.node.replace(imagePassthrough),
+        locationNode,
       ]),
     ),
   )
@@ -2612,9 +2700,11 @@ it.effect("advertises MCP output schemas to Code Mode", () =>
     expect(toolSet.definitions.map((tool) => tool.name)).toEqual([
       "direct_attachments",
       "direct_fail",
+      "direct_fail_structured",
       "direct_issues",
       "direct_lookup",
       "direct_media",
+      "direct_oversized",
       "execute",
     ])
     expect(codeModeListings(toolSet.codeModeCatalog!).find((tool) => tool.path === "demo.search")?.line).toContain(
@@ -2647,7 +2737,8 @@ it.effect("forwards the invoking session through direct and Code Mode MCP tools"
       ...toolIdentity,
       call: { type: "tool-call", id: "call_mcp_direct", name: "direct_lookup", input: {} },
     })
-    expect(invocations[0]).toEqual({
+    // The invocation also carries the progress callback, which no expectation can compare structurally.
+    expect(invocations[0]).toMatchObject({
       server: "direct",
       name: "lookup",
       args: {},
@@ -2665,7 +2756,7 @@ it.effect("forwards the invoking session through direct and Code Mode MCP tools"
         input: { code: "return await tools.demo.search({})" },
       },
     })
-    expect(invocations[1]).toEqual({
+    expect(invocations[1]).toMatchObject({
       server: "demo",
       name: "search",
       args: {},
@@ -2787,8 +2878,60 @@ it.effect("preserves MCP text and media content for the model", () =>
     expect(execution.output).toBe("rendered chart")
     expect(execution.content).toMatchObject([
       { type: "text", text: "rendered chart" },
-      { type: "file", mime: "image/png" },
+      { type: "file", mime: "image/png", uri: "data:image/png;base64,aGVsbG8=" },
     ])
+  }),
+)
+
+it.effect("preserves MCP structured error content on a failed call", () =>
+  Effect.gen(function* () {
+    assertion = yield* Deferred.make<Permission.AssertInput>()
+    decision = Effect.void
+    const registry = yield* Tool.Service
+    const registration = yield* McpTool.Service
+    yield* registration.flush
+
+    const execution = yield* executeTool(registry, {
+      sessionID: Session.ID.make("ses_mcp_structured_error"),
+      ...toolIdentity,
+      call: { type: "tool-call", id: "call_mcp_structured_error", name: "direct_fail_structured", input: {} },
+    })
+
+    expect(execution).toMatchObject({
+      status: "error",
+      error: {
+        message: 'search index unavailable\n\nStructured error data:\n{"code":"INDEX_DOWN","retryable":false}',
+      },
+    })
+  }),
+)
+
+it.effect("saves MCP media past the ingest budget instead of inlining it", () =>
+  Effect.gen(function* () {
+    assertion = yield* Deferred.make<Permission.AssertInput>()
+    decision = Effect.void
+    const registry = yield* Tool.Service
+    const registration = yield* McpTool.Service
+    yield* registration.flush
+
+    const execution = yield* executeTool(registry, {
+      sessionID: Session.ID.make("ses_mcp_oversized"),
+      ...toolIdentity,
+      call: { type: "tool-call", id: "call_mcp_oversized", name: "direct_oversized", input: {} },
+    })
+
+    expect(execution.content).toHaveLength(1)
+    const text = execution.content?.[0]?.type === "text" ? execution.content[0].text : ""
+    const saved =
+      /^\[Media resource file:\/\/\/oversized\.png \(image\/png, (\d+) bytes\) is too large to attach inline \(limit (\d+) bytes\) and was saved to (.+)\]$/.exec(
+        text,
+      )
+    expect(saved?.[1]).toBe(String(ReadToolFileSystem.MAX_MEDIA_INGEST_BYTES + 1))
+    expect(saved?.[2]).toBe(String(ReadToolFileSystem.MAX_MEDIA_INGEST_BYTES))
+    expect(saved?.[3]?.startsWith(path.join(outputData, ToolOutput.DIRECTORY, "tool_"))).toBe(true)
+    expect((yield* Effect.promise(() => fs.stat(saved?.[3] ?? ""))).size).toBe(
+      ReadToolFileSystem.MAX_MEDIA_INGEST_BYTES + 1,
+    )
   }),
 )
 

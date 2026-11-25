@@ -6,7 +6,7 @@ import { Provider } from "@opencode/schema/provider"
 import { UsageLimits } from "@opencode/schema/usage-limits"
 import { makeLocationNode } from "@opencode/util/effect/app-node"
 import { httpClient } from "@opencode/util/effect/app-node-platform"
-import { Clock, Context, Duration, Effect, Layer, Schema } from "effect"
+import { Context, Duration, Effect, Layer, Schema } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http"
 import { AccountUsage } from "./account-usage.js"
 import { ConsoleAccess } from "./console-access.js"
@@ -40,34 +40,39 @@ export const layer = Layer.effect(
     const http = yield* HttpClient.HttpClient
 
     const readProviderBudgets = Effect.fnUntraced(function* () {
-      const now = yield* Clock.currentTimeMillis
       const results = yield* Effect.forEach(
         providerSources,
         ({ providerID, label }) =>
           accountUsage.read({ providerID }).pipe(
             Effect.map((usage) => {
               if (!usage?.windows?.length) return [] as UsageLimits.Budget[]
-              return usage.windows.map((window): UsageLimits.Budget => {
+              // A provider window reports a remaining percentage, never money. The Budget contract requires
+              // USD amounts and a reset instant, so a window is expressed on a percentage scale of a $100
+              // limit, and one without a known reset is omitted rather than given a made-up reset time.
+              return usage.windows.flatMap((window): UsageLimits.Budget[] => {
+                if (window.resetsAt === undefined) return []
                 const used = Math.round(clampPercent(100 - window.remainingPercent) * 100) / 100
-                return {
-                  id: `${providerID}_${window.id}`,
-                  limit: Money.USD.make(100),
-                  spent: Money.USD.make(used),
-                  scope: "each",
-                  per: "set",
-                  coverage: "models",
-                  models: [
-                    {
-                      providerID,
-                      modelID: Model.ID.make(window.id),
-                      name: `${label} · ${window.label}`,
-                    },
-                  ],
-                  vendors: [label],
-                  picked: false,
-                  shared: false,
-                  resetsAt: window.resetsAt ?? now + 300_000,
-                }
+                return [
+                  {
+                    id: `${providerID}_${window.id}`,
+                    limit: Money.USD.make(100),
+                    spent: Money.USD.make(used),
+                    scope: "each",
+                    per: "set",
+                    coverage: "models",
+                    models: [
+                      {
+                        providerID,
+                        modelID: Model.ID.make(window.id),
+                        name: `${label} · ${window.label}`,
+                      },
+                    ],
+                    vendors: [label],
+                    picked: false,
+                    shared: false,
+                    resetsAt: window.resetsAt,
+                  },
+                ]
               })
             }),
             Effect.timeout(Duration.seconds(2)),
@@ -121,8 +126,15 @@ export const layer = Layer.effect(
         }
       }
       const server = ConsoleAccess.server(credential)
+      // Both reads build request URLs from the stored server, so a malformed value must fail here as a typed
+      // unavailability instead of throwing a defect out of `HttpClientRequest`.
+      const origin = serverOrigin(server)
+      if (origin === undefined)
+        return yield* new UnavailableError({
+          message: `OpenCode Console usage limits are unavailable: invalid server URL "${server}"`,
+        })
       const [budgets, go] = yield* Effect.all(
-        [readBudgets(http, server, credential), readGo(http, server, credential, workspaceID)],
+        [readBudgets(http, server, credential), readGo(http, origin, credential, workspaceID)],
         { concurrency: 2 },
       ).pipe(
         Effect.timeoutOrElse({
@@ -228,13 +240,13 @@ function readBudgets(http: HttpClient.HttpClient, server: string, credential: Cr
 
 function readGo(
   http: HttpClient.HttpClient,
-  server: string,
+  origin: string,
   credential: Credential.Key | Credential.OAuth,
   workspaceID: string,
 ) {
   return HttpClient.withScope(http)
     .execute(
-      HttpClientRequest.get(`${new URL(server).origin}/zen/go/v1/usage`).pipe(
+      HttpClientRequest.get(`${origin}/zen/go/v1/usage`).pipe(
         HttpClientRequest.acceptJson,
         HttpClientRequest.bearerToken(credential.type === "oauth" ? credential.access : credential.key),
         HttpClientRequest.setHeader("x-opencode-org-id", workspaceID),
@@ -262,6 +274,15 @@ function readGo(
 
 function clampPercent(value: number) {
   return Math.min(100, Math.max(0, value))
+}
+
+/** The Console origin, or undefined when the stored server is not an absolute URL. */
+function serverOrigin(server: string) {
+  try {
+    return new URL(server).origin
+  } catch {
+    return undefined
+  }
 }
 
 function meter(value: typeof GoMeter.Type) {

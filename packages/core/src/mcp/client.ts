@@ -151,6 +151,11 @@ export interface Connection {
     readonly name: string
     readonly args?: Record<string, unknown>
     readonly sessionID?: Session.ID
+    readonly onProgress?: (progress: {
+      readonly progress: number
+      readonly total?: number
+      readonly message?: string
+    }) => void
   }) => Effect.Effect<CallToolResult, Error>
   readonly onClose: (callback: (reason: string) => void) => void
   readonly onSessionExpired: (callback: () => void) => void
@@ -163,6 +168,8 @@ export interface Connection {
 export interface Attached {
   readonly type: "attached"
   readonly transport: Transport
+  /** Execution timeout override, populated only from a verified trusted-host policy. */
+  readonly timeout?: (typeof ConfigMCP.Server.Type)["timeout"]
 }
 
 /**
@@ -182,7 +189,7 @@ export const connect = Effect.fnUntraced(function* (
   // The SDK takes list-changed handlers at construction, but consumers register after connect. On a
   // modern connection the SDK opens the subscriptions/listen stream behind these itself.
   const timeout: (typeof ConfigMCP.Server.Type)["timeout"] =
-    config.type === "attached" ? { execution: ATTACHED_EXECUTION_TIMEOUT } : config.timeout
+    config.type === "attached" ? (config.timeout ?? { execution: ATTACHED_EXECUTION_TIMEOUT }) : config.timeout
   // Attached clients run ordinary SDK servers over the initialize handshake.
   const protocol = config.type === "attached" ? "legacy" : config.protocol
   const changed = { tools: () => {}, prompts: () => {}, resources: () => {} }
@@ -473,7 +480,13 @@ export const connect = Effect.fnUntraced(function* (
                 signal,
                 timeout: execution,
                 // Requesting progress keeps long calls alive under the SDK's timeout; execution is the hard wall.
-                onprogress: () => {},
+                onprogress: (progress) => {
+                  input.onProgress?.({
+                    progress: progress.progress,
+                    ...(progress.total === undefined ? {} : { total: progress.total }),
+                    ...(progress.message === undefined ? {} : { message: progress.message }),
+                  })
+                },
                 // Always passed, even for a tool we haven't listed, so the SDK never falls back to listing
                 // and caching the raw tools itself. Its types are narrower than what it reads (JSON values,
                 // a string `$schema`); ours keep the server's values. Leaving out `outputSchema` skips the
@@ -547,21 +560,31 @@ function negotiation(protocol: ConfigMCP.Protocol | undefined): VersionNegotiati
   return { mode: { pin: protocol } }
 }
 
-function toCallToolResult(result: SdkCallToolResult): CallToolResult {
+// Malformed server payloads must degrade to an empty or textual result rather than throwing a defect.
+export function toCallToolResult(result: SdkCallToolResult): CallToolResult {
   return {
     isError: result.isError === true,
     structured: result.structuredContent,
-    content: result.content.flatMap((part): CallToolContent[] => {
+    content: (Array.isArray(result.content) ? result.content : []).flatMap((part): CallToolContent[] => {
       if (part.type === "text") return [{ type: "text", text: part.text }]
       if (part.type === "image" || part.type === "audio")
         return [{ type: "media", data: part.data, mimeType: part.mimeType }]
       if (part.type === "resource_link") return [{ type: "text", text: part.uri }]
       if (part.type === "resource") {
         const resource = part.resource
+        // Runtime payloads from older servers may omit the resource object entirely.
+        if (resource === null || typeof resource !== "object") return []
         if ("text" in resource && typeof resource.text === "string") return [{ type: "text", text: resource.text }]
         if ("blob" in resource && typeof resource.blob === "string" && typeof resource.mimeType === "string")
-          return [{ type: "media", data: resource.blob, mimeType: resource.mimeType, uri: resource.uri }]
-        return [{ type: "text", text: resource.uri }]
+          return [
+            {
+              type: "media",
+              data: resource.blob,
+              mimeType: resource.mimeType,
+              ...("uri" in resource && typeof resource.uri === "string" ? { uri: resource.uri } : {}),
+            },
+          ]
+        return "uri" in resource && typeof resource.uri === "string" ? [{ type: "text", text: resource.uri }] : []
       }
       return []
     }),

@@ -13,6 +13,9 @@ import { Session } from "@opencode/core/session"
 import { AbsolutePath, RelativePath } from "@opencode/core/schema"
 import { Global } from "@opencode/util/global"
 import { FileAccess } from "@opencode/core/file-access"
+import { SecretFile } from "@opencode/core/secret-file"
+import fs from "fs/promises"
+import { tmpdirScoped } from "./fixture/tmpdir"
 import { location } from "./fixture/location"
 import { Tool } from "@opencode/core/tool"
 import { ReadTool } from "@opencode/core/tool/plugin/read"
@@ -118,7 +121,7 @@ const unavailableImage = Layer.mock(Image.Service, {
 })
 const readLayer = (imageLayer: Layer.Layer<Image.Service>) =>
   Layer.mergeAll(
-    AppNodeBuilder.build(LayerNode.group([Tool.node, readToolNode]), [
+    AppNodeBuilder.build(LayerNode.group([Tool.node, readToolNode, SecretFile.node]), [
       ReadToolFileSystem.node.replace(reader),
       Permission.node.replace(permission),
       Config.node.replace(config),
@@ -134,6 +137,7 @@ const readLayer = (imageLayer: Layer.Layer<Image.Service>) =>
 const it = testEffect(readLayer(imageLayer))
 const itWithoutResizer = testEffect(readLayer(unavailableImage))
 const sessionID = Session.ID.make("ses_read_tool_test")
+const unixEffect = process.platform === "win32" ? it.effect.skip : it.effect
 
 describe("ReadTool", () => {
   beforeEach(() => {
@@ -156,6 +160,29 @@ describe("ReadTool", () => {
     readFailure = undefined
     readOverride = undefined
   })
+
+  unixEffect("refuses to read host secret files, including through symlinks", () =>
+    Effect.gen(function* () {
+      const registry = yield* Tool.Service
+      const secretFiles = yield* SecretFile.Service
+      const tmp = (yield* tmpdirScoped()).path
+      const secret = path.join(tmp, "token")
+      const link = path.join(tmp, "token-link")
+      yield* Effect.promise(() => fs.writeFile(secret, "value"))
+      yield* Effect.promise(() => fs.symlink(secret, link))
+      yield* secretFiles.register(secret, sessionID)
+      for (const target of [secret, link]) {
+        const execution = yield* executeTool(registry, {
+          sessionID,
+          ...toolIdentity,
+          call: { type: "tool-call", id: "call-read-secret", name: "read", input: { path: target } },
+        })
+        expect(execution.status).toBe("error")
+        expect(execution.error?.message).toBe(SecretFile.PROTECTED_MESSAGE)
+      }
+      expect(readCalls).toEqual([])
+    }),
+  )
 
   it.effect("registers, authorizes, and reads through the location filesystem", () =>
     Effect.gen(function* () {

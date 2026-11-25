@@ -1110,7 +1110,10 @@ const EndpointMcpClientToken = (raw: RawClient["server.mcp"]) => (input: McpClie
   preserveEffect<McpClientTokenOutput>()(
     raw["mcp.clientToken"]({
       query: { location: input["location"], name: input["name"] },
-      headers: { "x-opencode-ticket": input["x-opencode-ticket"] },
+      headers: {
+        "x-opencode-ticket": input["x-opencode-ticket"],
+        "x-opencode-host-token": input["x-opencode-host-token"],
+      },
     }).pipe(Effect.mapError(mapClientError)),
   )
 
@@ -1512,11 +1515,13 @@ const adaptGroupExperimental = (raw: RawClient["server.experimental"]) => ({
 const EndpointJobList = (raw: RawClient["server.job"]) => (input?: JobListInput) =>
   preserveEffect<JobListOutput>()(
     raw["job.list"]({
-      query: { sessionID: input?.["sessionID"], kind: input?.["kind"], descendants: input?.["descendants"] },
-    }).pipe(
-      Effect.mapError(mapClientError),
-      Effect.map((value) => value.data),
-    ),
+      query: {
+        location: input?.["location"],
+        sessionID: input?.["sessionID"],
+        kind: input?.["kind"],
+        descendants: input?.["descendants"],
+      },
+    }).pipe(Effect.mapError(mapClientError)),
   )
 
 const adaptGroupJob = (raw: RawClient["server.job"]) => ({ list: EndpointJobList(raw) })

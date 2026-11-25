@@ -38,18 +38,18 @@ describe("SkillPlugin.Plugin", () => {
       expect(skills).toContainEqual(
         expect.objectContaining({
           id: "opencode",
-          name: "OpenCode",
-          description: expect.stringContaining("any question about OpenCode itself"),
+          name: "Memyr",
+          description: expect.stringContaining("any question about Memyr"),
         }),
       )
       expect(skills).toContainEqual(
         expect.objectContaining({
           id: "report",
           name: "Report",
-          description: expect.stringContaining("opencode issue"),
+          description: expect.stringContaining("Memyr issue"),
         }),
       )
-      expect(report?.content).toContain("- opencode version: 1.2.3")
+      expect(report?.content).toContain("- Memyr version: 1.2.3")
       expect(report?.content).toContain("- install/channel: beta")
     }),
   )

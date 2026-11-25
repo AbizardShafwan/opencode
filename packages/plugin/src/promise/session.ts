@@ -154,6 +154,14 @@ export type SessionIdleBackground =
       readonly agent: string
       readonly description: string
     }
+  | {
+      readonly kind: "external"
+      readonly sessionID: Session.ID
+      readonly waitID: string
+      readonly source: string
+      readonly server: string
+      readonly description: string
+    }
 
 /**
  * Runs when a Session finishes model work and has no pending input, just before it goes idle.

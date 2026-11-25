@@ -9,8 +9,10 @@ import { isExactRootFallback } from "@opencode/util/session-title-fallback"
 import { Cause, Clock, DateTime, Duration, Effect, FiberMap, Option, Schema, Stream } from "effect"
 import { KeyedMutex } from "../effect/keyed-mutex.js"
 import { Job } from "../job.js"
+import { Mcp } from "../mcp/index.js"
 import { SessionBackground } from "../session/background.js"
 import { SessionExecution } from "../session/execution.js"
+import { SessionExternalWait } from "../session/external-wait.js"
 import { SessionStore } from "../session/store.js"
 import CONTINUATION from "./goal/continuation.txt"
 import JUDGE from "./goal/judge.txt"
@@ -45,6 +47,19 @@ const decodeVerdict = Schema.decodeUnknownOption(Schema.fromJsonString(Verdict))
 
 const USAGE = "Usage: /goal <objective> | pause | resume | clear"
 
+/**
+ * Drops the admission bookkeeping of one Session. An entry exists only to match a delivered input to the
+ * goal that admitted it, so a settled, cleared, archived, or deleted goal must not keep any.
+ */
+export const forgetAdmissions = (
+  admitted: Map<string, { readonly sessionID: Session.ID }>,
+  sessionID: string,
+) => {
+  for (const [inboxID, pending] of admitted) {
+    if (pending.sessionID === sessionID) admitted.delete(inboxID)
+  }
+}
+
 export const Plugin = define({
   id: "opencode.goal",
   effect: Effect.fn(function* (ctx) {
@@ -60,6 +75,8 @@ export const Plugin = define({
 
     // Clients read the goal through `get` and follow `changed`, so every write publishes the new value.
     const write = Effect.fn("GoalPlugin.write")(function* (sessionID: string, goal: State | undefined) {
+      // A settled or cleared goal can no longer match its queued input, so its admission bookkeeping goes too.
+      if (goal?.status !== "active") forgetAdmitted(sessionID)
       yield* goal ? ctx.storage.set(PREFIX + sessionID, goal) : ctx.storage.remove(PREFIX + sessionID)
       yield* rpc.events
         .emit("changed", { sessionID, goal: goal ?? null })
@@ -161,20 +178,26 @@ export const Plugin = define({
       sessionID: Session.ID,
       goal: State,
       shells: ReadonlyArray<string>,
+      waits: ReadonlyArray<string>,
     ) {
+      const sections = [
+        ...(shells.length === 0 ? [] : ["Background shells still running:", ...shells.map((command) => `- ${command}`)]),
+        ...(waits.length === 0 ? [] : ["External work still running:", ...waits.map((item) => `- ${item}`)]),
+      ]
       const prompt = render(JUDGE, {
         objective: escape(goal.objective),
         background:
-          shells.length === 0
+          sections.length === 0
             ? "No background shells are running."
             : [
-                "Background shells still running:",
-                ...shells.map((command) => `- ${command}`),
+                ...sections,
                 "",
-                'Answer "wait" only when the goal needs the result of one of these shells. Never wait for a long-running server such as a dev server.',
+                'Answer "wait" only when the goal needs the result of one of these background items. Never wait for a long-running server such as a dev server.',
               ].join("\n"),
         wait:
-          shells.length === 0 ? "" : '{"verdict":"wait","reason":"<the running shell whose result the goal needs>"}\n',
+          sections.length === 0
+            ? ""
+            : '{"verdict":"wait","reason":"<the running background item whose result the goal needs>"}\n',
       })
       const attempt = ctx.session
         .generate({
@@ -187,8 +210,8 @@ export const Plugin = define({
         .pipe(
           Effect.map((result) => {
             const verdict = parseVerdict(result.text)
-            // "wait" is only offered while a shell runs; without one, nothing would wake the Session to judge again.
-            return verdict?.verdict === "wait" && shells.length === 0 ? undefined : verdict
+            // "wait" is only offered while background work runs; without any, nothing would wake the Session.
+            return verdict?.verdict === "wait" && sections.length === 0 ? undefined : verdict
           }),
           // The reviewer runs right after the last step, before the next step's automatic compaction, so a long final
           // step can leave more history than the model takes.
@@ -218,7 +241,11 @@ export const Plugin = define({
       const shells = background.flatMap((work) =>
         work.kind === "shell" && work.sessionID === sessionID ? [work.command] : [],
       )
-      const verdict = yield* judge(sessionID, goal, shells)
+      // External waits are the Session's own: a verified host registration such as a PR watch wakes it.
+      const waits = background.flatMap((work) =>
+        work.kind === "external" && work.sessionID === sessionID ? [work.description] : [],
+      )
+      const verdict = yield* judge(sessionID, goal, shells, waits)
       if (verdict !== "overflow") compacted.delete(sessionID)
       // `/goal pause`, `clear` or a new goal may have landed while the reviewer ran.
       const latest = yield* read(sessionID)
@@ -328,9 +355,19 @@ export const Plugin = define({
     // instead of staying active.
     const jobs = yield* Effect.serviceOption(Job.Service)
     const store = yield* Effect.serviceOption(SessionStore.Service)
+    const externalWaits = yield* Effect.serviceOption(SessionExternalWait.Service)
+    const mcp = yield* Effect.serviceOption(Mcp.Service)
+    // Live external leases pause the goal only while their host connection is up.
+    const external = Option.isSome(externalWaits)
+      ? {
+          waits: externalWaits.value,
+          ...(Option.isSome(mcp) ? { isServerLive: (server: string) => mcp.value.isAttached(server) } : {}),
+        }
+      : undefined
     const timers = yield* FiberMap.make<string>()
     const executionGoals = new Map<string, { id: string; updatedAt: number }>()
     const admittedGoals = new Map<string, { sessionID: Session.ID; goalID: string }>()
+    const forgetAdmitted = (sessionID: string) => forgetAdmissions(admittedGoals, sessionID)
     const watch = (sessionID: Session.ID): Effect.Effect<void> =>
       read(sessionID).pipe(
         Effect.flatMap((goal) =>
@@ -343,9 +380,12 @@ export const Plugin = define({
                   Effect.andThen(
                     Effect.gen(function* () {
                       if (Option.isSome(jobs) && Option.isSome(store)) {
-                        const running = yield* SessionBackground.outstanding(jobs.value, store.value, sessionID).pipe(
-                          Effect.orElseSucceed(() => []),
-                        )
+                        const running = yield* SessionBackground.outstanding(
+                          jobs.value,
+                          store.value,
+                          sessionID,
+                          external,
+                        ).pipe(Effect.orElseSucceed(() => []))
                         if (running.length > 0) {
                           return yield* watch(sessionID)
                         }
@@ -385,9 +425,7 @@ export const Plugin = define({
         switch (event.type) {
           case "session.deleted":
             compacted.delete(event.data.sessionID)
-            for (const [inboxID, pending] of admittedGoals) {
-              if (pending.sessionID === event.data.sessionID) admittedGoals.delete(inboxID)
-            }
+            forgetAdmitted(event.data.sessionID)
             return sessionLocks.withLock(event.data.sessionID)(
               Effect.sync(() => {
                 executionGoals.delete(event.data.sessionID)
@@ -396,6 +434,9 @@ export const Plugin = define({
                 Effect.andThen(ctx.storage.remove(PREFIX + event.data.sessionID)),
               ),
             )
+          case "session.archived":
+            forgetAdmitted(event.data.sessionID)
+            return Effect.void
           case "session.inbox.cancelled":
             admittedGoals.delete(event.data.inboxID)
             return Effect.void

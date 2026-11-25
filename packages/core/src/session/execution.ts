@@ -7,6 +7,7 @@ import { Job } from "../job.js"
 import { Instance } from "../instance/service.js"
 import { makeGlobalNode } from "@opencode/util/effect/app-node"
 import { SessionEvent } from "./event.js"
+import { StepFailedError } from "./error.js"
 import { SessionRunCoordinator } from "./run-coordinator.js"
 import { SessionRunner } from "./runner/index.js"
 import { SessionSchema } from "./schema.js"
@@ -55,6 +56,9 @@ export class Service extends Context.Service<Service, Interface>()("@opencode/Se
 
 type InterruptReason = "user" | "shutdown"
 
+/** Consecutive same-Location reloads without a step before the drain is treated as a loop. */
+const MAX_SAME_LOCATION_RELOADS = 3
+
 export function terminal(exit: Exit.Exit<void, SessionRunner.RunError>, reason?: InterruptReason) {
   if (Exit.isSuccess(exit)) return { type: "succeeded" as const }
   if (Cause.hasInterrupts(exit.cause)) return { type: "interrupted" as const, reason: reason ?? "shutdown" }
@@ -92,15 +96,21 @@ export const layer = Layer.effect(
     const releaseOnCommit = (sessionID: SessionSchema.ID) => ({
       commit: () => store.release(sessionID),
     })
+    const locationKey = (session: SessionSchema.Info) =>
+      `${session.location.directory}\0${session.location.workspaceID ?? ""}`
     const drain = Effect.fnUntraced(function* (
       sessionID: SessionSchema.ID,
       force: boolean,
       continuation?: SessionRunner.Continuation,
       promotable: SessionInbox.Promotable = "input",
       stepped = false,
+      previous?: { readonly locationKey: string; readonly reloads: number },
     ): Effect.fn.Return<void, SessionRunner.RunError> {
       const session = yield* store.get(sessionID)
       if (!session) return yield* Effect.die(new Error(`Session not found: ${sessionID}`))
+      // Reloads on the same Location that never run a step are a loop; a move or a step resets the count.
+      const key = locationKey(session)
+      const sameLocationReloads = previous?.locationKey === key ? previous.reloads : 0
       const result = yield* SessionRunner.Service.use((runner) =>
         runner.drain({ sessionID, force, continuation, promotable, stepped }),
       ).pipe(
@@ -114,7 +124,22 @@ export const layer = Layer.effect(
       return yield* SessionRunner.DrainResult.$match(result, {
         Complete: () => Effect.void,
         Moved: (result) => drain(sessionID, false, result.continuation, promotable, result.stepped),
-        Reloaded: (result) => drain(sessionID, result.force, result.continuation, promotable, result.stepped),
+        Reloaded: (result) => {
+          const reloads = result.stepped === true ? 0 : sameLocationReloads + 1
+          if (reloads >= MAX_SAME_LOCATION_RELOADS)
+            return Effect.fail(
+              new StepFailedError({
+                error: {
+                  type: "unknown",
+                  message: "Session reload loop exceeded maximum retries on the same location",
+                },
+              }),
+            )
+          return drain(sessionID, result.force, result.continuation, promotable, result.stepped, {
+            locationKey: key,
+            reloads,
+          })
+        },
       })
     })
     const baselines = new Map<SessionSchema.ID, SessionMessage.ID | undefined>()

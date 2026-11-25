@@ -66,11 +66,26 @@ const make: Effect.Effect<
     )
   })
 
+  // Scheduling belongs to admission, not Job registration: an older generation may still be collecting its
+  // result after this Session has already become idle. A child with neither an execution nor an observed job
+  // has nothing left to run, so its recorded reply or a descriptive failure is the honest outcome.
+  const settleWithoutExecution = (childSessionID: Recovery["childSessionID"]) =>
+    sessions.messages({ sessionID: childSessionID, type: "assistant", order: "desc", limit: 1 }).pipe(
+      Effect.flatMap((messages): Effect.Effect<string, Error> => {
+        const last = messages[0]
+        return last === undefined
+          ? Effect.fail(
+              new Error(
+                `Subagent ${childSessionID} has no pending input and no active execution, so its task was not scheduled. Retry once the child session is idle, or check its state with list_agents.`,
+              ),
+            )
+          : Effect.succeed(SubagentCompletion.text(last))
+      }),
+    )
+
   return Service.of({
     start: (recovery: Recovery) =>
       Effect.gen(function* () {
-        // Scheduling belongs to admission, not Job registration: an older generation may
-        // still be collecting its result after this Session has already become idle.
         const receipt = yield* execution.schedule(recovery.childSessionID)
         if (!receipt) {
           const existing = yield* jobs.observe(recovery.childSessionID)
@@ -83,7 +98,7 @@ const make: Effect.Effect<
           metadata: {},
           recovery,
           owner: receipt?.owner,
-          run: receipt ? result(receipt) : Effect.succeed(SubagentCompletion.NO_TEXT),
+          run: receipt ? result(receipt) : settleWithoutExecution(recovery.childSessionID),
         })
         return {
           ...job,

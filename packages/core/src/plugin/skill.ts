@@ -18,7 +18,7 @@ export const ReportContent = reportContent
 export const OpencodeDescription =
   "Use this skill for any question about Memyr, a fork of OpenCode, including how Memyr works, using or configuring it, migrating from OpenCode V1 to V2, troubleshooting it, developing plugins or integrations, using the OpenCode SDK, clients, server, or API, and contributing to this codebase. Also use it for Memyr agents, commands, skills, tools, permissions, MCP servers, providers, models, themes, keybinds, formatters, the CLI, TUI, desktop app, and web app."
 const REPORT_DESCRIPTION =
-  "Use when the user wants to report a Memyr issue or bug. Collect standard diagnostics, add user-specific reproduction context, and publish the issue with GitHub CLI."
+  "Use when the user wants to report a Memyr issue or bug. Collect standard diagnostics, add user-specific reproduction context, and publish the issue with the host issue tool or GitHub CLI."
 
 export const Plugin = define({
   id: "opencode.skill",

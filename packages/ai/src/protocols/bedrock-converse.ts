@@ -277,11 +277,18 @@ const removeEmptyToolInputKeys = (input: unknown): unknown => {
   )
 }
 
+// Registered tools advertise provider-safe names of at most 63 characters, so replayed calls already
+// match their definitions and pass through unchanged. Only model-invented or legacy history names that
+// Converse would reject are sanitized, truncating to its 64-character limit as a last resort.
+const replayToolName = (name: string) => {
+  if (/^[a-zA-Z0-9_-]{1,64}$/.test(name)) return name
+  return name.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64) || "_"
+}
+
 const lowerToolCall = (part: ToolCallPart, normalizeID: (id: string) => string): BedrockToolUseBlock => ({
   toolUse: {
     toolUseId: normalizeID(part.id),
-    // Models can emit names that Converse rejects when replayed in history.
-    name: part.name.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64) || "_",
+    name: replayToolName(part.name),
     input: removeEmptyToolInputKeys(part.input),
   },
 })

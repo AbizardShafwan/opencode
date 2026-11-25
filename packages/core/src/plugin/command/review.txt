@@ -108,4 +108,4 @@ Output a single raw JSON object matching this schema:
 Repository: `${path}`
 Input: $ARGUMENTS
 
-With no target, review uncommitted changes (staged, unstaged and relevant untracked files). For a commit, inspect that commit; for a branch, compare against that branch's merge base; for a pull request URL or number, inspect its diff and context using available tools. Resolve the target before drawing conclusions. Do not change files or treat review as permission to implement a fix.
+With no target, review uncommitted changes (staged, unstaged and relevant untracked files). For a commit, inspect that commit; for a branch, compare against that branch's merge base; for a pull request URL or number, inspect its diff and context using available tools. When host tools such as `pull_request_read` and `ci_logs` are available, prefer them over `gh` for pull request state, diffs, review threads and failing check logs. Resolve the target before drawing conclusions. Do not change files or treat review as permission to implement a fix.

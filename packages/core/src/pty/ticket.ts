@@ -5,6 +5,7 @@ import { PtyTicket } from "@opencode/schema/pty-ticket"
 import type { Pty } from "@opencode/schema/pty"
 import { Cache, Context, Duration, Effect, Layer } from "effect"
 import { makeGlobalNode } from "@opencode/util/effect/app-node"
+import type { Mcp } from "../mcp/index.js"
 
 const DEFAULT_TTL = Duration.seconds(60)
 const CAPACITY = 10_000
@@ -14,7 +15,12 @@ export const ConnectToken = PtyTicket.ConnectToken
 // A ticket authorizes one upgrade to one target: a PTY, or a client MCP connection by client name.
 export type Target =
   | { readonly ptyID: Pty.ID; readonly mcpClient?: never }
-  | { readonly mcpClient: string; readonly ptyID?: never }
+  | {
+      readonly mcpClient: string
+      /** Server-assigned host policy, set only when the issuing request proved the host identity. */
+      readonly mcpPolicy?: Mcp.HostPolicy
+      readonly ptyID?: never
+    }
 
 export type Scope = Target & {
   readonly directory?: string
@@ -23,6 +29,7 @@ export type Scope = Target & {
 
 type Stored = {
   readonly target: string
+  readonly mcpPolicy?: Mcp.HostPolicy
   readonly directory?: string
   readonly workspaceID?: Workspace.ID
 }
@@ -30,6 +37,10 @@ type Stored = {
 export interface Interface {
   issue(input: Scope): Effect.Effect<typeof ConnectToken.Type>
   consume(input: Scope & { readonly ticket: string }): Effect.Effect<boolean>
+  /** Consumes a client MCP ticket and returns the host policy it was issued with, or undefined if rejected. */
+  consumeMcp(
+    input: Scope & { readonly mcpClient: string; readonly ticket: string },
+  ): Effect.Effect<{ readonly policy?: Mcp.HostPolicy } | undefined>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/PtyTicket") {}
@@ -37,6 +48,7 @@ export class Service extends Context.Service<Service, Interface>()("@opencode/Pt
 function stored(scope: Scope): Stored {
   return {
     target: scope.ptyID !== undefined ? `pty:${scope.ptyID}` : `mcp:${scope.mcpClient}`,
+    ...(scope.mcpClient === undefined || scope.mcpPolicy === undefined ? {} : { mcpPolicy: scope.mcpPolicy }),
     directory: scope.directory,
     workspaceID: scope.workspaceID,
   }
@@ -65,6 +77,17 @@ export const make = (ttl: Duration.Input = DEFAULT_TTL) =>
       }),
       consume: Effect.fn("PtyTicket.consume")(function* (input) {
         return yield* Cache.invalidateWhen(cache, input.ticket, (record) => matches(record, stored(input)))
+      }),
+      consumeMcp: Effect.fn("PtyTicket.consumeMcp")(function* (input) {
+        const expected = stored(input)
+        let found: Stored | undefined
+        const consumed = yield* Cache.invalidateWhen(cache, input.ticket, (record) => {
+          if (!matches(record, expected)) return false
+          found = record
+          return true
+        })
+        if (!consumed || !found) return undefined
+        return found.mcpPolicy === undefined ? {} : { policy: found.mcpPolicy }
       }),
     })
   })

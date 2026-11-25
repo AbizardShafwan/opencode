@@ -18,6 +18,7 @@ import { GrepTool } from "@opencode/core/tool/plugin/grep"
 import { Tool } from "@opencode/core/tool"
 import { location } from "./fixture/location"
 import { tmpdir, tmpdirScoped } from "./fixture/tmpdir"
+import { SecretFile } from "@opencode/core/secret-file"
 import { it } from "./lib/effect"
 import { permissionLayer } from "./lib/permission"
 import { executeTool, registerToolPlugin, toolIdentity } from "./lib/tool"
@@ -30,9 +31,10 @@ const globToolNode = makeLocationNode({
 const grepToolNode = makeLocationNode({
   name: "test/grep-tool-plugin",
   layer: Layer.effectDiscard(registerToolPlugin(GrepTool.Plugin)),
-  deps: [Tool.node, Environment.node, Ripgrep.node, Location.node, FileAccess.node, Permission.node],
+  deps: [Tool.node, Environment.node, Ripgrep.node, Location.node, FileAccess.node, Permission.node, SecretFile.node],
 })
 const sessionID = Session.ID.make("ses_search_tool_test")
+const unixLive = process.platform === "win32" ? it.live.skip : it.live
 
 const withTools = <A, E, R>(
   directory: string,
@@ -44,7 +46,7 @@ const withTools = <A, E, R>(
     return yield* body(registry)
   }).pipe(
     Effect.provide(
-      AppNodeBuilder.build(LayerNode.group([Tool.node, globToolNode, grepToolNode]), [
+      AppNodeBuilder.build(LayerNode.group([Tool.node, globToolNode, grepToolNode, SecretFile.node]), [
         Location.node.replace(
           Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make(directory) }))),
         ),
@@ -67,6 +69,32 @@ const call = (name: "glob" | "grep", input: unknown) => ({
 })
 
 describe("search tools", () => {
+  unixLive("grep skips and refuses host secret files, including symlinks", () =>
+    Effect.gen(function* () {
+      const tmp = (yield* tmpdirScoped()).path
+      const secret = path.join(tmp, "secret.txt")
+      const link = path.join(tmp, "link.txt")
+      yield* Effect.promise(() => fs.writeFile(secret, "needle-secret\n"))
+      yield* Effect.promise(() => fs.writeFile(path.join(tmp, "public.txt"), "needle-public\n"))
+      yield* Effect.promise(() => fs.symlink(secret, link))
+      yield* withTools(tmp, (registry) =>
+        Effect.gen(function* () {
+          const secretFiles = yield* SecretFile.Service
+          yield* secretFiles.register(secret, sessionID)
+          const listed = yield* executeTool(registry, call("grep", { pattern: "needle" }))
+          expect(listed.status).toBe("completed")
+          expect(JSON.stringify(listed.output)).toContain("public.txt")
+          expect(JSON.stringify(listed.output)).not.toContain("needle-secret")
+          for (const target of [secret, link]) {
+            const refused = yield* executeTool(registry, call("grep", { pattern: "needle", path: target }))
+            expect(refused.status).toBe("error")
+            expect(refused.error?.message).toBe(SecretFile.PROTECTED_MESSAGE)
+          }
+        }),
+      )
+    }),
+  )
+
   for (const hidden of [undefined, false, true]) {
     for (const limit of hidden ? [10] : [1, 10]) {
       it.live(`glob honors hidden=${hidden} before limit=${limit}`, () =>

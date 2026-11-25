@@ -906,6 +906,7 @@ describe("SessionRestart background recovery", () => {
         ({ sessionID }) =>
           Effect.sync(() => void drained.push(sessionID)).pipe(
             Effect.andThen(Deferred.succeed(parentWoken, undefined)),
+            Effect.asVoid,
           ),
         undefined,
         restarted,
@@ -1074,6 +1075,7 @@ describe("SessionRestart background recovery", () => {
         ({ sessionID }) =>
           Effect.sync(() => void drained.push(sessionID)).pipe(
             Effect.andThen(Deferred.succeed(parentWoken, undefined)),
+            Effect.asVoid,
           ),
         { maxAttempts: 2 },
         restarted,
@@ -1404,7 +1406,9 @@ function attempts(database: Database.Service["Service"], sessionID: Session.ID) 
 /** Builds the local execution layer plus the restart actions against the test harness services. */
 function buildExecution(
   scope: Scope.Closeable,
-  drain: (input: Parameters<SessionRunner.Interface["drain"]>[0]) => Effect.Effect<void, SessionRunner.RunError>,
+  drain: (
+    input: Parameters<SessionRunner.Interface["drain"]>[0],
+  ) => Effect.Effect<SessionRunner.DrainResult | void, SessionRunner.RunError>,
   options?: SessionRestart.Options,
   overrideJobs?: Job.Interface,
 ) {
@@ -1430,7 +1434,7 @@ function buildExecution(
     const runner = Layer.succeed(
       SessionRunner.Service,
       SessionRunner.Service.of({
-        drain: (input) => drain(input).pipe(Effect.as(SessionRunner.DrainResult.Complete())),
+        drain: (input) => drain(input).pipe(Effect.map((value) => value ?? SessionRunner.DrainResult.Complete())),
       }),
     )
     const locations = Layer.effect(
@@ -2132,6 +2136,93 @@ describe("SessionRestart review recovery", () => {
       expect((yield* store.get(child))?.time.archived).toBeDefined()
       expect(yield* restartedJobs.pendingBackground).toEqual([])
       expect(yield* SessionInbox.list(database.db, parent)).toEqual([])
+    }),
+  )
+})
+
+describe("SessionExecution reload bounds", () => {
+  it.effect("fails a drain that keeps reloading the same location without running a step", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const bus = yield* Bus.Service
+      const sessionID = Session.ID.make("ses_reload_loop")
+      yield* seedSessions(database, [sessionID])
+
+      let drains = 0
+      const failures: SessionEvent.Execution.Failed[] = []
+      const scope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+      const context = yield* buildExecution(scope, (input) => {
+        drains++
+        return Effect.succeed(SessionRunner.DrainResult.Reloaded({ force: input.force }))
+      })
+      yield* bus.project(SessionEvent.Execution.Failed, (event) => Effect.sync(() => void failures.push(event)))
+      const execution = Context.get(context, SessionExecution.Service)
+
+      yield* execution.resume(sessionID).pipe(Effect.ignore)
+      yield* execution.awaitIdle(sessionID)
+
+      expect(drains).toBe(3)
+      expect(failures.map((event) => event.data.error.message)).toEqual([
+        "Session reload loop exceeded maximum retries on the same location",
+      ])
+      expect((yield* claims(database))[sessionID]).toBe(false)
+    }),
+  )
+
+  it.effect("never bounds moves, which legitimately change location", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const bus = yield* Bus.Service
+      const sessionID = Session.ID.make("ses_move_chain")
+      yield* seedSessions(database, [sessionID])
+
+      let drains = 0
+      const failures: SessionEvent.Execution.Failed[] = []
+      const scope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+      const context = yield* buildExecution(scope, () => {
+        drains++
+        return Effect.succeed(
+          drains < 8 ? SessionRunner.DrainResult.Moved({}) : SessionRunner.DrainResult.Complete(),
+        )
+      })
+      yield* bus.project(SessionEvent.Execution.Failed, (event) => Effect.sync(() => void failures.push(event)))
+      const execution = Context.get(context, SessionExecution.Service)
+
+      yield* execution.resume(sessionID).pipe(Effect.ignore)
+      yield* execution.awaitIdle(sessionID)
+
+      expect(drains).toBe(8)
+      expect(failures).toEqual([])
+      expect((yield* claims(database))[sessionID]).toBe(false)
+    }),
+  )
+
+  it.effect("resets the reload budget when a step ran before the reload", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const bus = yield* Bus.Service
+      const sessionID = Session.ID.make("ses_reload_after_step")
+      yield* seedSessions(database, [sessionID])
+
+      let drains = 0
+      const failures: SessionEvent.Execution.Failed[] = []
+      const scope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+      const context = yield* buildExecution(scope, () => {
+        drains++
+        if (drains >= 8) return Effect.succeed(SessionRunner.DrainResult.Complete())
+        return Effect.succeed(SessionRunner.DrainResult.Reloaded({ force: true, stepped: true }))
+      })
+      yield* bus.project(SessionEvent.Execution.Failed, (event) => Effect.sync(() => void failures.push(event)))
+      const execution = Context.get(context, SessionExecution.Service)
+
+      yield* execution.resume(sessionID).pipe(Effect.ignore)
+      yield* execution.awaitIdle(sessionID)
+
+      expect(drains).toBe(8)
+      expect(failures).toEqual([])
     }),
   )
 })

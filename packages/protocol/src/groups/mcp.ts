@@ -8,6 +8,8 @@ import { LocationQuery, locationQueryOpenApi } from "./location.js"
 import { PTY_CONNECT_TICKET_QUERY, PTY_CONNECT_TOKEN_HEADER } from "./pty.js"
 
 export const MCP_CLIENT_PATH = "/api/experimental/client-mcp"
+/** Carries the host bootstrap secret that marks a client MCP connection as the trusted host. */
+export const MCP_HOST_TOKEN_HEADER = "x-opencode-host-token"
 
 export function hasMcpClientTicketURL(url: URL) {
   return url.pathname === MCP_CLIENT_PATH && !!url.searchParams.get(PTY_CONNECT_TICKET_QUERY)
@@ -119,7 +121,10 @@ export const makeMcpGroup = <LocationId extends HttpApiMiddleware.AnyId, Locatio
     .add(
       HttpApiEndpoint.post("mcp.clientToken", `${MCP_CLIENT_PATH}/token`, {
         query: McpClientQuery,
-        headers: Schema.Struct({ [PTY_CONNECT_TOKEN_HEADER]: Schema.optional(Schema.String) }),
+        headers: Schema.Struct({
+          [PTY_CONNECT_TOKEN_HEADER]: Schema.optional(Schema.String),
+          [MCP_HOST_TOKEN_HEADER]: Schema.optional(Schema.String),
+        }),
         success: Location.response(PtyTicket.ConnectToken),
         error: ForbiddenError,
       })

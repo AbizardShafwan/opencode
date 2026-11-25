@@ -112,3 +112,38 @@ it.effect("repairs namespaced inner tool input called from Code Mode", () =>
     expect(executed).toEqual([{ count: 3 }])
   }),
 )
+
+it.effect("repairs input for an aliased direct tool resolved from a renamed request definition", () =>
+  Effect.gen(function* () {
+    const plugins = yield* Plugin.Service
+    const registry = yield* Tool.Service
+    const executed: unknown[] = []
+    const alias = "m_0123456789abcdef_repairable"
+    yield* plugins.activate([
+      { ...ToolInputRepairPlugin.Plugin, revision: "1" },
+      {
+        id: "aliased-tool",
+        revision: "1",
+        effect: (ctx) =>
+          ctx.tool.transform((draft) =>
+            draft.add({
+              name: alias,
+              options: { codemode: false },
+              description: "Repairable",
+              input: Schema.Struct({ count: Schema.Int }),
+              execute: (input) => Effect.sync(() => executed.push(input)).pipe(Effect.as({ content: "ok" })),
+            }),
+          ),
+      },
+    ])
+    const snapshot = yield* registry.snapshot()
+    const definition = snapshot.definitions.find((item) => item.name === alias)
+    if (!definition) throw new Error("aliased tool was not advertised")
+    yield* snapshot.execute({
+      ...identity,
+      call: { type: "tool-call", id: "call-alias", name: "renamed", input: '{"count":"3"}' },
+      definitions: new Map([["renamed", definition]]),
+    })
+    expect(executed).toEqual([{ count: 3 }])
+  }),
+)

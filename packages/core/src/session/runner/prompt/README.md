@@ -14,8 +14,12 @@ imports came from the local `~/Documents/codex` checkout (HEAD
   Current SHA-256: `23e1499cc873ade8cd5eb41a8b369587036d1dd64d8f553f69f09675e3f9752f`.
   Original imported SHA-256: `eb708da445b093cfd961cb6d9a428791c7ec593eb31e0f0143ea268f2a2a2afd`.
 - `visual-verification.txt`: Memyr's always-on render/inspect policy, shortened
-  locally on 2026-11-09. Current SHA-256:
-  `8bfbb5d25ed5decf81a7320715125c58943570ab11db8a63ce902fda07170243`.
+  locally on 2026-11-09, then revised on 2026-11-25 so host or tool contracts that
+  forbid unrequested preview/browser captures (such as T3 Code's `preview_*` tools)
+  take precedence, user-requested inline displays (`html_preview` then `html_render`)
+  are distinguished from self-check captures, and recordings are user-facing only.
+  Current SHA-256: `67054ce461e1db2d0a086a4d255f9e75a55901d332230dea8ee66c2c8ae69cf7`.
+  Previous SHA-256: `8bfbb5d25ed5decf81a7320715125c58943570ab11db8a63ce902fda07170243`.
 - `compaction.txt`: exact `codex-rs/prompts/templates/compact/prompt.md`.
   SHA-256: `b084c795a4d08c34d0d037292a6a5fc99846b68540990cc8e53a810b37546b61`.
 - `summary-prefix.txt`: exact `codex-rs/prompts/templates/compact/summary_prefix.md`,
@@ -66,7 +70,8 @@ This removes about 40% of words and 35% of asset bytes. These are not tokenizer
 counts or a measurement of total model input, cache hits, cost or task quality.
 
 The table records the 2026-11-09 measurement. `system.txt` was revised again on
-2026-11-25 to 492 words / 3,886 bytes; `visual-verification.txt` is unchanged.
+2026-11-25 to 492 words / 3,886 bytes; `visual-verification.txt` was revised on
+2026-11-25 to 225 words / 1,647 bytes for the host-contract precedence clause.
 
 The retained obligations are:
 

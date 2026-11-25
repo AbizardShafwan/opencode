@@ -267,6 +267,48 @@ describe("plan plugin mutations", () => {
     }),
   )
 
+  it.effect("is an explicit read-only allowlist that asks before shell commands", () =>
+    Effect.gen(function* () {
+      const { planAgent } = yield* run()
+      const effect = (action: string, resource = "*") =>
+        Permission.evaluate(action, resource, planAgent.permissions).effect
+      for (const action of ["read", "grep", "glob", "webfetch", "websearch", "question", "external_directory"])
+        expect(effect(action)).toBe("allow")
+      expect(effect("read", ".env")).toBe("ask")
+      expect(effect("read", ".env.example")).toBe("allow")
+      expect(effect("shell", "git status")).toBe("ask")
+      for (const action of ["write", "patch", "subagent", "execute", "todowrite", "unknown_plugin_tool"])
+        expect(effect(action)).toBe("deny")
+    }),
+  )
+
+  it.effect("allows exactly the read-only T3 Code host actions", () =>
+    Effect.gen(function* () {
+      const { planAgent } = yield* run()
+      const effect = (action: string) => Permission.evaluate(action, "*", planAgent.permissions).effect
+      for (const action of PlanPlugin.READ_ONLY_HOST_ACTIONS) expect(effect(action)).toBe("allow")
+      for (const tool of [
+        "delegate_task",
+        "create_threads",
+        "t3_worktree_handoff",
+        "pull_request_merge",
+        "create_issue",
+        "preview_act",
+        "device_open",
+        "request_secret",
+        "t3_environment_preferences_update",
+        "schedule_task",
+        "t3_thread_send_attachments",
+        "t3_queue",
+        "t3_pending_request",
+      ])
+        expect(effect(`t3-code_${tool}`)).toBe("deny")
+      // Untrusted servers claiming the host name are re-namespaced and gain no host grants.
+      expect(effect("mcp_t3-code_pull_request_read")).toBe("deny")
+      expect(PlanPlugin.READ_ONLY_HOST_ACTIONS.some((action) => action.includes("*"))).toBe(false)
+    }),
+  )
+
   it.effect("rewrites blocked mutation failures with the Plan directory", () =>
     Effect.gen(function* () {
       const { toolHook } = yield* run()

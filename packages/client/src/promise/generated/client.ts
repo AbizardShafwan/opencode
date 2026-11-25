@@ -1486,7 +1486,10 @@ export function make(options: ClientOptions) {
               method: "POST",
               path: `/api/experimental/client-mcp/token`,
               query: { location: input["location"], name: input["name"] },
-              headers: { "x-opencode-ticket": input["x-opencode-ticket"] },
+              headers: {
+                "x-opencode-ticket": input["x-opencode-ticket"],
+                "x-opencode-host-token": input["x-opencode-host-token"],
+              },
               successStatus: 200,
               declaredStatuses: [400, 401, 403, 404],
               empty: false,
@@ -2021,17 +2024,22 @@ export function make(options: ClientOptions) {
     },
     job: {
       list: (input?: JobListInput, requestOptions?: RequestOptions) =>
-        request<{ readonly data: JobListOutput }>(
+        request<JobListOutput>(
           {
             method: "GET",
             path: `/api/experimental/job`,
-            query: { sessionID: input?.["sessionID"], kind: input?.["kind"], descendants: input?.["descendants"] },
+            query: {
+              location: input?.["location"],
+              sessionID: input?.["sessionID"],
+              kind: input?.["kind"],
+              descendants: input?.["descendants"],
+            },
             successStatus: 200,
             declaredStatuses: [400, 401, 404],
             empty: false,
           },
           requestOptions,
-        ).then((value) => value.data),
+        ),
     },
     shell: {
       list: (input?: ShellListInput, requestOptions?: RequestOptions) =>

@@ -38,6 +38,8 @@ export interface ToolEditor {
 interface ToolHooks {
   readonly "execute.before": {
     tool: string
+    /** Registered ID of the resolved tool, when the requested name maps to one (aliases resolve here). */
+    readonly toolID?: string
     readonly sessionID: Session.ID
     readonly agent: Agent.ID
     readonly messageID: SessionMessage.ID

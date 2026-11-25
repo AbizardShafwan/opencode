@@ -25,6 +25,26 @@ describe("PTY websocket tickets", () => {
     }),
   )
 
+  it.live("returns the host policy a client MCP ticket was issued with", () =>
+    Effect.gen(function* () {
+      const tickets = yield* PtyTicket.Service
+      const policy = { trustedHost: true, permissionNamespace: "t3-code", codemode: false }
+      const trusted = yield* tickets.issue({ mcpClient: "t3-code", mcpPolicy: policy, directory: "/tmp/a" })
+      const plain = yield* tickets.issue({ mcpClient: "t3-code", directory: "/tmp/a" })
+
+      expect(yield* tickets.consumeMcp({ mcpClient: "other", directory: "/tmp/a", ticket: trusted.ticket })).toBe(
+        undefined,
+      )
+      expect(yield* tickets.consumeMcp({ mcpClient: "t3-code", directory: "/tmp/a", ticket: trusted.ticket })).toEqual({
+        policy,
+      })
+      expect(yield* tickets.consumeMcp({ mcpClient: "t3-code", directory: "/tmp/a", ticket: trusted.ticket })).toBe(
+        undefined,
+      )
+      expect(yield* tickets.consumeMcp({ mcpClient: "t3-code", directory: "/tmp/a", ticket: plain.ticket })).toEqual({})
+    }),
+  )
+
   it.live("rejects tickets scoped to a different request", () =>
     Effect.gen(function* () {
       const tickets = yield* PtyTicket.Service

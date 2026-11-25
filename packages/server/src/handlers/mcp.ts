@@ -3,6 +3,7 @@ import { LocationServiceMap } from "@opencode/core/location-service-map"
 import { Mcp } from "@opencode/core/mcp/index"
 import { PtyTicket } from "@opencode/core/pty/ticket"
 import { ForbiddenError, McpServerNotFoundError } from "@opencode/protocol/errors"
+import { MCP_HOST_TOKEN_HEADER } from "@opencode/protocol/groups/mcp"
 import { PTY_CONNECT_TOKEN_HEADER, PTY_CONNECT_TOKEN_HEADER_VALUE } from "@opencode/protocol/groups/pty"
 import { Effect, Queue } from "effect"
 import { HttpServerResponse } from "effect/http"
@@ -11,6 +12,7 @@ import { Socket } from "effect/socket"
 import { Api } from "../api"
 import { CorsConfig, isAllowedRequestOrigin } from "../cors"
 import { locationErrors, requestRef, response } from "../location"
+import { TrustedHostConfig, hostPolicy } from "../trusted-host"
 import { holdLocation, type Outbound, runPtySocket } from "./pty-socket"
 
 const notFound = <A, R>(effect: Effect.Effect<A, Mcp.NotFoundError, R>) =>
@@ -21,6 +23,7 @@ export const McpHandler = HttpApiBuilder.group(Api, "server.mcp", (handlers) =>
     const locations = yield* LocationServiceMap.Service
     const cors = yield* CorsConfig
     const tickets = yield* PtyTicket.Service
+    const trustedHost = yield* TrustedHostConfig
 
     return handlers
       .handle(
@@ -79,9 +82,11 @@ export const McpHandler = HttpApiBuilder.group(Api, "server.mcp", (handlers) =>
           )
             return yield* new ForbiddenError({ message: "Invalid client MCP connect token request" })
           const location = yield* Location.Service
+          const policy = hostPolicy({ token: ctx.headers[MCP_HOST_TOKEN_HEADER], name: ctx.query.name }, trustedHost)
           return yield* response(
             tickets.issue({
               mcpClient: ctx.query.name,
+              ...(policy === undefined ? {} : { mcpPolicy: policy }),
               directory: location.directory,
               workspaceID: location.workspaceID,
             }),
@@ -96,16 +101,20 @@ export const McpHandler = HttpApiBuilder.group(Api, "server.mcp", (handlers) =>
 
           const name = ctx.query.name
           const ref = LocationServiceMap.canonical(requestRef(ctx.request))
-          if (
-            ctx.query.ticket &&
-            !(yield* tickets.consume({
-              ticket: ctx.query.ticket,
-              mcpClient: name,
-              directory: ref.directory,
-              workspaceID: ref.workspaceID,
-            }))
-          )
-            return HttpServerResponse.empty({ status: 403 })
+          const ticket = ctx.query.ticket
+            ? yield* tickets.consumeMcp({
+                ticket: ctx.query.ticket,
+                mcpClient: name,
+                directory: ref.directory,
+                workspaceID: ref.workspaceID,
+              })
+            : undefined
+          if (ctx.query.ticket && !ticket) return HttpServerResponse.empty({ status: 403 })
+          // Ticketed connections carry the policy proven when the ticket was minted; direct upgrades prove it here.
+          const header = ctx.request.headers[MCP_HOST_TOKEN_HEADER]
+          const policy = ctx.query.ticket
+            ? ticket?.policy
+            : hostPolicy({ token: typeof header === "string" ? header : undefined, name }, trustedHost)
 
           return yield* Effect.gen(function* () {
             const mcp = yield* Mcp.Service
@@ -124,7 +133,7 @@ export const McpHandler = HttpApiBuilder.group(Api, "server.mcp", (handlers) =>
             })
             const decoder = new TextDecoder()
             // The attachment lives in this scope, so it ends with the socket.
-            yield* mcp.attach(name, transport).pipe(
+            yield* mcp.attach(name, transport, policy).pipe(
               Effect.tap(() =>
                 Effect.sync(() => {
                   state.attached = true

@@ -73,6 +73,13 @@ export interface Interface {
 /** Location-scoped model-context loader for durable Session Steps. */
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionContext") {}
 
+/**
+ * Whether a session explicitly grants blanket browser access. A narrower `browser` resource rule
+ * is not blanket enablement, because discovery evaluates the wildcard resource.
+ */
+export const grantsBrowser = (rules: Permission.Ruleset) =>
+  rules.some((rule) => rule.action === "browser" && rule.resource === "*" && rule.effect === "allow")
+
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -163,9 +170,7 @@ const layer = Layer.effect(
       // Keep agent-level `browser: deny` intact unless the session explicitly grants `browser: allow`,
       // so wildcard full-access rules (`*: allow`) never expose a disconnected desktop browser plugin.
       const sessionPermissions = session.permissions ?? []
-      const explicitBrowser = sessionPermissions.some(
-        (rule) => rule.action === "browser" && rule.effect === "allow",
-      )
+      const explicitBrowser = grantsBrowser(sessionPermissions)
       const agentDeniesBrowser = Permission.evaluate("browser", "*", agent.info.permissions).effect === "deny"
       const permissions = Permission.merge(
         agent.info.permissions,
@@ -179,7 +184,7 @@ const layer = Layer.effect(
           discovery: discovery.load(),
           skills: skillInstructions.load(permissions),
           references: referenceInstructions.load(),
-          mcp: mcpInstructions.load(permissions),
+          mcp: mcpInstructions.load(permissions, session.authority),
           entries: entries.load(sessionID),
         },
         { concurrency: "unbounded" },

@@ -1,4 +1,5 @@
 import { expect } from "bun:test"
+import { Config } from "@opencode/core/config"
 import { InMemoryTransport, type JSONRPCMessage, type Transport } from "@modelcontextprotocol/client"
 import { McpServer } from "@modelcontextprotocol/server"
 import { ConfigMCP } from "@opencode/schema/config/mcp"
@@ -28,6 +29,7 @@ const unused = () => Effect.die("unused integration service")
 
 const it = testEffect(
   AppNodeBuilder.build(LayerNode.group([Tool.node, McpTool.node, Mcp.node, Bus.node]), [
+    Config.node.replace(Config.testLayer()),
     Location.node.replace(tempLocationLayer),
     Environment.node.replace(hostEnvironmentLayer),
     Integration.node.replace(
@@ -137,8 +139,11 @@ it.live("attaches a client MCP server and routes its tools with the session", ()
     const changes = yield* toolsChanged
     const client = yield* clientServer("tui", ["open_terminal"])
 
+    expect(yield* mcp.isAttached("tui")).toBe(false)
     yield* mcp.attach("tui", client.client)
     yield* waitUntil(() => changes.includes("tui"))
+    expect(yield* mcp.isAttached("tui")).toBe(true)
+    expect(yield* mcp.isAttached("missing")).toBe(false)
     expect((yield* mcp.tools()).map((tool) => [tool.server, tool.name])).toEqual([["tui", "open_terminal"]])
 
     yield* registered("tui_open_terminal")
@@ -161,6 +166,7 @@ it.live("removes an attached entry when its scope closes", () =>
     const before = changes.length
 
     yield* Scope.close(scope, Exit.void)
+    expect(yield* mcp.isAttached("tui")).toBe(false)
     expect(yield* mcp.tools()).toEqual([])
     yield* waitUntil(() => changes.length > before)
     yield* registered("tui_open_terminal", false)

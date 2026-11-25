@@ -17,6 +17,7 @@ import { SessionUsage } from "../usage.js"
 import { contentFilterError } from "../to-session-error.js"
 import type { Tool } from "../../tool.js"
 import { stringify } from "../../tool/runtime.js"
+import { SensitiveInput } from "../../tool/sensitive-input.js"
 
 type Input = {
   readonly sessionID: SessionSchema.ID
@@ -28,6 +29,8 @@ type Input = {
   readonly pendingSnapshot?: Effect.Effect<Snapshot.ID | undefined>
   readonly started: number
   readonly assistantMessageID: SessionMessage.ID
+  /** Sensitive top-level input keys by advertised tool name; their values never reach durable events. */
+  readonly sensitiveInputsFor?: (name: string) => ReadonlyArray<string> | undefined
 }
 
 const asRecord = (value: unknown): Record<string, unknown> => (isRecord(value) ? value : { value })
@@ -108,6 +111,12 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
     malformed?: boolean
   }
   const tools = new Map<string, ToolState>()
+  const sensitive = (name: string) => {
+    const keys = input.sensitiveInputsFor?.(name)
+    return keys !== undefined && keys.length > 0 ? keys : undefined
+  }
+  // Sensitive tools keep no raw excerpt, so recovery errors cannot echo a secret.
+  const excerpt = (tool: ToolState, value: string) => (sensitive(tool.name) ? undefined : inputExcerpt(value))
   const failureSnapshot = (tool: { readonly progress?: Tool.Metadata }, metadata?: Tool.Metadata) => {
     if (tool.progress === undefined) return metadata === undefined ? {} : { metadata }
     if (metadata === undefined) return { metadata: tool.progress }
@@ -282,12 +291,12 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
       const tool = tools.get(id)
       if (!tool) return yield* Effect.die(new Error(`Tool input end before start: ${id}`))
       // Keep a bounded excerpt for recovery errors; the full argument text is persisted below.
-      tool.input = inputExcerpt(value)
+      tool.input = excerpt(tool, value)
       yield* bus.publish(SessionEvent.Tool.Input.Ended, {
         sessionID: input.sessionID,
         assistantMessageID,
         id,
-        text: value,
+        text: SensitiveInput.redactJsonText(value, sensitive(tool.name)),
       })
     }),
   )
@@ -354,7 +363,7 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
       return yield* Effect.die(new Error(`Tool input name changed for ${event.id}: ${tool.name} -> ${event.name}`))
     if (toolInput.has(event.id)) yield* endToolInput(event, event.raw)
     // The parser's final raw input may differ from streamed deltas; use it for the recovery excerpt.
-    tool.input = inputExcerpt(event.raw)
+    tool.input = excerpt(tool, event.raw)
     tool.malformed = true
   })
 
@@ -506,7 +515,7 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
           sessionID: input.sessionID,
           assistantMessageID,
           id: event.id,
-          input: asRecord(event.input),
+          input: asRecord(SensitiveInput.redact(event.input, sensitive(tool.name))),
           executed: tool.providerExecuted,
           native: native(event.providerMetadata),
         })
@@ -616,15 +625,26 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
     if (tool.settled) return yield* Effect.die(new Error(`Duplicate tool execution: ${id}`))
     const content = result.content
     if (!isReadonlyArrayNonEmpty(content)) return yield* Effect.die(new Error(`Tool execution has no content: ${id}`))
-    yield* bus.publish(SessionEvent.Tool.Success, {
-      sessionID: input.sessionID,
-      assistantMessageID,
-      id,
-      content,
-      ...(result.metadata === undefined ? {} : { metadata: result.metadata }),
-      executed: tool.providerExecuted,
-    })
-    tool.settled = true
+    // Mark before the first yield, then publish uninterruptibly, so a concurrent sweep never sees the
+    // tool unsettled while its durable success is on the way. A failed publication rolls the mark back.
+    yield* Effect.gen(function* () {
+      tool.settled = true
+      yield* bus.publish(SessionEvent.Tool.Success, {
+        sessionID: input.sessionID,
+        assistantMessageID,
+        id,
+        content,
+        ...(result.metadata === undefined ? {} : { metadata: result.metadata }),
+        executed: tool.providerExecuted,
+      })
+    }).pipe(
+      Effect.uninterruptible,
+      Effect.onError(() =>
+        Effect.sync(() => {
+          tool.settled = false
+        }),
+      ),
+    )
   })
 
   return {

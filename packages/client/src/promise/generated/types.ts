@@ -623,7 +623,7 @@ export type FormStringField = {
   hidden?: boolean
   when?: Array<FormWhen>
   type: "string"
-  format?: "email" | "uri" | "date" | "date-time"
+  format?: "email" | "uri" | "date" | "date-time" | "password"
   minLength?: number
   maxLength?: number
   pattern?: string
@@ -814,7 +814,7 @@ export type FormStringField1 = {
   hidden?: boolean
   when?: Array<FormWhen1>
   type: "string"
-  format?: "email" | "uri" | "date" | "date-time"
+  format?: "email" | "uri" | "date" | "date-time" | "password"
   minLength?: number
   maxLength?: number
   pattern?: string
@@ -4173,7 +4173,7 @@ export type SessionFormCreateInput = {
               readonly value: string | number | "Infinity" | "-Infinity" | "NaN" | boolean
             }>
             readonly type: "string"
-            readonly format?: "email" | "uri" | "date" | "date-time"
+            readonly format?: "email" | "uri" | "date" | "date-time" | "password"
             readonly minLength?: number
             readonly maxLength?: number
             readonly pattern?: string
@@ -4275,7 +4275,7 @@ export type SessionFormCreateInput = {
               readonly value: string | number | "Infinity" | "-Infinity" | "NaN" | boolean
             }>
             readonly type: "string"
-            readonly format?: "email" | "uri" | "date" | "date-time"
+            readonly format?: "email" | "uri" | "date" | "date-time" | "password"
             readonly minLength?: number
             readonly maxLength?: number
             readonly pattern?: string
@@ -4384,7 +4384,7 @@ export type SessionFormCreateInput = {
               readonly value: string | number | "Infinity" | "-Infinity" | "NaN" | boolean
             }>
             readonly type: "string"
-            readonly format?: "email" | "uri" | "date" | "date-time"
+            readonly format?: "email" | "uri" | "date" | "date-time" | "password"
             readonly minLength?: number
             readonly maxLength?: number
             readonly pattern?: string
@@ -4486,7 +4486,7 @@ export type SessionFormCreateInput = {
               readonly value: string | number | "Infinity" | "-Infinity" | "NaN" | boolean
             }>
             readonly type: "string"
-            readonly format?: "email" | "uri" | "date" | "date-time"
+            readonly format?: "email" | "uri" | "date" | "date-time" | "password"
             readonly minLength?: number
             readonly maxLength?: number
             readonly pattern?: string
@@ -4595,7 +4595,7 @@ export type SessionFormCreateInput = {
               readonly value: string | number | "Infinity" | "-Infinity" | "NaN" | boolean
             }>
             readonly type: "string"
-            readonly format?: "email" | "uri" | "date" | "date-time"
+            readonly format?: "email" | "uri" | "date" | "date-time" | "password"
             readonly minLength?: number
             readonly maxLength?: number
             readonly pattern?: string
@@ -4697,7 +4697,7 @@ export type SessionFormCreateInput = {
               readonly value: string | number | "Infinity" | "-Infinity" | "NaN" | boolean
             }>
             readonly type: "string"
-            readonly format?: "email" | "uri" | "date" | "date-time"
+            readonly format?: "email" | "uri" | "date" | "date-time" | "password"
             readonly minLength?: number
             readonly maxLength?: number
             readonly pattern?: string
@@ -4806,7 +4806,7 @@ export type SessionFormCreateInput = {
               readonly value: string | number | "Infinity" | "-Infinity" | "NaN" | boolean
             }>
             readonly type: "string"
-            readonly format?: "email" | "uri" | "date" | "date-time"
+            readonly format?: "email" | "uri" | "date" | "date-time" | "password"
             readonly minLength?: number
             readonly maxLength?: number
             readonly pattern?: string
@@ -4908,7 +4908,7 @@ export type SessionFormCreateInput = {
               readonly value: string | number | "Infinity" | "-Infinity" | "NaN" | boolean
             }>
             readonly type: "string"
-            readonly format?: "email" | "uri" | "date" | "date-time"
+            readonly format?: "email" | "uri" | "date" | "date-time" | "password"
             readonly minLength?: number
             readonly maxLength?: number
             readonly pattern?: string
@@ -5410,7 +5410,14 @@ export type McpClientTokenInput = {
     readonly location?: { readonly directory?: string | undefined } | undefined
     readonly name: string
   }["name"]
-  readonly "x-opencode-ticket"?: { readonly "x-opencode-ticket"?: string | undefined }["x-opencode-ticket"]
+  readonly "x-opencode-ticket"?: {
+    readonly "x-opencode-ticket"?: string | undefined
+    readonly "x-opencode-host-token"?: string | undefined
+  }["x-opencode-ticket"]
+  readonly "x-opencode-host-token"?: {
+    readonly "x-opencode-ticket"?: string | undefined
+    readonly "x-opencode-host-token"?: string | undefined
+  }["x-opencode-host-token"]
 }
 
 export type McpClientTokenOutput = { location: LocationPublicRef; data: PtyTicketConnectToken }
@@ -5969,24 +5976,33 @@ export type ExperimentalPersistentPtyConnectTokenInput = {
 export type ExperimentalPersistentPtyConnectTokenOutput = { data: PtyTicketConnectToken }["data"]
 
 export type JobListInput = {
+  readonly location?: {
+    readonly location?: { readonly directory?: string | undefined } | undefined
+    readonly sessionID?: string | undefined
+    readonly kind?: "shell" | "subagent" | "image" | undefined
+    readonly descendants?: boolean | undefined
+  }["location"]
   readonly sessionID?: {
+    readonly location?: { readonly directory?: string | undefined } | undefined
     readonly sessionID?: string | undefined
     readonly kind?: "shell" | "subagent" | "image" | undefined
     readonly descendants?: boolean | undefined
   }["sessionID"]
   readonly kind?: {
+    readonly location?: { readonly directory?: string | undefined } | undefined
     readonly sessionID?: string | undefined
     readonly kind?: "shell" | "subagent" | "image" | undefined
     readonly descendants?: boolean | undefined
   }["kind"]
   readonly descendants?: {
+    readonly location?: { readonly directory?: string | undefined } | undefined
     readonly sessionID?: string | undefined
     readonly kind?: "shell" | "subagent" | "image" | undefined
     readonly descendants?: boolean | undefined
   }["descendants"]
 }
 
-export type JobListOutput = JobList["data"]
+export type JobListOutput = { location: LocationPublicRef; data: JobList }
 
 export type ShellListInput = {
   readonly location?: { readonly location?: { readonly directory?: string | undefined } | undefined }["location"]

@@ -15,15 +15,42 @@ export const password = Config.Redacted(`${Global.envPrefix}_PASSWORD`).pipe(
   Config.withDefault(undefined),
 )
 
+// Bootstrap secret the trusted host (T3 Code) presents on client MCP connections. Only the server
+// reads it; it is stripped from the environment that sessions and tools inherit.
+export const trustedHostToken = Config.Redacted(`${Global.envPrefix}_TRUSTED_HOST_TOKEN`).pipe(
+  Config.orElse(() => Config.Redacted("OPENCODE_TRUSTED_HOST_TOKEN")),
+  Config.withDefault(undefined),
+)
+
+// Legacy opt-in for host builds that predate the bootstrap token: comma-separated client MCP name
+// prefixes (only "t3-code" is recognized) trusted as the host. Off unless set at server bootstrap.
+export const trustMcpPrefix = Config.String(`${Global.envPrefix}_TRUST_MCP_PREFIX`).pipe(
+  Config.orElse(() => Config.String("OPENCODE_TRUST_MCP_PREFIX")),
+  Config.map((value) =>
+    value
+      .split(",")
+      .map((prefix) => prefix.trim())
+      .filter((prefix) => prefix !== ""),
+  ),
+  Config.withDefault(undefined),
+)
+
+const SERVER_ONLY = new Set([
+  "OPENCODE_PASSWORD",
+  "OPENCODE_SERVER_PASSWORD",
+  "MEMYR_PASSWORD",
+  "MEMYR_SERVER_PASSWORD",
+  "OPENCODE_TRUSTED_HOST_TOKEN",
+  "MEMYR_TRUSTED_HOST_TOKEN",
+  "OPENCODE_TRUST_MCP_PREFIX",
+  "MEMYR_TRUST_MCP_PREFIX",
+])
+
 export function session() {
   return Object.fromEntries(
     Object.entries(process.env).filter(
       (entry): entry is [string, string] =>
-        entry[1] !== undefined &&
-        entry[0] !== "OPENCODE_PASSWORD" &&
-        entry[0] !== "OPENCODE_SERVER_PASSWORD" &&
-        entry[0] !== "MEMYR_PASSWORD" &&
-        entry[0] !== "MEMYR_SERVER_PASSWORD",
+        entry[1] !== undefined && !SERVER_ONLY.has(entry[0]),
     ),
   )
 }

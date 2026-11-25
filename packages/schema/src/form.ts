@@ -53,7 +53,7 @@ const FieldBase = {
 export const StringField = Schema.Struct({
   ...FieldBase,
   type: Schema.Literal("string"),
-  format: Schema.Literals(["email", "uri", "date", "date-time"]).pipe(optional),
+  format: Schema.Literals(["email", "uri", "date", "date-time", "password"]).pipe(optional),
   minLength: NonNegativeInt.pipe(optional),
   maxLength: NonNegativeInt.pipe(optional),
   pattern: Schema.String.pipe(optional),

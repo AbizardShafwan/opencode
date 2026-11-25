@@ -13,26 +13,113 @@ export type DiffSource = {
   readonly metadata?: Readonly<Record<string, unknown>>
 }
 
-function toToolKind(toolName: string): ToolKind {
-  switch (canonicalName(toolName)) {
+/** The reserved namespace the verified T3 Code host advertises its tools under. */
+const HOST_TOOL_PREFIX = "t3-code_"
+
+/**
+ * T3 Code host tools keep their advertised namespace, while bare names appear when a host tool is
+ * called directly. Mapping both lets ACP clients show the right icon for either spelling.
+ */
+function hostToolName(toolName: string) {
+  const name = canonicalName(toolName)
+  return name.startsWith(HOST_TOOL_PREFIX) ? name.slice(HOST_TOOL_PREFIX.length) : name
+}
+
+export function toToolKind(toolName: string): ToolKind {
+  switch (hostToolName(toolName)) {
+    case "execute":
     case "shell":
+    case "ci_rerun":
+    // Browser work drives pages and runs scripts, so ACP treats it like running code.
+    case "preview_act":
+    case "preview_close":
+    case "preview_dialog":
+    case "preview_evaluate":
+    case "preview_navigate":
+    case "preview_open":
+    case "preview_recording_start":
+    case "preview_recording_stop":
+    case "preview_resize":
+    case "preview_set_appearance":
+    case "preview_wait_for":
+    case "device_open":
+    case "device_close":
+    // Agent-thread control changes another thread's work rather than reading it.
+    case "send_message":
+    case "followup_task":
+    case "interrupt_agent":
+    case "close_agent":
+    case "task_cancel":
+    case "t3_thread_launch":
+    case "t3_thread_send":
+    case "t3_thread_queue":
+    case "t3_thread_interrupt":
+    case "t3_thread_organize":
+    case "t3_thread_rename":
+    case "t3_thread_update":
+    case "t3_thread_transfer":
+    case "t3_worktree_create":
+    case "t3_worktree_remove":
+    case "t3_worktree_handoff":
+    case "t3_worktree_sync":
+    case "t3_environment_link":
+    case "t3_environment_unlink":
+    case "pull_request_merge":
       return "execute"
     case "webfetch":
       return "fetch"
     case "edit":
     case "patch":
     case "write":
+    case "create_issue":
+    case "comment_on_issue":
+    case "pull_request_create":
+    case "pull_request_update":
+    case "pull_request_review":
+    case "pull_request_respond":
       return "edit"
     case "grep":
     case "glob":
     case "context":
     case "context7_resolve_library_id":
     case "context7_get_library_docs":
+    case "list_issues":
+    case "pull_request_list":
+    case "list_thread_issues":
+    case "list_thread_pull_requests":
+    case "list_scheduled_tasks":
+    case "list_agents":
+    case "t3_preview_list":
+    case "t3_thread_list":
+    case "t3_thread_search":
+    case "device_list":
+    case "t3_worktree_list":
+    case "t3_worktree_status":
+    case "t3_environment_links":
+    case "orchestrator_capabilities":
       return "search"
     case "read":
+    case "pull_request_read":
+    case "read_issue":
+    case "read_pull_request_guide":
+    case "ci_logs":
+    case "t3_thread_read":
+    case "t3_environment_read":
+    case "device_screenshot":
+    case "html_preview":
+    case "preview_snapshot":
+    case "preview_status":
+    case "task_status":
       return "read"
     case "subagent":
+    case "spawn_agent":
+    case "delegate_task":
       return "think"
+    case "wait_agent":
+    case "request_secret":
+    case "html_render":
+    case "t3_background_wait":
+      return "other"
     default:
       return "other"
   }

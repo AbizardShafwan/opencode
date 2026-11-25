@@ -6,6 +6,11 @@ import type { Agent } from "./agent.js"
 import type { Session } from "./session.js"
 import type { SessionMessage } from "./session-message.js"
 
+/** The strictest provider limit on advertised tool names (Gemini function declarations). */
+export const MAX_DIRECT_TOOL_NAME_LENGTH = 63
+/** Advertised tool names every supported provider accepts: letter-initial, at most 63 characters. */
+export const PROVIDER_SAFE_TOOL_NAME = /^[A-Za-z][A-Za-z0-9_-]{0,62}$/
+
 export type Metadata = Readonly<Record<string, any>>
 
 export const CallID = Schema.String.pipe(Schema.brand("Tool.CallID"))
@@ -27,6 +32,16 @@ export interface Namespace {
 interface BaseOptions {
   readonly namespace?: string
   readonly permission?: string
+  /**
+   * Top-level input keys carrying secrets. Their values reach `execute` unchanged but are redacted from
+   * durable events, permission requests and progress displays, and the tool is never exposed through Code Mode.
+   */
+  readonly sensitiveInputs?: ReadonlyArray<string>
+  /**
+   * Runs a direct call only after the provider stream finished and every sibling call succeeded.
+   * A failed or interrupted sibling skips it, so the tool observes a completed turn.
+   */
+  readonly deferred?: "after-stream-and-siblings"
 }
 
 export type Options = BaseOptions &

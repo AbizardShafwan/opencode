@@ -6,11 +6,13 @@ import type { SessionHooks } from "@opencode/plugin/effect/session"
 import type { ShellCreateBefore } from "@opencode/plugin/effect/shell"
 import type { Tool } from "@opencode/schema/tool"
 import { Deferred, Effect, Schema, Scope } from "effect"
+import { readFile, writeFile } from "node:fs/promises"
 import { Config } from "../../config.js"
 import { Environment } from "../../environment/index.js"
 import { Job } from "../../job.js"
 import { FileAccess } from "../../file-access.js"
 import { Permission } from "../../permission.js"
+import { SecretFile } from "../../secret-file.js"
 import { NonNegativeInt } from "../../schema.js"
 import { Session } from "../../session.js"
 import { SessionSchema } from "../../session/schema.js"
@@ -39,6 +41,7 @@ const description = (shell?: string) =>
     ...(shell ? [`Commands run on ${OS} using ${shell}.`] : []),
     "Quote file paths containing spaces or special characters.",
     "Prefer dedicated tools over shell commands when possible.",
+    "When the session offers host pull request, issue, or CI tools (`create_issue`, `pull_request_*`, `ci_logs`, `link_*`), use them instead of `gh`.",
     "When output is large, the full result is saved to a file and a truncated preview is returned.",
     "Rely on automatic truncation unless filtering the output is more useful.",
     "Commands accept an optional timeout, background commands have no timeout by default.",
@@ -113,8 +116,13 @@ export const Plugin = {
     const compatibleShell = shellSelect.resolve({ priority: "compat" })
     const permission = yield* Permission.Service
     const config = yield* Config.Service
+    const secretFiles = yield* SecretFile.Service
 
-    const prepare = Effect.fn("ShellTool.prepare")(function* (invocation: ShellCreateBefore, context: Tool.Context) {
+    const prepare = Effect.fn("ShellTool.prepare")(function* (
+      invocation: ShellCreateBefore,
+      context: Tool.Context,
+      secret: boolean,
+    ) {
       const source = {
         type: "tool" as const,
         messageID: context.messageID,
@@ -138,7 +146,9 @@ export const Plugin = {
         yield* permission.assert({
           action: name,
           resources: parsed.commands.map((command) => command.resource),
-          save: parsed.commands.map((command) => command.save),
+          // A command consuming a secret file is approved once; persisting `cat *` or `adb *` would let
+          // later commands read the secret without asking.
+          ...(secret ? {} : { save: parsed.commands.map((command) => command.save) }),
           sessionID: context.sessionID,
           agent: context.agent,
           source,
@@ -200,6 +210,11 @@ export const Plugin = {
             Effect.gen(function* () {
               const timeout = input.background === true ? (input.timeout ?? 0) : (input.timeout ?? DEFAULT_TIMEOUT_MS)
               let finalTimeout = timeout
+              // Application-level accident prevention, not an OS sandbox: when a command names a host-delivered
+              // secret file, its exact contents are read before spawning and scrubbed from everything persisted.
+              const secretEntries = yield* secretFiles.matchPathsInCommand(input.command)
+              const secrets = yield* secretFiles.readSecretBytes(secretEntries)
+              const clean = (text: string) => SecretFile.scrub(text, secrets)
               const info = yield* shell.create(
                 {
                   command: input.command,
@@ -214,7 +229,7 @@ export const Plugin = {
                     invocation.env.OPENCODE = "1"
                     invocation.env.AI_AGENT ||= "opencode"
                     invocation.env.OPENCODE_SESSION_ID = context.sessionID
-                    finalTimeout = yield* prepare(invocation, context)
+                    finalTimeout = yield* prepare(invocation, context, secretEntries.length > 0)
                   }),
               )
               yield* context.progress({ shellID: info.id })
@@ -223,12 +238,13 @@ export const Plugin = {
               const run = Effect.gen(function* () {
                 const result = yield* shell.result(info)
                 if (!result.capture) return yield* new Shell.NotFoundError({ id: info.id })
+                if (secrets.length > 0) yield* scrubFile(info.file, secrets)
                 const output = ShellResult.output(result)
                 return {
                   ...output,
                   output: output.timeout
-                    ? `${output.output}\n\nCommand exceeded timeout of ${finalTimeout} ms. Retry with a larger timeout if the command is expected to take longer.`
-                    : output.output,
+                    ? `${clean(output.output)}\n\nCommand exceeded timeout of ${finalTimeout} ms. Retry with a larger timeout if the command is expected to take longer.`
+                    : clean(output.output),
                   status: "completed" as const,
                 }
               }).pipe(
@@ -266,7 +282,7 @@ export const Plugin = {
                 return backgroundResult(info.id, info.file)
               }
               if (result?.info.status === "error")
-                return yield* Effect.fail(new Error(result.info.error ?? "Command failed"))
+                return yield* Effect.fail(new Error(clean(result.info.error ?? "Command failed")))
               if (result?.info.status === "cancelled") return yield* Effect.fail(new Error("Command cancelled"))
 
               return yield* Deferred.await(settled)
@@ -291,3 +307,12 @@ export const Plugin = {
     yield* ctx.session.hook("generate", hook)
   }),
 }
+
+// Best effort: the capture file stays readable through the shell output API, so rewrite it without secrets.
+const scrubFile = (file: string, secrets: ReadonlyArray<string>) =>
+  Effect.promise(async () => {
+    const text = await readFile(file, "utf8").catch(() => undefined)
+    if (text === undefined) return
+    const scrubbed = SecretFile.scrub(text, secrets)
+    if (scrubbed !== text) await writeFile(file, scrubbed).catch(() => undefined)
+  })

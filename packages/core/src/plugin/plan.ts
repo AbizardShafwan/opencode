@@ -39,9 +39,7 @@ export const Plugin = define({
         item.name = Agent.Name.make("Plan")
         item.description = "Read-only agent for exploring the codebase and planning work before implementation."
         item.mode = "primary"
-        item.permissions.push({ action: "question", resource: "*", effect: "allow" })
-        item.permissions.push({ action: "edit", resource: "*", effect: "deny" })
-        item.permissions.push({ action: "edit", resource: path.join(directory, "*"), effect: "allow" })
+        item.permissions.push(...permissions(directory))
       })
     })
 
@@ -100,6 +98,57 @@ export const Plugin = define({
     )
   }),
 })
+
+/**
+ * Read-only T3 Code host actions. Exact names only: `t3-code_` actions are reserved for the verified host
+ * attachment, and a wildcard would also grant every mutating host tool added later.
+ */
+export const READ_ONLY_HOST_ACTIONS = [
+  "t3-code_pull_request_read",
+  "t3-code_pull_request_list",
+  "t3-code_ci_logs",
+  "t3-code_list_issues",
+  "t3-code_read_issue",
+  "t3-code_list_thread_pull_requests",
+  "t3-code_list_thread_issues",
+  "t3-code_read_pull_request_guide",
+  "t3-code_t3_thread_list",
+  "t3-code_t3_thread_read",
+  "t3-code_t3_thread_search",
+  "t3-code_device_list",
+  "t3-code_device_screenshot",
+  "t3-code_preview_status",
+  "t3-code_t3_preview_list",
+  "t3-code_html_preview",
+  "t3-code_html_render",
+  "t3-code_t3_worktree_status",
+  "t3-code_t3_worktree_list",
+  "t3-code_t3_environment_read",
+  "t3-code_t3_environment_links",
+  "t3-code_orchestrator_capabilities",
+  "t3-code_list_scheduled_tasks",
+] as const
+
+/** An explicit allowlist over deny-all; shell asks because commands can mutate state. */
+function permissions(directory: string): Permission.Ruleset {
+  return [
+    { action: "*", resource: "*", effect: "deny" },
+    { action: "read", resource: "*", effect: "allow" },
+    { action: "read", resource: "*.env", effect: "ask" },
+    { action: "read", resource: "*.env.*", effect: "ask" },
+    { action: "read", resource: "*.env.example", effect: "allow" },
+    { action: "grep", resource: "*", effect: "allow" },
+    { action: "glob", resource: "*", effect: "allow" },
+    { action: "webfetch", resource: "*", effect: "allow" },
+    { action: "websearch", resource: "*", effect: "allow" },
+    { action: "question", resource: "*", effect: "allow" },
+    { action: "external_directory", resource: "*", effect: "allow" },
+    { action: "shell", resource: "*", effect: "ask" },
+    { action: "edit", resource: "*", effect: "deny" },
+    { action: "edit", resource: path.join(directory, "*"), effect: "allow" },
+    ...READ_ONLY_HOST_ACTIONS.map((action) => ({ action, resource: "*", effect: "allow" as const })),
+  ]
+}
 
 function switchReminder(
   event: SessionEvent.Created | SessionEvent.AgentSelected,

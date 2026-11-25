@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import { Message, ToolResultPart, Media } from "@opencode/ai"
-import { boundImages, unsupportedParts } from "@opencode/core/session/model-request"
+import {
+  boundImages,
+  inlineBytes,
+  mediaBytes,
+  unsupportedParts,
+} from "@opencode/core/session/model-request"
 
 const capabilities = (input: string[]) => ({ tools: true, input, output: ["text"] })
 
@@ -184,7 +189,8 @@ describe("SessionModelRequest.boundImages", () => {
   })
 
   test("replaces oldest images until the retained payload reaches the target", () => {
-    const image = "a".repeat(9 * 1024 * 1024)
+    // Each base64 payload decodes to 9 MiB, so three of them pass the 25 MiB trigger.
+    const image = "a".repeat(12 * 1024 * 1024)
     const text = Message.user("plain")
     const third = Message.user({ type: "media", media: Media.base64(image, "image/png"), filename: "third.png" })
     const messages = [
@@ -204,8 +210,9 @@ describe("SessionModelRequest.boundImages", () => {
   })
 
   test("keeps the replaced prefix stable as new images arrive, so the prompt cache survives", () => {
+    // 4 MiB of base64 characters decodes to 3 MiB of image data.
     const image = (name: string) =>
-      Message.user({ type: "media", media: Media.base64("a".repeat(3 * 1024 * 1024), "image/png"), filename: name })
+      Message.user({ type: "media", media: Media.base64("a".repeat(4 * 1024 * 1024), "image/png"), filename: name })
     const removed = (messages: ReturnType<typeof boundImages>) =>
       messages.filter((message) => message.content[0]?.type === "text").length
     const history = Array.from({ length: 9 }, (_, i) => image(`${i}.png`))
@@ -219,7 +226,7 @@ describe("SessionModelRequest.boundImages", () => {
   })
 
   test("replaces images nested in tool results", () => {
-    const image = "a".repeat(13 * 1024 * 1024)
+    const image = "a".repeat(17 * 1024 * 1024)
     const result = boundImages([
       Message.tool(
         ToolResultPart.make({
@@ -241,6 +248,84 @@ describe("SessionModelRequest.boundImages", () => {
       result: {
         type: "content",
         value: [{ type: "text" }, { type: "file", name: "second.png" }],
+      },
+    })
+  })
+})
+
+describe("SessionModelRequest.mediaBytes", () => {
+  test("measures base64 and byte sources in matching decoded units", () => {
+    const data = new Uint8Array([0, 1, 2, 255])
+    const base64 = Buffer.from(data).toString("base64")
+
+    expect(mediaBytes(Media.base64(base64, "image/png"))).toBe(data.byteLength)
+    expect(mediaBytes(Media.bytes(data, "image/png"))).toBe(data.byteLength)
+    expect(inlineBytes(`data:image/png;base64,${base64}`)).toBe(data.byteLength)
+  })
+
+  test("counts no inline payload for remote or provider-referenced media", () => {
+    expect(inlineBytes("https://example.com/chart.png")).toBe(0)
+    expect(mediaBytes(Media.url("https://example.com/chart.png"))).toBe(0)
+  })
+})
+
+describe("SessionModelRequest.unsupportedParts notices", () => {
+  const image = (name: string) => ({
+    type: "media" as const,
+    media: Media.base64("aGVsbG8=", "image/png"),
+    filename: name,
+  })
+
+  test("keeps one identical notice per message", () => {
+    const messages = unsupportedParts(
+      [
+        Message.user([
+          Message.text("Describe these"),
+          image("a.png"),
+          image("a.png"),
+          image("b.png"),
+          image("b.png"),
+        ]),
+      ],
+      capabilities(["text"]),
+    )
+
+    expect(messages[0]?.content).toEqual([
+      Message.text("Describe these"),
+      Message.text('ERROR: Cannot read "a.png" (this model does not support image input). Inform the user.'),
+      Message.text('ERROR: Cannot read "b.png" (this model does not support image input). Inform the user.'),
+    ])
+  })
+
+  test("keeps distinct notices and consolidates repeated ones in tool results", () => {
+    const result = unsupportedParts(
+      [
+        Message.tool(
+          ToolResultPart.make({
+            id: "call_1",
+            name: "read",
+            result: {
+              type: "content",
+              value: [
+                { type: "file", uri: "data:image/png;base64,aGVsbG8=", mime: "image/png" },
+                { type: "file", uri: "data:image/png;base64,aGVsbG8=", mime: "image/png" },
+                { type: "file", uri: "data:application/pdf;base64,JVBERg==", mime: "application/pdf" },
+              ],
+            },
+          }),
+        ),
+      ],
+      capabilities(["text"]),
+    )
+
+    expect(result[0]?.content[0]).toMatchObject({
+      type: "tool-result",
+      result: {
+        type: "content",
+        value: [
+          { type: "text", text: "ERROR: Cannot read image (this model does not support image input). Inform the user." },
+          { type: "text", text: "ERROR: Cannot read pdf (this model does not support pdf input). Inform the user." },
+        ],
       },
     })
   })

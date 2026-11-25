@@ -16,11 +16,12 @@ diagnostics plus the context needed to reproduce and resolve it.
 2. Ask only for missing details that are necessary to reproduce or understand
    impact.
 3. Draft the issue in the standard format below.
-4. Publish it with GitHub CLI after the user confirms the title and body.
+4. Publish it with the host issue tool when the session offers one, otherwise
+   with GitHub CLI, after the user confirms the title and body.
 
-Do not publish an issue without user confirmation. If GitHub CLI is not
-installed or not authenticated, explain the blocker and provide the exact issue
-title/body for the user.
+Do not publish an issue without user confirmation. If neither the host issue
+tool nor GitHub CLI is available, explain the blocker and provide the exact
+issue title/body for the user.
 
 ## Standard Diagnostics
 
@@ -107,9 +108,18 @@ Keep the title short and searchable. Prefer the form:
 Examples: `tui: skills dialog crashes outside location provider`,
 `cli: local service config writes release filename`.
 
+## Publishing
+
+Prefer the host issue tool: when this session offers `create_issue` (possibly
+aliased as `t3-code_create_issue`), publish through it so the issue lands in the
+user's tracker with its link. Follow any `pull_request_*` or `link_*` tool the
+host provides instead of reaching for `gh`. Use the GitHub CLI path below only
+when no host tool can file the issue.
+
 ## Publishing With GitHub CLI
 
-Use GitHub CLI from the repository checkout when available:
+Use GitHub CLI from the repository checkout only when the host issue tool is
+unavailable:
 
 ```sh
 gh issue create --title "<title>" --body-file <file>

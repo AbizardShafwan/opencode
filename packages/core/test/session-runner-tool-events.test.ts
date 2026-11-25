@@ -34,6 +34,7 @@ const capture = (
     readonly interruptProgress?: boolean
     readonly beforeTextDelta?: Effect.Effect<void>
     readonly pendingSnapshot?: Effect.Effect<Snapshot.ID | undefined>
+    readonly sensitiveInputsFor?: (name: string) => ReadonlyArray<string> | undefined
   },
 ) => {
   const published: Array<{ readonly type: string; readonly data: unknown }> = []
@@ -67,6 +68,7 @@ const capture = (
       pendingSnapshot: options?.pendingSnapshot,
       started: 0,
       assistantMessageID: SessionMessage.ID.create(),
+      sensitiveInputsFor: options?.sensitiveInputsFor,
     }),
   }
 }
@@ -522,7 +524,7 @@ test("tool input deltas are accumulated without being published", async () => {
   )
 
   expect(published.some((event) => event.type === "session.tool.input.delta")).toBe(false)
-  expect(published.find((event) => event.type === "session.tool.input.ended.1")?.data).toMatchObject({
+  expect(published.find((event) => event.type.startsWith("session.tool.input.ended"))?.data).toMatchObject({
     text: '{"path":"file.txt"}',
   })
 })
@@ -552,7 +554,7 @@ test("provider-executed tool metadata is flattened using the route key", async (
     ),
   )
 
-  expect(published.find((event) => event.type === "session.tool.called.1")?.data).toMatchObject({
+  expect(published.find((event) => event.type.startsWith("session.tool.called"))?.data).toMatchObject({
     native: { itemId: "call" },
   })
   expect(published.find((event) => event.type === "session.tool.success.2")?.data).toMatchObject({
@@ -712,3 +714,119 @@ test("content-filter failure explains the refusal when the provider gives a reas
     },
   })
 })
+
+const secretTools = (name: string) => (name === "request_secret" ? ["value"] : undefined)
+
+test("redacts sensitive inputs from tool input and call events", async () => {
+  const { published, publisher } = capture("anthropic", { sensitiveInputsFor: secretTools })
+  const input = { label: "GitHub token", value: "ghp_secret" }
+  await Effect.runPromise(
+    Effect.forEach(
+      [
+        LLMEvent.toolInputStart({ id: "call", name: "request_secret" }),
+        LLMEvent.toolInputDelta({ id: "call", name: "request_secret", text: JSON.stringify(input) }),
+        LLMEvent.toolInputEnd({ id: "call", name: "request_secret" }),
+        LLMEvent.toolCall({ id: "call", name: "request_secret", input }),
+      ],
+      publisher.publish,
+      { discard: true },
+    ),
+  )
+  expect(JSON.stringify(published)).not.toContain("ghp_secret")
+  expect(published.find((event) => event.type.startsWith("session.tool.input.ended"))?.data).toMatchObject({
+    text: JSON.stringify({ label: "GitHub token", value: "[REDACTED]" }),
+  })
+  expect(published.find((event) => event.type.startsWith("session.tool.called"))?.data).toMatchObject({
+    input: { label: "GitHub token", value: "[REDACTED]" },
+  })
+})
+
+test("masks unparseable sensitive input and omits its recovery excerpt", async () => {
+  const { published, publisher } = capture("anthropic", { sensitiveInputsFor: secretTools })
+  const raw = '{"value":"ghp_secret"'
+  await Effect.runPromise(publisher.publish(LLMEvent.toolInputError({ id: "call", name: "request_secret", raw })))
+  await Effect.runPromise(publisher.flush())
+  expect(JSON.stringify(published)).not.toContain("ghp_secret")
+  expect(published.find((event) => event.type.startsWith("session.tool.input.ended"))?.data).toMatchObject({
+    text: "[REDACTED]",
+  })
+  const failed = published.find((event) => event.type.startsWith("session.tool.failed"))
+  expect(failed?.data).toMatchObject({ error: { type: "tool.input-json" } })
+  expect(JSON.stringify(failed)).not.toContain("Input excerpt")
+})
+
+test("keeps non-sensitive malformed input excerpts for recovery", async () => {
+  const { published, publisher } = capture("anthropic", { sensitiveInputsFor: secretTools })
+  await Effect.runPromise(
+    publisher.publish(LLMEvent.toolInputError({ id: "call", name: "read", raw: '{"path":"file.txt"' })),
+  )
+  await Effect.runPromise(publisher.flush())
+  expect(JSON.stringify(published.find((event) => event.type.startsWith("session.tool.failed")))).toContain(
+    "Input excerpt",
+  )
+})
+
+const publisherFor = (bus: Pick<Bus.Interface, "publish">) =>
+  createLLMEventPublisher(bus, {
+    sessionID,
+    agent: Agent.ID.make("build"),
+    model: { id: Model.ID.make("model"), providerID: Provider.ID.opencode },
+    providerMetadataKey: "anthropic",
+    started: 0,
+    assistantMessageID: SessionMessage.ID.create(),
+  })
+
+const eventPayload = <D extends Event.Definition>(definition: D, data: Event.Data<D>) =>
+  ({ id: Event.ID.create(), type: definition.type, data }) as Event.Payload<D>
+
+it.effect("marks a local tool settled before its success publication yields", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>()
+    const release = yield* Deferred.make<void>()
+    const publisher = publisherFor({
+      publish: (definition, data) =>
+        definition.type === SessionEvent.Tool.Success.type
+          ? Deferred.succeed(entered, undefined)
+              .pipe(Effect.andThen(Deferred.await(release)))
+              .pipe(Effect.as(eventPayload(definition, data)))
+          : Effect.succeed(eventPayload(definition, data)),
+    })
+    yield* publisher.publish(call)
+    const execution = yield* publisher
+      .toolExecution(call.id, call.name, {
+        output: { type: "text", text: "done" },
+        content: [{ type: "text", text: "done" }],
+      })
+      .pipe(Effect.forkChild({ startImmediately: true }))
+    yield* Deferred.await(entered)
+
+    // The success event is mid-publication, and the tool is already settled, so a concurrent
+    // interruption sweep cannot fail it a second time.
+    expect(yield* publisher.failUnsettledTools({ type: "aborted", message: "Interrupted" })).toBe(false)
+
+    yield* Deferred.succeed(release, undefined)
+    yield* Fiber.join(execution)
+  }),
+)
+
+it.effect("rolls the settlement mark back when the success publication fails", () =>
+  Effect.gen(function* () {
+    const publisher = publisherFor({
+      publish: (definition, data) =>
+        definition.type === SessionEvent.Tool.Success.type
+          ? Effect.die(new Error("publish failed"))
+          : Effect.succeed(eventPayload(definition, data)),
+    })
+    yield* publisher.publish(call)
+
+    const exit = yield* Effect.exit(
+      publisher.toolExecution(call.id, call.name, {
+        output: { type: "text", text: "done" },
+        content: [{ type: "text", text: "done" }],
+      }),
+    )
+    expect(Exit.isFailure(exit)).toBe(true)
+    // The rollback leaves the tool unsettled, so the failed call can still be reported to the model.
+    expect(yield* publisher.failTool(call.id, { type: "tool.execution", message: "failed" })).toBe(true)
+  }),
+)

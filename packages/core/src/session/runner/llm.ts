@@ -2,14 +2,16 @@ export * as SessionRunnerLLM from "./llm.js"
 
 import { Message } from "@opencode/ai"
 import { and, desc, eq, inArray, sql } from "drizzle-orm"
-import { Cause, Effect, Exit, FiberMap, Layer } from "effect"
+import { Cause, Effect, Exit, FiberMap, Layer, Option } from "effect"
 import { Database } from "../../database/database.js"
 import { Bus } from "../../bus.js"
 import { LocationLifecycle } from "../../location-lifecycle.js"
+import { Mcp } from "../../mcp/index.js"
 import { InstructionState } from "../instruction-state.js"
 import { SessionCompaction } from "../compaction.js"
 import { SessionContext } from "../context.js"
 import { SessionEvent } from "../event.js"
+import { SessionExternalWait } from "../external-wait.js"
 import { SessionInbox } from "../inbox.js"
 import { SessionBackground } from "../background.js"
 import { Job } from "../../job.js"
@@ -66,6 +68,15 @@ const layer = Layer.effect(
       let entering = true
       let stepped = input.stepped ?? false
       const promotable = input.promotable ?? "input"
+      // Real runtimes provide both; tests that omit them keep their existing idle behavior.
+      const waits = yield* Effect.serviceOption(SessionExternalWait.Service)
+      const mcp = yield* Effect.serviceOption(Mcp.Service)
+      const external = Option.isSome(waits)
+        ? {
+            waits: waits.value,
+            ...(Option.isSome(mcp) ? { isServerLive: (server: string) => mcp.value.isAttached(server) } : {}),
+          }
+        : undefined
       if (!force && !continuing && !stepped) {
         const pending = yield* SessionInbox.nextPromotable(db, sessionID, "input")
         if (!pending) return DrainResult.Complete()
@@ -175,7 +186,7 @@ const layer = Layer.effect(
                 if (pending || !stepped) return DrainResult.Complete()
                 // The Session would go idle; a plugin may admit input to keep this execution working.
                 yield* restore(
-                  SessionBackground.outstanding(jobs, store, sessionID).pipe(
+                  SessionBackground.outstanding(jobs, store, sessionID, external).pipe(
                     Effect.flatMap((background) => hooks.trigger("session", "experimental.idle", { sessionID, background })),
                   ),
                 )
@@ -278,6 +289,7 @@ const layer = Layer.effect(
               options: prepared.options,
               retry: prepared.retry,
               executeTool: prepared.executeTool,
+              isDeferredTool: prepared.isDeferredTool,
             })),
           )
         const outcome = yield* steps.attempt({

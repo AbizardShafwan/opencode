@@ -16,6 +16,9 @@ export function detect(bytes: Uint8Array) {
   return isText(bytes) ? "text/plain" : "application/octet-stream"
 }
 
+/** The media type without parameters, lowercased: `image/png; charset=binary` becomes `image/png`. */
+export const normalize = (mime: string) => mime.split(";", 1)[0].trim().toLowerCase()
+
 export const isTextual = (mime: string) =>
   !mime ||
   mime.startsWith("text/") ||

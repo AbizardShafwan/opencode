@@ -65,6 +65,10 @@ export interface Prepared<Event = SessionRequest> {
   readonly executeTool: (
     input: Parameters<Tool.Snapshot["execute"]>[0],
   ) => Effect.Effect<Tool.NormalizedResult, ExecuteError>
+  /** Sensitive top-level input keys of a tool, by the name this request advertised it under. */
+  readonly sensitiveInputsFor?: (name: string) => ReadonlyArray<string> | undefined
+  /** Whether an advertised tool call waits for the stream and its siblings before executing. */
+  readonly isDeferredTool?: (name: string) => boolean
 }
 
 export interface Input {
@@ -160,11 +164,27 @@ const unsupportedMedia = (
   return `ERROR: Cannot read ${name ? `"${name}"` : modality} (this model does not support ${unsupported} input). Inform the user.`
 }
 
-// Remote and provider-referenced media carry no local payload and never count toward the inline budget.
-const mediaBytes = (media: Media.Asset) => {
-  if (media.source.type === "base64") return Buffer.byteLength(media.source.data)
-  if (media.source.type === "bytes") return Math.ceil(media.source.data.byteLength / 3) * 4
+/** Decoded byte length of a base64 payload, without allocating the decoded buffer. */
+const base64Bytes = (data: string) => {
+  const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0
+  return Math.max(0, Math.floor((data.length * 3) / 4) - padding)
+}
+
+/**
+ * Inline payload size of a media asset in decoded bytes, matching the provider's upload size.
+ * Remote and provider-referenced media carry no local payload and never count toward the inline budget.
+ */
+export const mediaBytes = (media: Media.Asset) => {
+  if (media.source.type === "base64") return base64Bytes(media.source.data)
+  if (media.source.type === "bytes") return media.source.data.byteLength
   return 0
+}
+
+/** Inline payload size of a tool-result file URI in decoded bytes; a remote URI carries none. */
+export const inlineBytes = (uri: string) => {
+  if (!uri.startsWith("data:")) return 0
+  const comma = uri.indexOf(",")
+  return comma === -1 ? 0 : base64Bytes(uri.slice(comma + 1))
 }
 
 /** Replaces media with the returned text; messages without replacements are returned unchanged. */
@@ -173,23 +193,50 @@ const replaceMedia = (
   replace: (media: { mime: string; name: string | undefined; bytes: () => number }) => string | undefined,
 ) =>
   messages.map((message) => {
-    const content = message.content.map((part) => {
+    // Identical notices repeat once per message, so several attachments cannot crowd out the rest.
+    const noticed = new Set<string>()
+    const notice = (text: string) => {
+      if (noticed.has(text)) return undefined
+      noticed.add(text)
+      return text
+    }
+    const content: Array<(typeof message.content)[number]> = []
+    for (const part of message.content) {
       if (part.type === "media") {
         const text = replace({ mime: part.media.mediaType, name: part.filename, bytes: () => mediaBytes(part.media) })
-        return text === undefined ? part : Message.text(text)
+        if (text === undefined) {
+          content.push(part)
+          continue
+        }
+        const unique = notice(text)
+        if (unique !== undefined) content.push(Message.text(unique))
+        continue
       }
-      if (part.type !== "tool-result" || part.result.type !== "content") return part
+      if (part.type !== "tool-result" || part.result.type !== "content") {
+        content.push(part)
+        continue
+      }
       const result = part.result
-      const value = result.value.map((item): Content => {
-        if (item.type !== "file") return item
-        const text = replace({ mime: item.mime, name: item.name, bytes: () => Buffer.byteLength(item.uri) })
-        return text === undefined ? item : { type: "text", text }
-      })
-      return value.every((item, index) => item === result.value[index])
-        ? part
-        : { ...part, result: { ...result, value } }
-    })
-    return content.every((part, index) => part === message.content[index])
+      const value: Content[] = []
+      let changed = false
+      for (const item of result.value) {
+        if (item.type !== "file") {
+          value.push(item)
+          continue
+        }
+        const text = replace({ mime: item.mime, name: item.name, bytes: () => inlineBytes(item.uri) })
+        if (text === undefined) {
+          value.push(item)
+          continue
+        }
+        changed = true
+        const unique = notice(text)
+        if (unique !== undefined) value.push({ type: "text", text: unique })
+      }
+      content.push(changed ? { ...part, result: { ...result, value } } : part)
+    }
+    return content.length === message.content.length &&
+      content.every((part, index) => part === message.content[index])
       ? message
       : new Message({ ...message, content })
   })
@@ -207,7 +254,7 @@ export const boundImages = (messages: LLMRequest["messages"]) => {
       if (part.type === "media") return isImage(part.media.mediaType) ? [mediaBytes(part.media)] : []
       if (part.type !== "tool-result" || part.result.type !== "content") return []
       return part.result.value.flatMap((item: Content) =>
-        item.type === "file" && isImage(item.mime) ? [Buffer.byteLength(item.uri)] : [],
+        item.type === "file" && isImage(item.mime) ? [inlineBytes(item.uri)] : [],
       )
     }),
   )
@@ -254,7 +301,7 @@ export const layer = Layer.effect(
       const session = input.session
       const model = input.model
       const scope = { sessionID: session.id, agent: input.agent, model: model.ref, kind }
-      const tools = input.tools ?? {
+      const tools: Tool.Snapshot = input.tools ?? {
         definitions: [],
         execute: () => new Tool.Error({ message: "Tools are not available for this request" }),
       }
@@ -406,6 +453,8 @@ export const layer = Layer.effect(
         // catch them and turn a "no" into model-visible output. Recover them here as failures,
         // including declines a tool rethrew and its wrapper attached to a Tool.Error, as Promise
         // plugin tools do.
+        sensitiveInputsFor: (name: string) => tools.sensitiveInputs?.(hooked.get(name)?.name ?? name),
+        isDeferredTool: (name: string) => tools.isDeferred?.(hooked.get(name)?.name ?? name) ?? false,
         executeTool: (call: Parameters<Prepared["executeTool"]>[0]) =>
           tools.execute({ ...call, definitions: hooked }).pipe(
             Effect.catchCauseFilter(

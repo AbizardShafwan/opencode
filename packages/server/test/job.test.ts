@@ -12,6 +12,7 @@ import { createRoutes } from "../src/routes"
 it.live("lists background jobs with session, kind, and descendant filters", () =>
   Effect.gen(function* () {
     const tmp = yield* tmpdirScoped("opencode-job-endpoints-")
+    const other = yield* tmpdirScoped("opencode-job-other-")
     const context = yield* Layer.build(
       createRoutes({
         password: "secret",
@@ -34,6 +35,11 @@ it.live("lists background jobs with session, kind, and descendant filters", () =
     const child = yield* sessions.create({
       parentID: parent.id,
       title: "child",
+    })
+    // Jobs from another location share the process-global registry but never this route's view.
+    const elsewhere = yield* sessions.create({
+      location: { directory: AbsolutePath.make(other.path) },
+      title: "elsewhere",
     })
 
     const hold = yield* Deferred.make<string>()
@@ -76,24 +82,45 @@ it.live("lists background jobs with session, kind, and descendant filters", () =
       },
       run: Deferred.await(hold),
     })
+    const otherJob = yield* jobs.startObserved({
+      id: "job_other_shell",
+      type: "shell",
+      title: "other shell",
+      notificationID: SessionMessage.ID.make("msg_job_other_shell"),
+      recovery: {
+        kind: "shell",
+        sessionID: elsewhere.id,
+        shellID: "sh_other",
+        command: "echo other",
+      },
+      run: Deferred.await(hold),
+    })
     yield* parentShell.background
     yield* childShell.background
     yield* imageJob.background
+    yield* otherJob.background
 
     const request = (route: string) =>
-      Effect.promise((signal) =>
-        handler(
-          new Request(new URL(route, "http://opencode.local"), {
+      Effect.promise((signal) => {
+        const url = new URL(route, "http://opencode.local")
+        url.searchParams.set("location[directory]", tmp.path)
+        return handler(
+          new Request(url, {
             headers: { authorization: `Basic ${btoa("opencode:secret")}` },
             signal,
           }),
-        ),
-      )
+        )
+      })
 
     const all = yield* request("/api/experimental/job")
     expect(all.status).toBe(200)
-    const allBody = (yield* Effect.promise(() => all.json())) as { data: Array<{ id: string; kind: string }> }
-    expect(allBody.data.map((item) => item.id).toSorted()).toEqual([
+    const allBody = (yield* Effect.promise(() => all.json())) as {
+      location: { directory: string }
+      data: { data: Array<{ id: string; kind: string }> }
+    }
+    expect(allBody.location.directory).toBe(tmp.path)
+    // The other location's job is filtered out even though the registry knows it.
+    expect(allBody.data.data.map((item) => item.id).toSorted()).toEqual([
       "job_child_shell",
       "job_image",
       "job_parent_shell",
@@ -102,23 +129,25 @@ it.live("lists background jobs with session, kind, and descendant filters", () =
     const directShells = yield* request(`/api/experimental/job?sessionID=${parent.id}&kind=shell`)
     expect(directShells.status).toBe(200)
     const directBody = (yield* Effect.promise(() => directShells.json())) as {
-      data: Array<{ id: string; shellID: string; sessionID: string; command: string; status: string }>
+      data: { data: Array<{ id: string; shellID: string; sessionID: string; command: string; status: string }> }
     }
-    expect(directBody.data).toMatchObject([
+    expect(directBody.data.data).toMatchObject([
       { id: "job_parent_shell", shellID: "sh_parent", sessionID: parent.id, command: "echo parent", status: "running" },
     ])
 
     const descendantShells = yield* request(`/api/experimental/job?sessionID=${parent.id}&kind=shell&descendants=true`)
     expect(descendantShells.status).toBe(200)
-    const descendantBody = (yield* Effect.promise(() => descendantShells.json())) as { data: Array<{ id: string }> }
-    expect(descendantBody.data.map((item) => item.id).toSorted()).toEqual(["job_child_shell", "job_parent_shell"])
+    const descendantBody = (yield* Effect.promise(() => descendantShells.json())) as {
+      data: { data: Array<{ id: string }> }
+    }
+    expect(descendantBody.data.data.map((item) => item.id).toSorted()).toEqual(["job_child_shell", "job_parent_shell"])
 
     const images = yield* request(`/api/experimental/job?sessionID=${parent.id}&kind=image`)
     expect(images.status).toBe(200)
     const imagesBody = (yield* Effect.promise(() => images.json())) as {
-      data: Array<{ id: string; kind: string; path: string; model: string; status: string }>
+      data: { data: Array<{ id: string; kind: string; path: string; model: string; status: string }> }
     }
-    expect(imagesBody.data).toMatchObject([
+    expect(imagesBody.data.data).toMatchObject([
       { id: "job_image", kind: "image", path: `${tmp.path}/out`, model: "test/image", status: "running" },
     ])
 
@@ -127,6 +156,10 @@ it.live("lists background jobs with session, kind, and descendant filters", () =
 
     const missing = yield* request("/api/experimental/job?sessionID=ses_missing")
     expect(missing.status).toBe(404)
+
+    // A session that exists in another location is not addressable from this one.
+    const crossLocation = yield* request(`/api/experimental/job?sessionID=${elsewhere.id}`)
+    expect(crossLocation.status).toBe(404)
 
     yield* Deferred.succeed(hold, "done")
   }),

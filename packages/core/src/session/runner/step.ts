@@ -63,6 +63,14 @@ interface Input {
 const TOOLS_INTERRUPTED = { type: "aborted", message: "Tool execution interrupted" } as const
 const STEP_INTERRUPTED = { type: "aborted", message: "Step interrupted" } as const
 const RESULT_MISSING = { type: "tool.result-missing", message: "Provider did not return a tool result" } as const
+const DEFERRED_SKIPPED_AFTER_SIBLING = {
+  type: "aborted",
+  message: "Skipped deferred tool because an earlier sibling tool did not succeed",
+} as const
+const DEFERRED_SKIPPED_AFTER_DEFERRED = {
+  type: "aborted",
+  message: "Skipped deferred tool because an earlier deferred tool did not succeed",
+} as const
 
 /** Captures Location-scoped dependencies without introducing another service or execution loop. */
 export const make = Effect.gen(function* () {
@@ -84,11 +92,15 @@ export const make = Effect.gen(function* () {
       providerMetadataKey: input.model.model.route.providerMetadataKey ?? input.model.model.provider,
       pendingSnapshot: Fiber.join(pendingStartSnapshot),
       started: yield* Clock.currentTimeMillis,
+      sensitiveInputsFor: input.prepared.sensitiveInputsFor,
     })
     const toolRuns: Array<{
       readonly call: ToolCall
       readonly fiber: Fiber.Fiber<void, Permission.DeclinedError | QuestionTool.CancelledError>
     }> = []
+    // Deferred calls run only after the stream and every sibling call finished, in emitted order.
+    const deferredCalls: Array<ToolCall> = []
+    let siblingToolFailed = false
     const interruptTools = Effect.suspend(() => Fiber.interruptAll(toolRuns.map((run) => run.fiber)))
     const executeTool = (call: ToolCall) => {
       if (input.prepared.request.toolChoice?.type === "none")
@@ -122,15 +134,21 @@ export const make = Effect.gen(function* () {
           }
           yield* publisher.publish(event)
           if (event.type !== "tool-call" || event.providerExecuted) return
+          // Tool.Called is already durable; hold the call until the stream and its siblings settle.
+          if (input.prepared.isDeferredTool?.(event.name) === true) {
+            deferredCalls.push(event)
+            return
+          }
           toolRuns.push({
             call: event,
             fiber: yield* Effect.uninterruptibleMask((restore) =>
               restore(executeTool(event)).pipe(
                 Effect.flatMap(toolOutput.truncate),
                 Effect.flatMap((outcome) => publisher.toolExecution(event.id, event.name, outcome)),
-                Effect.catchTag("Tool.Error", (error) =>
-                  publisher.failTool(event.id, toSessionError(error), error.metadata).pipe(Effect.asVoid),
-                ),
+                Effect.catchTag("Tool.Error", (error) => {
+                  siblingToolFailed = true
+                  return publisher.failTool(event.id, toSessionError(error), error.metadata).pipe(Effect.asVoid)
+                }),
               ),
             ).pipe(Effect.forkScoped),
           })
@@ -153,6 +171,55 @@ export const make = Effect.gen(function* () {
         const joined = yield* restore(Fiber.awaitAll(toolRuns.map((run) => run.fiber))).pipe(Effect.exit)
         if (Exit.isFailure(joined)) yield* interruptTools
         const tools = classifyToolExits(joined, toolRuns)
+
+        // Deferred calls were announced while streaming but never started, so every path settles each
+        // one exactly once: skip on any failure, otherwise run them in emitted order after the siblings.
+        if (deferredCalls.length > 0) {
+          const settleSkipped = (error: SessionError.Error) =>
+            Effect.forEach(deferredCalls, (call) => publisher.failTool(call.id, error), { discard: true })
+          if (
+            streamInterrupted ||
+            Exit.isFailure(stream) ||
+            overflowFailure !== undefined ||
+            publisher.record().providerFailed
+          ) {
+            // failTool is idempotent, so the existing failUnsettledTools paths below stay single-writers.
+            yield* settleSkipped(TOOLS_INTERRUPTED)
+          } else if (
+            tools.declines.length > 0 ||
+            tools.interrupted ||
+            Exit.isFailure(joined) ||
+            tools.failure !== undefined ||
+            siblingToolFailed
+          ) {
+            yield* settleSkipped(DEFERRED_SKIPPED_AFTER_SIBLING)
+          } else {
+            let blocked = false
+            for (const call of deferredCalls) {
+              if (blocked) {
+                yield* publisher.failTool(call.id, DEFERRED_SKIPPED_AFTER_DEFERRED)
+                continue
+              }
+              const exit = yield* Effect.uninterruptibleMask((restore) =>
+                restore(
+                  executeTool(call).pipe(
+                    Effect.flatMap(toolOutput.truncate),
+                    Effect.flatMap((outcome) => publisher.toolExecution(call.id, call.name, outcome)),
+                  ),
+                ).pipe(Effect.exit),
+              )
+              const failure = classifyDeferredExit(exit)
+              if (failure === undefined) continue
+              // A Tool.Error settled this call itself; the other outcomes ride along with the siblings.
+              if (failure.toolError)
+                yield* publisher.failTool(call.id, toSessionError(failure.toolError), failure.toolError.metadata)
+              if (failure.decline) tools.declines.push({ call, reason: failure.decline })
+              if (failure.interrupted) tools.interrupted = true
+              if (failure.failure) tools.failure = failure.failure
+              blocked = true
+            }
+          }
+        }
 
         const overflow = overflowFailure ?? streamFailure
         if (
@@ -320,4 +387,29 @@ const classifyToolExits = (
     })
     .at(0)
   return { interrupted: causes.some(Cause.hasInterrupts), declines, failure }
+}
+
+/**
+ * Deferred calls execute inline after the stream, so their outcome is classified here rather than
+ * from a tool fiber. A Tool.Error already settled the call through `publisher.failTool`.
+ */
+const classifyDeferredExit = (exit: Exit.Exit<void, SessionModelRequest.ExecuteError>) => {
+  if (Exit.isSuccess(exit)) return undefined
+  const reasons = exit.cause.reasons
+  const toolError = reasons.flatMap((reason) =>
+    Cause.isFailReason(reason) && reason.error instanceof Tool.Error ? [reason.error] : [],
+  )[0]
+  const decline = reasons.flatMap((reason) =>
+    Cause.isFailReason(reason) &&
+    (reason.error instanceof Permission.DeclinedError || reason.error instanceof QuestionTool.CancelledError)
+      ? [reason.error]
+      : [],
+  )[0]
+  const dieReasons = reasons.filter(Cause.isDieReason)
+  return {
+    toolError,
+    decline,
+    interrupted: Cause.hasInterrupts(exit.cause),
+    failure: dieReasons.length > 0 ? Cause.fromReasons<never>(dieReasons) : undefined,
+  }
 }

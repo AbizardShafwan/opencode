@@ -54,6 +54,10 @@ export interface NormalizedResult extends Tool.Result {
 export interface Snapshot {
   readonly definitions: ReadonlyArray<ToolDefinition>
   readonly codeModeCatalog?: CodeModeCatalog.Inventory
+  /** Sensitive top-level input keys of a direct tool, by registry name, for redaction outside `execute`. */
+  readonly sensitiveInputs?: (name: string) => ReadonlyArray<string> | undefined
+  /** Whether a direct tool call waits for the stream and its siblings before executing. */
+  readonly isDeferred?: (name: string) => boolean
   readonly execute: (input: {
     readonly sessionID: SessionSchema.ID
     readonly agent: Agent.ID
@@ -104,9 +108,10 @@ const layer = Layer.effect(
       ]
     })
 
-    const beforeExecute = (name: string, input: unknown, context: Tool.Context) =>
+    const beforeExecute = (name: string, toolID: string | undefined, input: unknown, context: Tool.Context) =>
       hooks.trigger("tool", "execute.before", {
         tool: name,
+        ...(toolID === undefined ? {} : { toolID }),
         sessionID: context.sessionID,
         agent: context.agent,
         messageID: context.messageID,
@@ -234,13 +239,17 @@ const layer = Layer.effect(
           const active = new Map<string, Tool.Info>()
           const rules = permissions ?? []
           for (const [name, tool] of data.tools) {
-            if (disabled(tool.options?.permission ?? name, rules, authority)) continue
+            if (isDisabled(tool.options?.permission ?? name, rules, authority)) continue
             active.set(name, tool)
           }
           const direct = new Map(Array.from(active).filter(([, tool]) => tool.options?.codemode === false))
-          const codeModeTools = new Map(Array.from(active).filter(([, tool]) => tool.options?.codemode !== false))
+          // Code Mode programs see tool results and can echo inputs into logs and output, so tools taking
+          // secrets are never placed inside `execute`; McpTool warns when it skips such a registration.
+          const codeModeTools = new Map(
+            Array.from(active).filter(([, tool]) => tool.options?.codemode !== false && !isSensitive(tool)),
+          )
           const names = Array.from(codeModeTools.keys()).join("\0")
-          const codeModeEnabled = !disabled("execute", rules, authority)
+          const codeModeEnabled = !isDisabled("execute", rules, authority)
           // Discovery is immutable for a registry revision and visible tool set. Keep request
           // definitions/executors fresh, but share the inventory, whose prepared runtime and much
           // larger rendered catalog are cached by identity, across steps.
@@ -250,7 +259,7 @@ const layer = Layer.effect(
             ? CodeModeTool.create(
                 codeModeInventory,
                 (name, tool, input, context) =>
-                  beforeExecute(name, input, context).pipe(
+                  beforeExecute(name, name, input, context).pipe(
                     Effect.flatMap((event) => executeTool(tool, name, event.input, context)),
                   ),
                 permission,
@@ -262,6 +271,8 @@ const layer = Layer.effect(
           if (codeModeCatalog) catalog = { data, names, inventory: codeModeInventory, value: codeModeCatalog }
           return {
             ...(codeModeCatalog === undefined ? {} : { codeModeCatalog }),
+            sensitiveInputs: (name: string) => direct.get(name)?.options?.sensitiveInputs,
+            isDeferred: (name: string) => direct.get(name)?.options?.deferred === "after-stream-and-siblings",
             definitions: [
               ...Array.from(direct)
                 .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
@@ -276,7 +287,12 @@ const layer = Layer.effect(
                 id: Tool.CallID.make(input.call.id),
                 progress: input.progress ?? (() => Effect.void),
               }
-              const event = yield* beforeExecute(input.call.name, input.call.input, context)
+              const resolved = input.definitions?.get(input.call.name)?.name ?? input.call.name
+              const toolID =
+                direct.has(resolved) || (codeModeTool !== undefined && resolved === codeModeTool.name)
+                  ? resolved
+                  : undefined
+              const event = yield* beforeExecute(input.call.name, toolID, input.call.input, context)
               const requested = input.definitions?.get(event.tool)
               // Preserve session context removal and alias resolution, now after the repair hook.
               if (!requested && input.definitions && (direct.has(event.tool) || codeModeTool?.name === event.tool))
@@ -286,6 +302,10 @@ const layer = Layer.effect(
                 return yield* executeTool(codeModeTool, name, event.input, context)
               const tool = direct.get(name)
               if (tool) return yield* executeTool(tool, name, event.input, context)
+              if (codeModeTool && codeModeTools.has(name))
+                return yield* new Tool.Error({
+                  message: `Tool "${name}" is only available through Code Mode. Call the \`${codeModeTool.name}\` tool and invoke it from there instead of calling it directly.`,
+                })
               return yield* new Tool.Error({
                 message: `No tool named "${name}" is currently available. Please use a tool from the available tool list.`,
               })
@@ -297,7 +317,11 @@ const layer = Layer.effect(
   }),
 )
 
-const disabled = (action: string, rules: Permission.Ruleset, authority?: ReadonlyArray<Permission.Ruleset>) =>
+/** Whether a tool declares input keys carrying secrets. */
+export const isSensitive = (tool: Pick<Tool.Info, "options">) => (tool.options?.sensitiveInputs?.length ?? 0) > 0
+
+/** Whether an action is wholly denied, so its tool is hidden from the catalog. */
+export const isDisabled = (action: string, rules: Permission.Ruleset, authority?: ReadonlyArray<Permission.Ruleset>) =>
   whollyDisabled(action, rules) || (authority?.some((ruleset) => whollyDisabled(action, ruleset)) ?? false)
 
 const whollyDisabled = (action: string, rules: Permission.Ruleset) => {

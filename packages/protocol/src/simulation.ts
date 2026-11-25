@@ -1,5 +1,6 @@
 import { Effect, Schema } from "effect"
 import { Rpc, RpcGroup } from "effect/rpc"
+import { PROVIDER_SAFE_TOOL_NAME } from "@opencode/schema/tool"
 
 const JsonRpcID = Schema.Union([Schema.String, Schema.Number, Schema.Null])
 const decodeJson = Schema.decodeUnknownSync(Schema.Json)
@@ -486,15 +487,14 @@ export namespace Backend {
   ])
   export type ToolContent = Schema.Schema.Type<typeof ToolContent>
 
-  const ProviderSafeName = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/
   const ToolName = Schema.NonEmptyString.check(
     Schema.makeFilter((name) =>
-      ProviderSafeName.test(name) ? undefined : "simulated tool names must be provider-safe",
+      PROVIDER_SAFE_TOOL_NAME.test(name) ? undefined : "simulated tool names must be provider-safe",
     ),
   )
   const ToolNamespace = Schema.NonEmptyString.check(
     Schema.makeFilter((namespace) =>
-      namespace.split(".").every((segment) => ProviderSafeName.test(segment))
+      namespace.split(".").every((segment) => PROVIDER_SAFE_TOOL_NAME.test(segment))
         ? undefined
         : "simulated tool namespaces must contain provider-safe segments",
     ),
@@ -519,7 +519,7 @@ export namespace Backend {
     tools: Schema.Array(ToolRegistration).check(
       Schema.makeFilter((tools) => {
         const names = tools.map(exposedToolName)
-        if (names.some((name) => !ProviderSafeName.test(name)))
+        if (names.some((name) => !PROVIDER_SAFE_TOOL_NAME.test(name)))
           return "simulated tool names including namespaces must be provider-safe"
         if (new Set(names).size !== names.length) return "simulated tool registrations must have unique exposed names"
         if (

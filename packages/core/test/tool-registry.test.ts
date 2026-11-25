@@ -1165,6 +1165,18 @@ describe("Tool", () => {
     }),
   )
 
+  it.effect("points direct calls to Code Mode-only tools at execute", () =>
+    Effect.gen(function* () {
+      const service = yield* Tool.Service
+      yield* transform(service, { echo: make() })
+      const request = yield* service.snapshot()
+      const error = yield* request.execute(call("echo")).pipe(Effect.flip)
+      expect(error.message).toBe(
+        'Tool "echo" is only available through Code Mode. Call the `execute` tool and invoke it from there instead of calling it directly.',
+      )
+    }),
+  )
+
   it.effect("reveals the previous registration after an overlay closes", () =>
     Effect.gen(function* () {
       const service = yield* Tool.Service

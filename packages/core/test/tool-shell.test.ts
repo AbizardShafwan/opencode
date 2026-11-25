@@ -29,6 +29,7 @@ import { SessionExecution } from "@opencode/core/session/execution"
 import { SessionMessage } from "@opencode/core/session/message"
 import { SessionStore } from "@opencode/core/session/store"
 import { Permission } from "@opencode/core/permission"
+import { SecretFile } from "@opencode/core/secret-file"
 import { PermissionSaved } from "@opencode/core/permission/saved"
 import { Plugin } from "@opencode/core/plugin"
 import { PluginSupervisor } from "@opencode/core/plugin/supervisor"
@@ -135,6 +136,7 @@ const shellPluginSupervisor = makeLocationNode({
     Environment.node,
     FileAccess.node,
     Permission.node,
+    SecretFile.node,
     Session.node,
     Job.node,
     Shell.node,
@@ -145,6 +147,7 @@ const shellPluginSupervisor = makeLocationNode({
 
 const nodes = LayerNode.group([
   Database.node,
+  SecretFile.node,
   Bus.node,
   Job.node,
   Session.node,
@@ -180,6 +183,7 @@ const call = (input: typeof ShellTool.Input.Type, id = "call-shell") => ({
 })
 
 const isWindows = process.platform === "win32"
+const unixLive = isWindows ? it.live.skip : it.live
 const cwdCommand = isWindows ? "(Get-Location).Path; Start-Sleep -Milliseconds 100" : "pwd"
 const helloCommand = isWindows ? "[Console]::Out.Write('hello'); Start-Sleep -Milliseconds 100" : "printf hello"
 const stderrCommand = isWindows
@@ -896,6 +900,7 @@ describe("ShellTool", () => {
               const definitions = yield* toolDefinitions(registry)
               const definition = definitions.find((tool) => tool.name === "shell")
               expect(definition?.description).toStartWith("Execute a shell command and return its output.")
+              expect(definition?.description).toContain("use them instead of `gh`")
               expect(definition?.inputSchema).not.toHaveProperty("properties.timeout.maximum")
               // Code Mode receives the declared output schema, including the command output text.
               expect(definition?.outputSchema).toHaveProperty("properties.output")
@@ -1316,6 +1321,7 @@ describe("ShellTool", () => {
             Environment.node,
             FileAccess.node,
             Permission.node,
+            SecretFile.node,
             Session.node,
             Job.node,
             Shell.node,
@@ -1421,6 +1427,30 @@ describe("ShellTool", () => {
       { timeout: 15_000 },
     )
   }
+
+  unixLive("scrubs a host secret file from output and never saves its approval", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) =>
+        Effect.gen(function* () {
+          reset()
+          const secretFiles = yield* SecretFile.Service
+          const file = path.join(tmp.path, "token")
+          yield* Effect.promise(() => fs.writeFile(file, "s3cr3t-value\n"))
+          yield* secretFiles.register(file, sessionID)
+          const settled = yield* withSession(tmp.path, (registry) =>
+            executeTool(registry, call({ command: `cat '${file}'; printf done` }, "call-secret")),
+          )
+          expect(settled.status).toBe("completed")
+          expect(JSON.stringify(settled)).not.toContain("s3cr3t-value")
+          expect(settled.content?.[0]).toEqual({ type: "text", text: "[REDACTED]done" })
+          const shell = assertions.find((input) => input.action === "shell")
+          expect(shell).toBeDefined()
+          expect(shell).not.toHaveProperty("save")
+        }),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+    ),
+  )
 
   it.live("keeps non-zero exits useful", () =>
     Effect.acquireUseRelease(

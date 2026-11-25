@@ -11,6 +11,7 @@ import { FileAccess } from "../../file-access.js"
 import { Permission } from "../../permission.js"
 import { Ripgrep } from "../../ripgrep.js"
 import { RelativePath } from "../../schema.js"
+import { SecretFile } from "../../secret-file.js"
 
 export const name = "grep"
 
@@ -69,6 +70,7 @@ export const Plugin = {
     const location = yield* Location.Service
     const access = yield* FileAccess.Service
     const permission = yield* Permission.Service
+    const secrets = yield* SecretFile.Service
 
     yield* ctx.tool
       .transform((editor) =>
@@ -101,6 +103,9 @@ export const Plugin = {
                 source,
               })
               const root = target.absolute
+              // Resolves symlinks, so searching a link to a host-delivered secret file is refused too.
+              yield* secrets.assertReadable(root)
+              const protectedPaths = new Set((yield* secrets.active()).flatMap((entry) => [entry.path, entry.realpath]))
               const type = yield* Environment.typeFollowing(environment.files, root).pipe(
                 Effect.catchTag("Environment.NotFound", () =>
                   Effect.fail(new ToolFailure({ message: `Search path does not exist: ${input.path ?? "."}` })),
@@ -142,7 +147,11 @@ export const Plugin = {
                     ),
                   ),
                 )
-              return { matches: matches.slice(0, limit), truncated: matches.length > limit }
+              // Ripgrep does not follow symlinks while walking, so exact paths cover directory searches.
+              const visible = matches.filter(
+                (match) => !protectedPaths.has(path.resolve(location.directory, match.entry.path)),
+              )
+              return { matches: visible.slice(0, limit), truncated: visible.length > limit }
             }).pipe(
               Effect.map((result) => ({
                 output: result.matches,

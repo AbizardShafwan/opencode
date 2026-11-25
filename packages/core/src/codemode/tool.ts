@@ -16,6 +16,7 @@ import { Permission } from "../permission.js"
 import { CodeModeCatalog } from "./catalog.js"
 import { CodeModeExecution } from "./execution.js"
 import { CodeModeFetch } from "./fetch.js"
+import { SensitiveInput } from "../tool/sensitive-input.js"
 
 const ExecuteFile = Schema.Struct({
   data: Schema.String,
@@ -118,7 +119,7 @@ export const create = (
                   const text = content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n")
                   return text === "" ? null : text
                 }),
-              hooks: progressHooks(record),
+              hooks: progressHooks(record, sensitiveInputs(inventory)),
             }),
             Effect.provideService(CodeModeExecution.Service, context),
             Effect.provideService(Permission.Service, permission),
@@ -157,7 +158,10 @@ export const create = (
 }
 
 // Rows appear in start order; the same call object arrives at both hooks, so a call finds its row again.
-function progressHooks(record: (update: (items: Array<ExecuteCall>) => Array<ExecuteCall>) => Effect.Effect<unknown>) {
+function progressHooks(
+  record: (update: (items: Array<ExecuteCall>) => Array<ExecuteCall>) => Effect.Effect<unknown>,
+  sensitive: ReadonlyMap<string, ReadonlyArray<string>>,
+) {
   const rows = new WeakMap<object, number>()
   const start = (call: object, entry: ExecuteCall) =>
     record((items) => {
@@ -175,7 +179,7 @@ function progressHooks(record: (update: (items: Array<ExecuteCall>) => Array<Exe
   }
   return {
     "tool.before": (call) => {
-      const shown = displayInput(call.input)
+      const shown = displayInput(SensitiveInput.redact(call.input, sensitive.get(call.name)))
       return start(call, { tool: call.name, status: "running", ...(shown ? { input: shown } : {}) })
     },
     "tool.after": settle,
@@ -323,6 +327,17 @@ function renderEntry(
 function flattenTools(node: ToolNode, path: ReadonlyArray<string>, tools: Tools) {
   if (node.tool !== undefined) tools[path.join(".")] = node.tool
   for (const [name, child] of node.children) flattenTools(child, [...path, name], tools)
+}
+
+// Defense in depth: Tool.snapshot keeps sensitive tools out of Code Mode, but an inventory built elsewhere
+// must still never display their secret inputs as progress rows.
+function sensitiveInputs(inventory: Inventory) {
+  return new Map(
+    Array.from(inventory.tools.values()).flatMap((registration) => {
+      const keys = registration.options?.sensitiveInputs
+      return keys === undefined || keys.length === 0 ? [] : [[qualifiedName(registration), keys] as const]
+    }),
+  )
 }
 
 function qualifiedName(registration: Info) {

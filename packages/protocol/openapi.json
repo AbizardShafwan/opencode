@@ -2524,18 +2524,11 @@
             }
           },
           "404": {
-            "description": "SessionNotFoundError | LocationNotFoundError",
+            "description": "SessionNotFoundError",
             "content": {
               "application/json": {
                 "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
-                    },
-                    {
-                      "$ref": "#/components/schemas/LocationNotFoundErrorEncoded"
-                    }
-                  ]
+                  "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
                 }
               }
             }
@@ -2757,18 +2750,11 @@
             }
           },
           "404": {
-            "description": "SessionNotFoundError | LocationNotFoundError",
+            "description": "SessionNotFoundError",
             "content": {
               "application/json": {
                 "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
-                    },
-                    {
-                      "$ref": "#/components/schemas/LocationNotFoundErrorEncoded"
-                    }
-                  ]
+                  "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
                 }
               }
             }
@@ -7859,6 +7845,21 @@
             "required": false
           },
           {
+            "name": "x-opencode-host-token",
+            "in": "header",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "required": false
+          },
+          {
             "name": "location",
             "in": "query",
             "schema": {
@@ -11892,6 +11893,156 @@
         "x-websocket": true
       }
     },
+    "/api/experimental/job": {
+      "get": {
+        "tags": ["job"],
+        "operationId": "experimental.job.list",
+        "parameters": [
+          {
+            "name": "location",
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "directory": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "required": false,
+            "style": "deepObject",
+            "explode": true
+          },
+          {
+            "name": "sessionID",
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Session.ID"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter to background jobs owned by this session."
+            },
+            "required": false
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": ["shell", "subagent", "image"]
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter to background jobs of one kind."
+            },
+            "required": false
+          },
+          {
+            "name": "descendants",
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": ["true", "false"]
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Include background jobs owned by descendant sessions. Requires sessionID."
+            },
+            "required": false
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "location": {
+                      "$ref": "#/components/schemas/Location.PublicRef"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Job.List"
+                    }
+                  },
+                  "required": ["location", "data"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "SessionNotFoundError | LocationNotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/LocationNotFoundErrorEncoded"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "List running and unacknowledged background jobs of this location, optionally filtered by session and kind.",
+        "summary": "List background jobs"
+      }
+    },
     "/api/shell": {
       "get": {
         "tags": ["shell"],
@@ -14370,6 +14521,116 @@
         "description": "Read the selected model provider's account usage: DeepSeek balance, or Codex and Ollama Cloud rate-limit windows. Returns nothing when the provider has no usage to read or its endpoint fails.",
         "summary": "Read provider usage"
       }
+    },
+    "/api/experimental/usage/limits": {
+      "get": {
+        "tags": ["usage"],
+        "operationId": "experimental.usage.limits",
+        "parameters": [
+          {
+            "name": "location",
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "directory": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "required": false,
+            "style": "deepObject",
+            "explode": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "location": {
+                      "$ref": "#/components/schemas/Location.PublicRef"
+                    },
+                    "data": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/UsageLimits.Info"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["location", "data"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "LocationNotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocationNotFoundErrorEncoded"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "ServiceUnavailableError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceUnavailableErrorEncoded"
+                }
+              }
+            }
+          }
+        },
+        "description": "Return the OpenCode Go allowance and Console budgets of the OpenCode Console workspace the location is signed in to, or null when it isn't signed in.",
+        "summary": "Get usage limits"
+      }
     }
   },
   "components": {
@@ -16386,7 +16647,7 @@
           },
           "format": {
             "type": "string",
-            "enum": ["email", "uri", "date", "date-time"]
+            "enum": ["email", "uri", "date", "date-time", "password"]
           },
           "minLength": {
             "type": "integer",
@@ -17267,6 +17528,163 @@
           }
         },
         "required": ["_tag", "message"],
+        "additionalProperties": false
+      },
+      "Job.Image": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["image"]
+          },
+          "id": {
+            "type": "string"
+          },
+          "sessionID": {
+            "$ref": "#/components/schemas/Session.ID"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["running", "completed", "error", "cancelled"]
+          },
+          "title": {
+            "type": "string"
+          },
+          "time": {
+            "$ref": "#/components/schemas/Job.Time"
+          },
+          "path": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          }
+        },
+        "required": ["kind", "id", "sessionID", "status", "time", "path", "model"],
+        "additionalProperties": false
+      },
+      "Job.Info": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/Job.Shell"
+          },
+          {
+            "$ref": "#/components/schemas/Job.Subagent"
+          },
+          {
+            "$ref": "#/components/schemas/Job.Image"
+          }
+        ]
+      },
+      "Job.List": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Job.Info"
+            }
+          }
+        },
+        "required": ["data"],
+        "additionalProperties": false
+      },
+      "Job.Shell": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["shell"]
+          },
+          "id": {
+            "type": "string"
+          },
+          "sessionID": {
+            "$ref": "#/components/schemas/Session.ID"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["running", "completed", "error", "cancelled"]
+          },
+          "title": {
+            "type": "string"
+          },
+          "time": {
+            "$ref": "#/components/schemas/Job.Time"
+          },
+          "shellID": {
+            "type": "string"
+          },
+          "command": {
+            "type": "string"
+          }
+        },
+        "required": ["kind", "id", "sessionID", "status", "time", "shellID", "command"],
+        "additionalProperties": false
+      },
+      "Job.Subagent": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["subagent"]
+          },
+          "id": {
+            "type": "string"
+          },
+          "sessionID": {
+            "$ref": "#/components/schemas/Session.ID"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["running", "completed", "error", "cancelled"]
+          },
+          "title": {
+            "type": "string"
+          },
+          "time": {
+            "$ref": "#/components/schemas/Job.Time"
+          },
+          "childSessionID": {
+            "$ref": "#/components/schemas/Session.ID"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          }
+        },
+        "required": ["kind", "id", "sessionID", "status", "time", "childSessionID", "agent", "description"],
+        "additionalProperties": false
+      },
+      "Job.Time": {
+        "type": "object",
+        "properties": {
+          "started": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "enum": ["Infinity", "-Infinity", "NaN"]
+              }
+            ]
+          },
+          "completed": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "enum": ["Infinity", "-Infinity", "NaN"]
+              }
+            ]
+          }
+        },
+        "required": ["started"],
         "additionalProperties": false
       },
       "Location.PublicInfo": {
@@ -21290,6 +21708,157 @@
         "required": ["id", "label", "remainingPercent"],
         "additionalProperties": false
       },
+      "UsageLimits.Budget": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "limit": {
+            "$ref": "#/components/schemas/Money.USD"
+          },
+          "spent": {
+            "$ref": "#/components/schemas/Money.USD"
+          },
+          "scope": {
+            "type": "string",
+            "enum": ["each", "combined"]
+          },
+          "per": {
+            "type": "string",
+            "enum": ["set", "model"]
+          },
+          "coverage": {
+            "type": "string",
+            "enum": ["all", "models"]
+          },
+          "models": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UsageLimits.BudgetModel"
+            }
+          },
+          "vendors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "inputPriceAtLeast": {
+            "$ref": "#/components/schemas/Money.USDPerMillionTokens"
+          },
+          "picked": {
+            "type": "boolean"
+          },
+          "shared": {
+            "type": "boolean"
+          },
+          "resetsAt": {
+            "type": "number",
+            "description": "Milliseconds since the Unix epoch"
+          }
+        },
+        "required": [
+          "id",
+          "limit",
+          "spent",
+          "scope",
+          "per",
+          "coverage",
+          "models",
+          "vendors",
+          "picked",
+          "shared",
+          "resetsAt"
+        ],
+        "additionalProperties": false
+      },
+      "UsageLimits.BudgetModel": {
+        "type": "object",
+        "properties": {
+          "providerID": {
+            "$ref": "#/components/schemas/Provider.ID"
+          },
+          "modelID": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "spent": {
+            "$ref": "#/components/schemas/Money.USD"
+          }
+        },
+        "required": ["providerID", "modelID", "name"],
+        "additionalProperties": false
+      },
+      "UsageLimits.Go": {
+        "type": "object",
+        "properties": {
+          "rolling": {
+            "$ref": "#/components/schemas/UsageLimits.Meter"
+          },
+          "weekly": {
+            "$ref": "#/components/schemas/UsageLimits.Meter"
+          },
+          "monthly": {
+            "$ref": "#/components/schemas/UsageLimits.Meter"
+          }
+        },
+        "required": ["rolling", "weekly", "monthly"],
+        "additionalProperties": false
+      },
+      "UsageLimits.Info": {
+        "type": "object",
+        "properties": {
+          "workspace": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "usageURL": {
+                "type": "string"
+              }
+            },
+            "required": ["id", "usageURL"],
+            "additionalProperties": false
+          },
+          "go": {
+            "$ref": "#/components/schemas/UsageLimits.Go"
+          },
+          "budgets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UsageLimits.Budget"
+            }
+          }
+        },
+        "required": ["workspace", "budgets"],
+        "additionalProperties": false
+      },
+      "UsageLimits.Meter": {
+        "type": "object",
+        "properties": {
+          "percent": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "limited": {
+            "type": "boolean"
+          },
+          "resetsAt": {
+            "type": "number",
+            "description": "Milliseconds since the Unix epoch"
+          }
+        },
+        "required": ["percent", "limited", "resetsAt"],
+        "additionalProperties": false
+      },
       "V2EventEncoded": {
         "type": "string",
         "contentMediaType": "application/json"
@@ -21851,6 +22420,10 @@
     {
       "name": "persistentPty",
       "description": "Prototype persistent PTY routes."
+    },
+    {
+      "name": "job",
+      "description": "Experimental background job inspection routes."
     },
     {
       "name": "shell",

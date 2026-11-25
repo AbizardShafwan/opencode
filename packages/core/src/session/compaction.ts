@@ -187,6 +187,9 @@ Break the objective into smaller goals and report which are completed, which are
 List the files and directories, other than the current working directory, that another agent would need to open to continue this work. Include at most 15, most important first. Do not list every file that was read or changed. Include paths outside the current working directory when relevant. If none, write "(none)".
 - \`[file or directory path]\`: [brief reason it matters]
 
+## Links & References
+- [verbatim links another agent needs to continue this work, such as \`t3-thread://\` deep links, pull request URLs, and issue URLs; otherwise "(none)". Copy each link exactly as written, keeping its full URL; do not shorten, rewrite, or drop its identifier.]
+
 ## Important Context
 - [facts the next agent cannot continue without and cannot easily find on its own, including whether changes are uncommitted, committed, pushed, under review, or merged, and exact commands or errors; or "(none)"]
 </template>`
@@ -196,6 +199,7 @@ const SUMMARY_RULES = `Rules:
 - Keep each section concise. Use terse, single-line bullets, not prose paragraphs or nested lists.
 - Prefer short references over detailed restatement. It is fine to leave out information the next agent can recover from the code or the files listed above.
 - Preserve exact file paths, symbols, commands, error strings, URLs, identifiers, versions, and user wording.
+- Carry every \`t3-thread://\` deep link, pull request URL, and issue URL into Links & References verbatim. A link that appears only in truncated history would otherwise be lost.
 - A requirement stated by the user must keep the user's wording in double quotes. Do not paraphrase it into a cleaner rule.
 - A decision is any choice that closes off an alternative: an approach picked over another, a convention adopted, an API or file settled on, an option rejected and why, or a limit or number agreed.
 - Carry forward only user questions or requests that remain unanswered or require further action. Do not repeat ones that newer history has answered or resolved.

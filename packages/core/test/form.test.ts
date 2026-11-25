@@ -51,6 +51,45 @@ describe("Form", () => {
     }),
   )
 
+  it.effect("redacts password answers from events and state but resolves ask with the real value", () =>
+    Effect.gen(function* () {
+      const service = yield* Form.Service
+      const bus = yield* Bus.Service
+      const created = yield* Deferred.make<Form.Info>()
+      const replied = yield* Deferred.make<unknown>()
+      const unsubscribe = yield* bus.listen((event) => {
+        if (event.type === Form.Event.Created.type)
+          return Deferred.succeed(created, (event.data as { readonly form: Form.Info }).form).pipe(Effect.asVoid)
+        if (event.type === Form.Event.Replied.type) return Deferred.succeed(replied, event.data).pipe(Effect.asVoid)
+        return Effect.void
+      })
+      yield* Effect.addFinalizer(() => unsubscribe)
+      const fiber = yield* service
+        .ask({
+          sessionID: SessionSchema.ID.make("ses_test"),
+          title: "Sign in",
+          fields: [
+            { key: "user", type: "string", required: true },
+            { key: "password", type: "string", format: "password", required: true },
+          ],
+        })
+        .pipe(Effect.forkScoped)
+      const form = yield* Deferred.await(created)
+
+      expect(Form.validateAnswer(form.fields, { user: "ava", password: "" })).toBe(
+        "Missing required form field: password",
+      )
+      yield* service.reply({ id: form.id, answer: { user: "ava", password: "hunter2" } })
+
+      expect(yield* Fiber.join(fiber)).toEqual({ status: "answered", answer: { user: "ava", password: "hunter2" } })
+      expect(yield* service.state(form.id)).toEqual({
+        status: "answered",
+        answer: { user: "ava", password: Form.REDACTED },
+      })
+      expect(yield* Deferred.await(replied)).toMatchObject({ answer: { user: "ava", password: Form.REDACTED } })
+    }),
+  )
+
   it.effect("supports the temporary global mcp elicitation owner", () =>
     Effect.gen(function* () {
       const service = yield* Form.Service

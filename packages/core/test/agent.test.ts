@@ -195,7 +195,15 @@ describe("Agent", () => {
       expect(compaction?.system).toBeUndefined()
       expect(compaction?.model).toBeUndefined()
       expect(compaction?.request).toEqual(Agent.Info.default(Agent.ID.make("compaction")).request)
-      expect(compaction?.permissions).toEqual(permissions.filter((rule) => rule.action !== "question"))
+      expect(compaction?.permissions).toEqual([
+        ...permissions.filter((rule) => rule.action !== "question"),
+        { action: "*", resource: "*", effect: "deny" },
+      ])
+      for (const id of ["compaction", "title", "summary"]) {
+        const role = yield* agent.get(Agent.ID.make(id))
+        expect(Permission.evaluate("t3-code_html_render", "*", role?.permissions ?? []).effect).toBe("deny")
+        expect(Permission.evaluate("read", "src/index.ts", role?.permissions ?? []).effect).toBe("deny")
+      }
       expect(
         Permission.evaluate("external_directory", path.join(global.data, "shell", "*", "*"), permissions).effect,
       ).toBe("allow")
@@ -209,10 +217,21 @@ describe("Agent", () => {
         const role = yield* agent.get(Agent.ID.make(id))
         expect(role?.system?.startsWith(SessionSystemPrompt.make())).toBe(true)
       }
+      // A status summary must keep the durable links that let the next agent follow up.
+      expect((yield* agent.get(Agent.ID.make("summary")))?.system).toContain("t3-thread://")
       const explore = yield* agent.get(Agent.ID.make("explore"))
       expect(Permission.evaluate("shell", "git log -5", explore?.permissions ?? []).effect).toBe("allow")
       expect(Permission.evaluate("edit", "src/index.ts", explore?.permissions ?? []).effect).toBe("deny")
       expect(Permission.evaluate("read", ".env", explore?.permissions ?? []).effect).toBe("ask")
+      for (const action of ["t3-code_pull_request_read", "t3-code_t3_thread_search", "t3-code_device_screenshot"])
+        expect(Permission.evaluate(action, "*", explore?.permissions ?? []).effect).toBe("allow")
+      for (const action of ["t3-code_delegate_task", "t3-code_preview_act", "mcp_t3-code_pull_request_read"])
+        expect(Permission.evaluate(action, "*", explore?.permissions ?? []).effect).toBe("deny")
+      const review = yield* agent.get(Agent.ID.make("review"))
+      for (const action of ["t3-code_pull_request_read", "t3-code_ci_logs", "t3-code_read_pull_request_guide"])
+        expect(Permission.evaluate(action, "*", review?.permissions ?? []).effect).toBe("allow")
+      for (const action of ["t3-code_pull_request_merge", "t3-code_delegate_task", "t3-code_t3_thread_read"])
+        expect(Permission.evaluate(action, "*", review?.permissions ?? []).effect).toBe("deny")
       expect(Permission.evaluate("read", ".env.local", explore?.permissions ?? []).effect).toBe("ask")
       expect(Permission.evaluate("read", ".env.example", explore?.permissions ?? []).effect).toBe("allow")
       expect(Permission.evaluate("read", "src/index.ts", explore?.permissions ?? []).effect).toBe("allow")

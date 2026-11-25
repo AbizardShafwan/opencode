@@ -14,6 +14,26 @@ import type { Tool } from "@opencode/schema/tool"
 
 const Target = Schema.String.annotate({ description: "Session ID, canonical /root/task path, or a child task name." })
 
+const OUTCOME_STATUS = { succeeded: "completed", failed: "failed", interrupted: "cancelled" } as const
+
+/**
+ * One status vocabulary for every listed agent: a closed or running Session wins, then its job,
+ * then the outcome recorded for its last execution.
+ */
+const agentStatus = (input: {
+  readonly archived: boolean
+  readonly active: boolean
+  readonly job?: Job.Status
+  readonly outcome?: SessionSchema.Info["outcome"]
+}) => {
+  if (input.archived) return "closed"
+  if (input.active || input.job === "running") return "running"
+  if (input.job === "completed") return "completed"
+  if (input.job === "error") return "failed"
+  if (input.job === "cancelled") return "cancelled"
+  return input.outcome === undefined ? "idle" : OUTCOME_STATUS[input.outcome]
+}
+
 export const install = Effect.fn("AgentThreadTools.install")(function* (ctx: Context) {
   const sessions = yield* Session.Service
   const store = yield* SessionStore.Service
@@ -94,11 +114,12 @@ export const install = Effect.fn("AgentThreadTools.install")(function* (ctx: Con
       ...(entry.session.title === undefined ? {} : { title: entry.session.title }),
       ...(entry.session.model === undefined ? {} : { model: entry.session.model }),
       ...(thinking === undefined ? {} : { thinking }),
-      status: entry.session.time.archived
-        ? "closed"
-        : active.has(entry.session.id)
-          ? "running"
-          : (job?.status ?? entry.session.outcome ?? "idle"),
+      status: agentStatus({
+        archived: entry.session.time.archived !== undefined,
+        active: active.has(entry.session.id),
+        job: job?.status,
+        outcome: entry.session.outcome,
+      }),
       ...(lastResponse === undefined ? {} : { last_response: lastResponse }),
     }
   })
@@ -107,13 +128,13 @@ export const install = Effect.fn("AgentThreadTools.install")(function* (ctx: Con
     .transform((editor) => {
       editor.add({
         name: "list_agents",
-        options: { codemode: false },
+        options: { codemode: false, permission: "subagent" },
         description:
           "Inspect the conversation's named agent tree, models, thinking, status and latest responses. Completion notifications arrive automatically; do not poll.",
         input: Schema.Struct({}),
         execute: (_, context) =>
           Effect.gen(function* () {
-            yield* authorize(context, "list_agents", "*")
+            yield* authorize(context, "subagent", "*")
             const entries = yield* tree(context.sessionID)
             const output = yield* Effect.forEach(entries, describe)
             return { content: JSON.stringify(output), metadata: { agents: output } }
@@ -121,7 +142,7 @@ export const install = Effect.fn("AgentThreadTools.install")(function* (ctx: Con
       })
       editor.add({
         name: "send_message",
-        options: { codemode: false },
+        options: { codemode: false, permission: "subagent" },
         description:
           "Send a message to a running parent, sibling or child. An idle recipient receives it in its durable inbox without being started; use followup_task to resume an idle descendant.",
         input: Schema.Struct({ target: Target, message: Schema.NonEmptyString }),
@@ -132,7 +153,7 @@ export const install = Effect.fn("AgentThreadTools.install")(function* (ctx: Con
               return yield* new ToolFailure({ message: "Cannot send a message to yourself." })
             if (entry.session.time.archived)
               return yield* new ToolFailure({ message: "Agent is closed. Use followup_task to reopen it." })
-            yield* authorize(context, "send_message", entry.path)
+            yield* authorize(context, "subagent", entry.path)
             const active = yield* sessions.active
             yield* sessions.synthetic({
               sessionID: entry.session.id,
@@ -154,14 +175,17 @@ export const install = Effect.fn("AgentThreadTools.install")(function* (ctx: Con
           Effect.gen(function* () {
             const entry = yield* resolve(context.sessionID, input.target, true)
             yield* authorize(context, "subagent", entry.session.agent ?? "general")
-            yield* context.progress({ sessionID: entry.session.id, status: "running" })
+            // Validate the target before unarchiving or admitting anything into it.
+            const parentSessionID = entry.session.parentID
+            if (parentSessionID === undefined)
+              return yield* new ToolFailure({ message: "Cannot resume a root as a subagent." })
             yield* sessions.unarchive(entry.session.id)
             yield* sessions.prompt({ sessionID: entry.session.id, text: input.prompt, resume: false })
-            if (!entry.session.parentID)
-              return yield* new ToolFailure({ message: "Cannot resume a root as a subagent." })
+            // Report running only after the task is actually admitted into the child.
+            yield* context.progress({ sessionID: entry.session.id, status: "running" })
             const recovery = {
               kind: "subagent" as const,
-              parentSessionID: entry.session.parentID,
+              parentSessionID,
               childSessionID: entry.session.id,
               agent: entry.session.agent ?? "general",
               description: entry.session.title ?? entry.path,
@@ -176,7 +200,7 @@ export const install = Effect.fn("AgentThreadTools.install")(function* (ctx: Con
       })
       editor.add({
         name: "wait_agent",
-        options: { codemode: false },
+        options: { codemode: false, permission: "subagent" },
         description:
           "Wait for a descendant to become idle without polling. Use when its result is needed to proceed. Does not cancel work on timeout.",
         input: Schema.Struct({
@@ -186,7 +210,7 @@ export const install = Effect.fn("AgentThreadTools.install")(function* (ctx: Con
         execute: (input, context) =>
           Effect.gen(function* () {
             const entry = yield* resolve(context.sessionID, input.target, true)
-            yield* authorize(context, "wait_agent", entry.path)
+            yield* authorize(context, "subagent", entry.path)
             const finished = yield* sessions
               .wait(entry.session.id)
               .pipe(Effect.timeoutOption(input.timeout_ms ?? 30000))
@@ -200,7 +224,7 @@ export const install = Effect.fn("AgentThreadTools.install")(function* (ctx: Con
       for (const name of ["interrupt_agent", "close_agent"] as const)
         editor.add({
           name,
-          options: { codemode: false },
+          options: { codemode: false, permission: "subagent" },
           description:
             name === "close_agent"
               ? "Interrupt and archive a descendant and its children, preserving their history. followup_task can reopen a thread."
@@ -209,7 +233,7 @@ export const install = Effect.fn("AgentThreadTools.install")(function* (ctx: Con
           execute: (input, context) =>
             Effect.gen(function* () {
               const entry = yield* resolve(context.sessionID, input.target, true)
-              yield* authorize(context, name, entry.path)
+              yield* authorize(context, "subagent", entry.path)
               const entries =
                 name === "close_agent"
                   ? [
@@ -230,6 +254,19 @@ export const install = Effect.fn("AgentThreadTools.install")(function* (ctx: Con
                   }),
                 { discard: true },
               )
+              // Closing also stops background shell jobs these Sessions own; interrupting leaves them running.
+              if (name === "close_agent") {
+                const closed = new Set(entries.map((item) => item.session.id))
+                const background = yield* jobs.runningBackground
+                yield* Effect.forEach(
+                  background,
+                  (recovery) =>
+                    recovery.kind === "shell" && closed.has(recovery.sessionID)
+                      ? jobs.cancel(recovery.shellID)
+                      : Effect.void,
+                  { discard: true },
+                )
+              }
               return {
                 content: `${entry.path}: ${name === "close_agent" ? "closed" : "interrupted"}.`,
                 metadata: { sessionID: entry.session.id },

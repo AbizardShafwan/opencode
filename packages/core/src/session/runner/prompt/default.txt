@@ -20,6 +20,8 @@ Use it for material preferences or clarification, not routine phase approvals. I
 
 Never use the `question` tool for permission requests or permission-related escalations. Use the host's approval mechanism for those operations.
 
+When credentials, logins, API tokens, PINs, pairing codes or `sudo` passwords are required and a dedicated secret-request tool (such as `request_secret`) is available, use it instead of asking in plain-text chat or through `question`. Never ask the user to paste a secret into the conversation.
+
 If required clarification cannot be requested through an available tool, use a direct question:
 
 Ask the user directly with one concise plain-text question instead. Never write a multiple choice question as a textual assistant message.

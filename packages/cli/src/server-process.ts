@@ -83,6 +83,13 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
         yield* RetainedImage.retain(global.cache, "service")
       const { start } = yield* Effect.promise(() => import("@opencode/server/process"))
       const environmentPassword = yield* Env.password
+      const trustedHostToken = yield* Env.trustedHostToken
+      const trustMcpPrefix = yield* Env.trustMcpPrefix
+      // The host secret is read once here; keep it out of the environment inherited by tools.
+      delete process.env[`${Global.envPrefix}_TRUSTED_HOST_TOKEN`]
+      delete process.env.OPENCODE_TRUSTED_HOST_TOKEN
+      delete process.env[`${Global.envPrefix}_TRUST_MCP_PREFIX`]
+      delete process.env.OPENCODE_TRUST_MCP_PREFIX
       // Keep the lease credential out of the environment inherited by tools.
       if (options.mode === "stdio") {
         delete process.env[`${Global.envPrefix}_PASSWORD`]
@@ -111,6 +118,14 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
           port,
           cors: options.cors ?? config.cors,
           password,
+          ...(trustedHostToken === undefined && trustMcpPrefix === undefined
+            ? {}
+            : {
+                trustedHost: {
+                  ...(trustedHostToken === undefined ? {} : { token: Redacted.value(trustedHostToken) }),
+                  ...(trustMcpPrefix === undefined ? {} : { mcpPrefixes: trustMcpPrefix }),
+                },
+              }),
           pty: { handoff },
           simulation: truthy(process.env.OPENCODE_SIMULATE),
           database: {

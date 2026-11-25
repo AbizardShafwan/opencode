@@ -1,4 +1,4 @@
-import { describe, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { Deferred, Effect, Fiber, Layer, Schedule, Stream } from "effect"
 import { Agent } from "@opencode/core/agent"
 import { AppNodeBuilder } from "@opencode/core/effect/app-node-builder"
@@ -8,6 +8,7 @@ import { Config } from "@opencode/core/config"
 import { ManagedPolicy } from "@opencode/core/managed-policy"
 import { Document, Event } from "@opencode/schema/config"
 import { AbsolutePath } from "@opencode/core/schema"
+import { SkillPlugin } from "@opencode/core/plugin/skill"
 import { Skill } from "@opencode/core/skill"
 import { SkillInstructions } from "@opencode/core/skill/instructions"
 import { testEffect } from "./lib/effect"
@@ -231,3 +232,14 @@ const waitUntil = (condition: Effect.Effect<boolean>) =>
     ),
     Effect.retry({ times: 200, schedule: Schedule.spaced("10 millis") }),
   )
+
+describe("built-in report skill", () => {
+  test("prefers the host issue tool over the GitHub CLI", () => {
+    const content = SkillPlugin.ReportContent
+
+    expect(content).toContain("create_issue")
+    expect(content).toContain("instead of reaching for `gh`")
+    // The CLI stays documented as the fallback, not the default.
+    expect(content).toContain("only when the host issue tool is")
+  })
+})

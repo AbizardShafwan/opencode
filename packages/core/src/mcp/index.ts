@@ -7,7 +7,7 @@ import type { Session } from "@opencode/schema/session"
 import type { Transport } from "@modelcontextprotocol/client"
 import { createHash } from "node:crypto"
 import { isDeepStrictEqual } from "node:util"
-import { Cause, Context, Effect, Exit, FiberSet, Latch, Layer, Schema, Scope, Semaphore, Stream, Types } from "effect"
+import { Cause, Context, Duration, Effect, Exit, FiberSet, Latch, Layer, Schema, Scope, Semaphore, Stream, Types } from "effect"
 import { makeLocationNode } from "@opencode/util/effect/app-node"
 import { Credential } from "../credential.js"
 import { Bus } from "../bus.js"
@@ -33,8 +33,27 @@ export interface ServerInstructions {
   readonly instructions: string
 }
 
+/**
+ * Server-side policy for a client attachment whose host identity the server verified at bootstrap
+ * (never derived from the client-chosen name, project config, or `mcp.add`).
+ */
+export interface HostPolicy {
+  readonly trustedHost?: boolean
+  readonly permissionNamespace?: string
+  readonly codemode?: boolean
+  readonly executionTimeoutMs?: number
+}
+
 /** SDK tool definition tagged with the server that owns it. */
-export type Tool = McpClient.Tool & { readonly server: ServerName; readonly codemode?: boolean }
+export type Tool = McpClient.Tool & {
+  readonly server: ServerName
+  readonly codemode?: boolean
+  /** Set only for tools of an attachment verified as the trusted host. */
+  readonly trustedHost?: boolean
+  readonly permissionNamespace?: string
+  /** Per-call timeout in milliseconds for a trusted host attachment. */
+  readonly executionTimeout?: number
+}
 export type ToolResultContent = McpClient.CallToolContent
 export type ToolResult = McpClient.CallToolResult & { readonly server: ServerName; readonly tool: string }
 export type Prompt = McpClient.Prompt & { readonly server: ServerName }
@@ -95,6 +114,9 @@ type ServerEntry = {
 type AttachedEntry = {
   readonly scope: Scope.Closeable
   readonly client: McpClient.Connection
+  readonly policy?: HostPolicy
+  /** Instructions from the attachment's initialize result; surfaced only for trusted host attachments. */
+  readonly instructions?: string
   tools: ReadonlyArray<Tool>
 }
 
@@ -134,13 +156,24 @@ export interface Interface extends State.Transformable<Editor> {
    * `name` like any server's. Attaching a name again stacks the new connection on top: it serves the
    * name until it closes, then the most recent remaining connection takes over.
    */
-  readonly attach: (name: string, transport: Transport) => Effect.Effect<void, McpClient.ConnectError, Scope.Scope>
+  readonly attach: (
+    name: string,
+    transport: Transport,
+    policy?: HostPolicy,
+  ) => Effect.Effect<void, McpClient.ConnectError, Scope.Scope>
   readonly tools: () => Effect.Effect<Tool[]>
+  /** Whether any live attachment currently serves this name. */
+  readonly isAttached: (server: ServerName | string) => Effect.Effect<boolean>
   readonly callTool: (input: {
     readonly server: ServerName | string
     readonly name: string
     readonly args?: Record<string, unknown>
     readonly sessionID?: Session.ID
+    readonly onProgress?: (progress: {
+      readonly progress: number
+      readonly total?: number
+      readonly message?: string
+    }) => void
   }) => Effect.Effect<ToolResult, NotFoundError | ToolCallError>
   readonly instructions: () => Effect.Effect<ServerInstructions[]>
   readonly prompts: () => Effect.Effect<Prompt[]>
@@ -554,8 +587,8 @@ export const layer = (options?: Options) =>
         yield* bus.publish(McpEvent.StatusChanged, { server: name })
       })
 
-      const toAttachedTools = (server: ServerName, tools: ReadonlyArray<McpClient.Tool>) =>
-        tools.map((tool): Tool => ({ ...tool, server }))
+      const toAttachedTools = (server: ServerName, tools: ReadonlyArray<McpClient.Tool>, policy?: HostPolicy) =>
+        tools.map((tool): Tool => ({ ...tool, server, ...hostFields(policy) }))
 
       const detach = Effect.fnUntraced(function* (name: ServerName, entry: AttachedEntry) {
         const stack = attached.get(name) ?? []
@@ -580,7 +613,7 @@ export const layer = (options?: Options) =>
         yield* next.client.tools().pipe(
           Effect.timeout(FALLBACK_LIST_TIMEOUT),
           Effect.map((tools) => {
-            next.tools = toAttachedTools(name, tools)
+            next.tools = toAttachedTools(name, tools, next.policy)
           }),
           Effect.ignore,
         )
@@ -591,7 +624,7 @@ export const layer = (options?: Options) =>
 
       // The handshake runs interruptibly and outside the lock, so a stalled client never blocks detach or
       // fallback for its name; the lock only guards adding the finished connection to the stack.
-      const attach = Effect.fnUntraced(function* (name: ServerName, transport: Transport) {
+      const attach = Effect.fnUntraced(function* (name: ServerName, transport: Transport, policy?: HostPolicy) {
         const { McpClient } = yield* Effect.promise(() => import("./client.js"))
         const scope = yield* Effect.acquireRelease(Scope.fork(root), (scope) => Scope.close(scope, Exit.void))
         // The client registers its own close only once initialized; closing the scope mid-handshake (caller
@@ -600,7 +633,15 @@ export const layer = (options?: Options) =>
         let closed = false
         const result = yield* McpClient.connect(
           name,
-          { type: "attached", transport },
+          {
+            type: "attached",
+            transport,
+            // The SDK's own execution timeout honors a verified trusted host's override; untrusted
+            // attachments stay capped at ATTACHED_EXECUTION_TIMEOUT.
+            ...(policy?.trustedHost === true && policy.executionTimeoutMs !== undefined
+              ? { timeout: { execution: policy.executionTimeoutMs } }
+              : {}),
+          },
           location.directory,
           undefined,
           elicitation,
@@ -628,7 +669,13 @@ export const layer = (options?: Options) =>
             yield* Scope.close(scope, Exit.void)
             return yield* new McpClient.ConnectError({ server: name, message: "Connection closed" })
           }
-          const entry: AttachedEntry = { scope, client: result.connection, tools: toAttachedTools(name, result.tools) }
+          const entry: AttachedEntry = {
+            scope,
+            client: result.connection,
+            ...(policy === undefined ? {} : { policy }),
+            ...(result.connection.instructions === undefined ? {} : { instructions: result.connection.instructions }),
+            tools: toAttachedTools(name, result.tools, policy),
+          }
           attached.set(name, [...(attached.get(name) ?? []), entry])
           const locked = <E>(effect: Effect.Effect<void, E>) =>
             fork(effect.pipe(attachedLocks.withLock(name), Effect.ignore))
@@ -637,7 +684,7 @@ export const layer = (options?: Options) =>
           const refresh = result.connection.tools().pipe(
             Effect.timeout(FALLBACK_LIST_TIMEOUT),
             Effect.map((tools) => {
-              entry.tools = toAttachedTools(name, tools)
+              entry.tools = toAttachedTools(name, tools, entry.policy)
             }),
             Effect.andThen(bus.publish(McpEvent.ToolsChanged, { server: name })),
           )
@@ -788,8 +835,8 @@ export const layer = (options?: Options) =>
           overrides.set(name, false)
           yield* state.reload()
         }),
-        attach: Effect.fn("MCP.attach")(function* (client, transport) {
-          yield* attach(ServerName.make(client), transport)
+        attach: Effect.fn("MCP.attach")(function* (client, transport, policy) {
+          yield* attach(ServerName.make(client), transport, policy)
         }),
         // Reads report what is connected now; servers still starting contribute once they publish a change.
         tools: Effect.fn("MCP.tools")(function* () {
@@ -803,15 +850,25 @@ export const layer = (options?: Options) =>
             ...clients,
           ].toSorted((a, b) => a.server.localeCompare(b.server) || a.name.localeCompare(b.name))
         }),
+        isAttached: Effect.fn("MCP.isAttached")(function* (server) {
+          return (attached.get(ServerName.make(server))?.length ?? 0) > 0
+        }),
         callTool: Effect.fn("MCP.callTool")(function* (input) {
           const server = ServerName.make(input.server)
           // An attached client owns the tools it lists, even when a configured server shares its name, and
           // owns its name outright when no configured server has it.
           const client = attached.get(server)?.at(-1)
           if (client && (client.tools.some((tool) => tool.name === input.name) || !entries.has(server))) {
+            const timeout = client.policy?.trustedHost === true ? client.policy.executionTimeoutMs : undefined
             const result = yield* client.client
-              .callTool({ name: input.name, args: input.args, sessionID: input.sessionID })
+              .callTool({
+                name: input.name,
+                args: input.args,
+                sessionID: input.sessionID,
+                onProgress: input.onProgress,
+              })
               .pipe(
+                Effect.timeout(timeout ?? Duration.infinity),
                 Effect.mapError(
                   (error) =>
                     new ToolCallError({
@@ -832,7 +889,12 @@ export const layer = (options?: Options) =>
               message: unavailable(target.name, target.entry.status),
             })
           const result = yield* recovering(target.name, target.entry, target.entry.client, (connection) =>
-            connection.callTool({ name: input.name, args: input.args, sessionID: input.sessionID }),
+            connection.callTool({
+              name: input.name,
+              args: input.args,
+              sessionID: input.sessionID,
+              onProgress: input.onProgress,
+            }),
           ).pipe(
             Effect.mapError(
               (error) =>
@@ -846,13 +908,22 @@ export const layer = (options?: Options) =>
           return { ...result, server: target.name, tool: input.name }
         }),
         instructions: Effect.fn("MCP.instructions")(function* () {
-          return Array.from(entries)
-            .flatMap(([server, entry]) => {
-              const instructions = entry.client?.instructions
-              if (!instructions) return []
-              return [{ server, instructions }]
-            })
-            .toSorted((a, b) => a.server.localeCompare(b.server))
+          const configured = Array.from(entries).flatMap(([server, entry]) => {
+            const instructions = entry.client?.instructions
+            if (!instructions) return []
+            return [{ server, instructions }]
+          })
+          // Only the trusted host may add prompt guidance; untrusted attachments could inject arbitrary text.
+          const hosted = Array.from(attached).flatMap(([server, stack]) => {
+            const entry = stack.at(-1)
+            if (entry?.policy?.trustedHost !== true || !entry.instructions) return []
+            return [{ server, instructions: entry.instructions }]
+          })
+          // An attached host shadows a configured server of the same name, matching tools().
+          const shadowed = new Set(hosted.map((item) => item.server))
+          return [...configured.filter((item) => !shadowed.has(item.server)), ...hosted].toSorted((a, b) =>
+            a.server < b.server ? -1 : a.server > b.server ? 1 : 0,
+          )
         }),
         prompts: Effect.fn("MCP.prompts")(function* () {
           return Array.from(entries.values())
@@ -988,7 +1059,7 @@ function toElicitationField(key: string, property: ElicitationProperty, required
       return {
         ...base,
         type: "string",
-        format: "format" in property ? property.format : undefined,
+        format: "format" in property ? stringFormat(property.format) : undefined,
         minLength: "minLength" in property ? property.minLength : undefined,
         maxLength: "maxLength" in property ? property.maxLength : undefined,
         default: property.default,
@@ -1000,3 +1071,21 @@ function toElicitationField(key: string, property: ElicitationProperty, required
 }
 
 type ElicitationProperty = McpClient.ElicitationFormParams["requestedSchema"]["properties"][string]
+
+type StringFormat = NonNullable<Extract<Form.Field, { readonly type: "string" }>["format"]>
+const STRING_FORMATS: ReadonlyArray<StringFormat> = ["email", "uri", "date", "date-time", "password"]
+
+// Servers may send any JSON Schema format; unsupported ones degrade to plain strings so stored forms stay valid.
+function stringFormat(format: string | undefined) {
+  return STRING_FORMATS.find((item) => item === format)
+}
+
+const hostFields = (policy?: HostPolicy) => {
+  if (policy?.trustedHost !== true) return {}
+  return {
+    trustedHost: true,
+    ...(policy.permissionNamespace === undefined ? {} : { permissionNamespace: policy.permissionNamespace }),
+    ...(policy.codemode === undefined ? {} : { codemode: policy.codemode }),
+    ...(policy.executionTimeoutMs === undefined ? {} : { executionTimeout: policy.executionTimeoutMs }),
+  }
+}

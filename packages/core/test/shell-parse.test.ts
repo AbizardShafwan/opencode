@@ -19,8 +19,17 @@ describe("ShellParse", () => {
     })
   })
 
-  test("defaults to portable scanning when parser wasm assets are empty", async () => {
-    const result = await Effect.runPromise(
+  test("keeps the agent-device subcommand in the reusable prefix", async () => {
+    const command = "agent-device tap 120 260"
+    const legacy = await Effect.runPromise(ShellParse.scan(command, "/bin/bash", "/workspace"))
+    expect(legacy.commands).toEqual([{ resource: command, save: "agent-device tap *" }])
+    const portable = await Effect.runPromise(
+      ShellParse.scan(command, "/bin/bash", "/workspace", { portable: true }),
+    )
+    expect(portable).toEqual(legacy)
+  })
+
+  test("defaults to portable scanning when parser wasm assets are empty", async () => {    const result = await Effect.runPromise(
       ShellParse.scan("git status && npm run test -- --watch", "/bin/bash", "/workspace", {
         wasm: shellParserWasm,
       }),

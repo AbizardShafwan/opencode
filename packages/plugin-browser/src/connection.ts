@@ -18,6 +18,39 @@ type Attachment = {
 
 export type Connection = Effect.Success<ReturnType<typeof make>>
 
+/**
+ * Removes browser grants left behind by an attachment that outlived its process. Activation starts with no
+ * attached browser, so every persisted blanket `browser: allow` is stale and would otherwise expose the
+ * plugin's tools to sessions that no desktop browser serves. Only this Location's sessions are pruned,
+ * because another Location may still have a live attachment.
+ */
+export const pruneStaleGrants = (
+  sessions: Pick<Context["session"], "list" | "update">,
+  location: Pick<Context["location"], "directory" | "workspaceID">,
+): Effect.Effect<void, unknown> =>
+  Effect.gen(function* () {
+    // Collect first: updating a session changes its list sort key, which would make later pages skip entries.
+    const stale: Array<{ sessionID: Session.ID; permissions: NonNullable<Session.Info["permissions"]> }> = []
+    let cursor: Session.ListCursor | undefined
+    do {
+      const page = yield* sessions.list({ limit: 100, ...(cursor === undefined ? {} : { cursor }) })
+      for (const session of page.data) {
+        if (
+          session.location.directory !== location.directory ||
+          session.location.workspaceID !== location.workspaceID
+        )
+          continue
+        const permissions = session.permissions ?? []
+        const kept = permissions.filter(
+          (rule) => !(rule.action === "browser" && rule.resource === "*" && rule.effect === "allow"),
+        )
+        if (kept.length !== permissions.length) stale.push({ sessionID: session.id, permissions: kept })
+      }
+      cursor = page.cursor.next
+    } while (cursor !== undefined)
+    yield* Effect.forEach(stale, (entry) => sessions.update(entry), { discard: true, concurrency: 4 })
+  })
+
 export const make = Effect.fn("BrowserConnection.make")(function* (
   ctx: Pick<Context, "agent" | "rpc" | "session" | "location" | "event">,
 ) {
@@ -26,16 +59,22 @@ export const make = Effect.fn("BrowserConnection.make")(function* (
   yield* ctx.agent.transform((editor) =>
     editor.list().forEach((agent) => agent.permissions.push({ action: "browser", resource: "*", effect: "deny" })),
   )
+  yield* pruneStaleGrants(ctx.session, ctx.location).pipe(
+    Effect.catchCause((cause) => Effect.logWarning("failed to prune stale browser grants", { cause })),
+  )
   // Each attachment adds and removes its own allow, so a replaced attachment keeps the new one's.
   const grant = (sessionID: Session.ID) =>
     Effect.acquireRelease(
       ctx.session.get({ sessionID }).pipe(
-        Effect.flatMap((session) =>
-          ctx.session.update({
+        Effect.flatMap((session) => {
+          const permissions = session.permissions ?? []
+          if (permissions.some((rule) => rule.action === "browser" && rule.resource === "*" && rule.effect === "allow"))
+            return Effect.void
+          return ctx.session.update({
             sessionID,
-            permissions: [...(session.permissions ?? []), { action: "browser", resource: "*", effect: "allow" }],
-          }),
-        ),
+            permissions: [...permissions, { action: "browser", resource: "*", effect: "allow" }],
+          })
+        }),
         Effect.orDie,
       ),
       () =>

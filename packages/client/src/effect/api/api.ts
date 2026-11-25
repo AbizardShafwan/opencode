@@ -1694,6 +1694,7 @@ export type McpClientTokenInput = {
   readonly location?: { readonly directory?: string | undefined } | undefined
   readonly name: string
   readonly "x-opencode-ticket"?: string | undefined
+  readonly "x-opencode-host-token"?: string | undefined
 }
 export type McpClientTokenOutput = { readonly location: Location.PublicRef; readonly data: PtyTicket.ConnectToken }
 export type McpClientTokenOperation<E = never> = (input: McpClientTokenInput) => Effect.Effect<McpClientTokenOutput, E>
@@ -2147,11 +2148,12 @@ export interface ExperimentalApi<E = never> {
 }
 
 export type JobListInput = {
+  readonly location?: { readonly directory?: string | undefined } | undefined
   readonly sessionID?: Session.ID | undefined
   readonly kind?: "shell" | "subagent" | "image" | undefined
   readonly descendants?: boolean | undefined
 }
-export type JobListOutput = ReadonlyArray<Job.Info>
+export type JobListOutput = { readonly location: Location.PublicRef; readonly data: Job.List }
 export type JobListOperation<E = never> = (input?: JobListInput) => Effect.Effect<JobListOutput, E>
 
 export interface JobApi<E = never> {

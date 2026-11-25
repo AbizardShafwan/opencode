@@ -16,6 +16,7 @@ import { connectClientMcp } from "../../client/src/mcp"
 import { tmpdirScoped } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
 import { ServerProcess } from "../src/process"
+import type { ServerOptions } from "../src/options"
 import { createRoutes } from "../src/routes"
 
 // The DOM lib hides Bun's WebSocket constructor overload that accepts upgrade request headers.
@@ -25,7 +26,7 @@ declare const WebSocket: {
 
 const authorization = `Basic ${btoa("opencode:secret")}`
 
-const serve = Effect.fnUntraced(function* () {
+const serve = Effect.fnUntraced(function* (extra: Partial<ServerOptions> = {}) {
   const directory = (yield* tmpdirScoped("opencode-client-mcp-")).path
   const context = yield* Layer.build(
     createRoutes({
@@ -35,6 +36,7 @@ const serve = Effect.fnUntraced(function* () {
       models: { fetch: false },
       config: { directory, project: false, content: "{}" },
       fs: { filewatcher: false },
+      ...extra,
     }).pipe(Layer.provideMerge(NodeHttpServer.layerHttpServices)),
   )
   const server = createServer()
@@ -364,6 +366,41 @@ it.live(
       const closed = yield* Scope.close(scope, Exit.void).pipe(Effect.timeoutOption("5 seconds"))
       expect(closed._tag).toBe("Some")
       yield* until(() => client.state.closed)
+    }),
+  20_000,
+)
+
+it.live(
+  "grants host policy only to connections presenting the bootstrap token",
+  () =>
+    Effect.gen(function* () {
+      const server = yield* serve({ trustedHost: { token: "host-secret" } })
+      const tools = () => Effect.runPromise(server.inLocation(Mcp.Service.use((mcp) => mcp.tools())))
+
+      const spoof = yield* connectClient(server.url({ name: "t3-code" }), { authorization })
+      yield* until(async () => (await tools()).length > 0)
+      const spoofed = (yield* Effect.promise(tools)).find((tool) => tool.server === "t3-code")
+      expect(spoofed?.trustedHost).toBeUndefined()
+      expect(spoofed?.codemode).toBeUndefined()
+
+      const host = yield* connectClient(server.url({ name: "t3-code-host" }), {
+        authorization,
+        "x-opencode-host-token": "host-secret",
+      })
+      yield* until(async () => (await tools()).some((tool) => tool.server === "t3-code-host"))
+      expect((yield* Effect.promise(tools)).find((tool) => tool.server === "t3-code-host")).toMatchObject({
+        trustedHost: true,
+        permissionNamespace: "t3-code",
+        codemode: false,
+      })
+      yield* until(() =>
+        Effect.runPromise(server.inLocation(registryIDs)).then((ids) => ids.includes("t3-code-host_open_terminal")),
+      )
+
+      // Disconnect before the server stops, like the other tests here.
+      spoof.socket.close()
+      host.socket.close()
+      yield* until(async () => (await tools()).length === 0)
     }),
   20_000,
 )

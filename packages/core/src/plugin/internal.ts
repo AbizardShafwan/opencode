@@ -49,6 +49,7 @@ import { InstructionDiscovery } from "../instruction-discovery.js"
 import { Integration } from "../integration.js"
 import { Job } from "../job.js"
 import { KV } from "../kv.js"
+import { SecretFile } from "../secret-file.js"
 import { Location } from "../location.js"
 import { ManagedPolicy } from "../managed-policy.js"
 import { ModelsDev } from "../models-dev.js"
@@ -62,6 +63,7 @@ import { Ripgrep } from "../ripgrep.js"
 import { Session } from "../session.js"
 import { SessionExecution } from "../session/execution.js"
 import { SessionCompaction } from "../session/compaction.js"
+import { SessionExternalWait } from "../session/external-wait.js"
 import { SessionInstructions } from "../session/instructions.js"
 import { SubagentJob } from "../session/subagent-job.js"
 import { Shell } from "../shell.js"
@@ -132,6 +134,7 @@ const services = [
   Integration.Service,
   Job.Service,
   KV.Service,
+  SecretFile.Service,
   LLMClient.Service,
   Location.Service,
   ManagedPolicy.Service,
@@ -146,6 +149,7 @@ const services = [
   Ripgrep.Service,
   Session.Service,
   SessionExecution.Service,
+  SessionExternalWait.Service,
   SessionStore.Service,
   SessionCompaction.Service,
   SessionInstructions.Service,
@@ -189,6 +193,7 @@ export const requirements = LayerNode.group([
   Integration.node,
   Job.node,
   KV.node,
+  SecretFile.node,
   llmClient,
   Location.node,
   ManagedPolicy.node,
@@ -203,6 +208,7 @@ export const requirements = LayerNode.group([
   Ripgrep.node,
   Session.node,
   SessionExecution.node,
+  SessionExternalWait.node,
   SessionStore.node,
   SessionCompaction.node,
   SessionInstructions.node,

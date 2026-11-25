@@ -25,8 +25,10 @@ export const Plugin = define({
       Effect.gen(function* () {
         // The outer Code Mode tool is built per snapshot rather than registered, so it cannot be
         // looked up here. Its `{ code }` input is trivial; the tools it calls are repaired normally.
-        if (event.tool === "execute") return
-        const tool = (yield* ctx.tool.list()).find((tool) => tool.id === event.tool)
+        // Aliased direct tools advertise a name other than their ID, so prefer the resolved registry ID.
+        const id = event.toolID ?? event.tool
+        if (id === "execute") return
+        const tool = (yield* ctx.tool.list()).find((tool) => tool.id === id)
         if (!tool) return
         const schema = definition(tool).inputSchema
         if (schema.type !== "object") return

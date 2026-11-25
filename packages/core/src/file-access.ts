@@ -3,12 +3,14 @@ export * as FileAccess from "./file-access.js"
 import { makeLocationNode } from "@opencode/util/effect/app-node"
 import { FSUtil } from "@opencode/util/fs-util"
 import { Global } from "@opencode/util/global"
+import type { ToolFailure } from "@opencode/ai"
 import { Array, Context, Effect, Layer, Schema } from "effect"
 import path from "path"
 import { Location } from "./location.js"
 import { Permission } from "./permission.js"
 import { Project } from "./project.js"
 import { AbsolutePath } from "./schema.js"
+import { SecretFile } from "./secret-file.js"
 import type { SessionErrors } from "./session/error.js"
 import type { Tool } from "./tool.js"
 
@@ -58,7 +60,7 @@ export interface Interface {
     file: string,
     context: Invocation,
     options?: ReadOptions,
-  ) => Effect.Effect<Target, FSUtil.Error | Permission.Error | SessionErrors.NotFoundError>
+  ) => Effect.Effect<Target, FSUtil.Error | Permission.Error | SessionErrors.NotFoundError | ToolFailure>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/FileAccess") {}
@@ -89,6 +91,7 @@ const layer = Layer.effect(
     const fs = yield* FSUtil.Service
     const location = yield* Location.Service
     const permission = yield* Permission.Service
+    const secrets = yield* SecretFile.Service
 
     const resolve = Effect.fn("FileAccess.resolve")(function* (input: ResolveInput) {
       const absolute = AbsolutePath.make(resolvePath(location.directory, input.path))
@@ -148,6 +151,8 @@ const layer = Layer.effect(
     ) {
       const target = yield* resolve({ path: file, kind: options ? "file" : undefined })
       const sibling = options && path.dirname(target.absolute) === path.dirname(options.siblingOf.absolute)
+      // Resolves symlinks, so a link to a host-delivered secret file is refused too.
+      yield* secrets.assertReadable(target.absolute)
 
       // Filename recovery shares the directory approval, but checks the recovered file's own read rules.
       if (!sibling) yield* authorizeExternal([target], context)
@@ -164,4 +169,8 @@ const layer = Layer.effect(
   }),
 )
 
-export const node = makeLocationNode({ service: Service, layer, deps: [FSUtil.node, Location.node, Permission.node] })
+export const node = makeLocationNode({
+  service: Service,
+  layer,
+  deps: [FSUtil.node, Location.node, Permission.node, SecretFile.node],
+})

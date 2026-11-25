@@ -7,7 +7,10 @@ import { Event } from "@opencode/schema/event"
 import { Goal } from "@opencode/schema/goal"
 import { GoalPlugin } from "@opencode/core/plugin/goal"
 import { Job } from "@opencode/core/job"
+import { Mcp } from "@opencode/core/mcp/index"
 import { Session } from "@opencode/core/session"
+import { SessionExternalWait } from "@opencode/core/session/external-wait"
+import { SessionMessage } from "@opencode/core/session/message"
 import { SessionStore } from "@opencode/core/session/store"
 import { AbsolutePath } from "@opencode/core/schema"
 import type { SessionEvent } from "@opencode/core/session/event"
@@ -39,14 +42,18 @@ const step = (stepSessionID: Session.ID) =>
 /** Runs the goal plugin against stubbed domains: plugin storage in memory, and RPC that records what it publishes. */
 const run = Effect.fnUntraced(function* (
   seed?: Goal.State,
-  options?: { isExecuting?: boolean; runningBackground?: unknown[] },
+  options?: { isExecuting?: boolean; runningBackground?: unknown[]; externalWait?: { readonly live: boolean } },
 ) {
   let backgroundJobs = options?.runningBackground ?? []
+  let externalLive = options?.externalWait?.live ?? false
   const stored = new Map<string, Schema.Json>(seed ? [[`session:${sessionID}`, seed]] : [])
   const changed: unknown[] = []
   const handlers: { get?: (input: { sessionID: string }) => Effect.Effect<Goal.State | null> } = {}
   const events = yield* Queue.unbounded<Watched>()
   const commands: CommandDefinition[] = []
+  const hooks = new Map<string, (event: never) => Effect.Effect<void>>()
+  const judgePrompts: string[] = []
+  let judgeReply = '{"verdict":"done","reason":"Done."}'
   const info = (id: Session.ID) =>
     // SAFETY: the plugin reads only the id, parent, title and creation time of a Session.
     ({
@@ -58,10 +65,16 @@ const run = Effect.fnUntraced(function* (
     }) as unknown as Session.Info
   const session: Partial<Plugin.Context["session"]> = {
     // SAFETY: these tests drive the plugin through events and commands, not its session hooks.
-    hook: (() => Effect.void) as never,
+    hook: ((name: string, callback: (event: never) => Effect.Effect<void>) =>
+      Effect.sync(() => void hooks.set(name, callback))) as never,
     get: (input) => Effect.sync(() => info(input.sessionID)),
     update: () => Effect.void,
-    synthetic: () => Effect.void as never,
+    synthetic: () => Effect.succeed({ id: SessionMessage.ID.create() } as never),
+    generate: ((input: { readonly prompt: string }) =>
+      Effect.sync(() => {
+        judgePrompts.push(input.prompt)
+        return { text: judgeReply }
+      })) as never,
   }
   const start = GoalPlugin.Plugin.effect(
     host({
@@ -107,15 +120,54 @@ const run = Effect.fnUntraced(function* (
   const storeService = SessionStore.Service.of({
     get: (id: Session.ID) => Effect.sync(() => ({ id, parentID: parents[id] } as any)),
   } as any)
+  const waitService = SessionExternalWait.Service.of(
+    {
+      list: (_sessionID: Session.ID, listOptions?: SessionExternalWait.ListOptions) =>
+        Effect.gen(function* () {
+          if (!externalLive) return []
+          if (listOptions?.isServerLive && !(yield* listOptions.isServerLive("t3-code-test"))) return []
+          return [
+            {
+              waitID: "pr-watch:1",
+              sessionID,
+              source: "pull_request_watch",
+              server: "t3-code-test",
+              description: "Watching pull request #1",
+              expiresAt: 0,
+              boot: "test",
+            },
+          ]
+        }),
+    } as unknown as SessionExternalWait.Interface,
+  )
+  const mcpService = Mcp.Service.of({
+    isAttached: () => Effect.succeed(externalLive),
+  } as unknown as Mcp.Interface)
   yield* start.pipe(
     Effect.provideService(Job.Service, jobService),
     Effect.provideService(SessionStore.Service, storeService),
+    Effect.provideService(SessionExternalWait.Service, waitService),
+    Effect.provideService(Mcp.Service, mcpService),
   )
   // Let the forked event watcher and startup sweep start.
   yield* Effect.yieldNow
   return {
     setBackgroundJobs: (jobs: unknown[]) => {
       backgroundJobs = jobs
+    },
+    setExternalLive: (live: boolean) => {
+      externalLive = live
+    },
+    /** Answers the next goal-reviewer generation with this verdict line. */
+    reply: (text: string) => {
+      judgeReply = text
+    },
+    judgePrompts,
+    /** Runs the plugin's registered experimental.idle hook as the runner would. */
+    idle: (background: unknown[]) => {
+      const handler = hooks.get("experimental.idle")
+      if (!handler) return Effect.die(new Error("the goal plugin did not register experimental.idle"))
+      return handler({ sessionID, background } as never)
     },
     goal: (target = sessionID) =>
       Option.getOrUndefined(Schema.decodeUnknownOption(Goal.State)(stored.get(`session:${target}`))),
@@ -340,6 +392,58 @@ describe("goal plugin waiting", () => {
       plugin.setBackgroundJobs([])
 
       // Advancing by WAIT_LIMIT again with no background work pauses it
+      yield* TestClock.adjust(GoalPlugin.WAIT_LIMIT)
+      expect(plugin.goal()).toMatchObject({
+        status: "paused",
+        reason: "Nothing ran for 30 minutes while the goal waited on background work",
+      })
+    }),
+  )
+
+  it.effect("offers and honors wait while an external wait is outstanding", () =>
+    Effect.gen(function* () {
+      const plugin = yield* run({
+        id: "goal-external",
+        objective: "Land the pull request",
+        status: "active",
+        rounds: 0,
+        maxRounds: 50,
+        boot: GoalPlugin.boot(),
+        updatedAt: 0,
+      })
+      plugin.reply('{"verdict":"wait","reason":"Watching the pull request"}')
+
+      yield* plugin.idle([
+        {
+          kind: "external",
+          sessionID,
+          waitID: "pr-watch:1",
+          source: "pull_request_watch",
+          server: "t3-code-test",
+          description: "Watching pull request #1",
+        },
+      ])
+
+      expect(plugin.judgePrompts).toHaveLength(1)
+      expect(plugin.judgePrompts[0]).toContain("External work still running:")
+      expect(plugin.judgePrompts[0]).toContain("Watching pull request #1")
+      // The reviewer's "wait" is accepted and the goal keeps its budget instead of pausing.
+      expect(plugin.goal()).toMatchObject({ status: "active", rounds: 0 })
+    }),
+  )
+
+  it.effect("keeps waiting while a live external wait exists and pauses once its host disconnects", () =>
+    Effect.gen(function* () {
+      const plugin = yield* run(undefined, { externalWait: { live: true } })
+      yield* plugin.command("Ship the release")
+      yield* plugin.emit("session.execution.succeeded")
+
+      // The host holds a live PR watch, so outstanding work keeps the goal waiting.
+      yield* TestClock.adjust(GoalPlugin.WAIT_LIMIT)
+      expect(plugin.goal()).toMatchObject({ status: "active" })
+
+      // The MCP host disconnects: the lease is no longer outstanding, so the next check pauses.
+      plugin.setExternalLive(false)
       yield* TestClock.adjust(GoalPlugin.WAIT_LIMIT)
       expect(plugin.goal()).toMatchObject({
         status: "paused",

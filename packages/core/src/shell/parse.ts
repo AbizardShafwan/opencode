@@ -46,6 +46,7 @@ const ARITY: Record<string, number> = {
   touch: 1,
   unset: 1,
   which: 1,
+  "agent-device": 2,
   aws: 3,
   az: 3,
   bazel: 2,

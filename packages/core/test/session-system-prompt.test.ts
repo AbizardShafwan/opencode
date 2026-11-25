@@ -36,12 +36,17 @@ describe("Memyr system policy", () => {
       "23e1499cc873ade8cd5eb41a8b369587036d1dd64d8f553f69f09675e3f9752f",
     )
     expect(createHash("sha256").update(VISUAL_POLICY).digest("hex")).toBe(
-      "8bfbb5d25ed5decf81a7320715125c58943570ab11db8a63ce902fda07170243",
+      "67054ce461e1db2d0a086a4d255f9e75a55901d332230dea8ee66c2c8ae69cf7",
     )
     expect(SessionSystemPrompt.make()).toBe(`${POLICY}\n${VISUAL_POLICY}`)
     expect(SessionSystemPrompt.make()).toContain("<visual_verification>")
     expect(SessionSystemPrompt.make()).toContain("inspect the resulting image with the read tool")
     expect(SessionSystemPrompt.make()).toContain("Do not substitute a mockup for a screenshot")
+    expect(VISUAL_POLICY).toContain(
+      "Host or tool contracts that forbid unrequested preview or browser captures take precedence over this proactive self-verification.",
+    )
+    expect(VISUAL_POLICY).toContain("`html_preview` followed by `html_render`")
+    expect(VISUAL_POLICY).toContain("Screen and video recordings are user-facing artifacts only")
   })
 
   test.each(["gpt-6-astra", "claude-opus-4-8", "kimi-k2", "trinity", "meta/muse", "deepseek-v4-flash", "unknown"])(

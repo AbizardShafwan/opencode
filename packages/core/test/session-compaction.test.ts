@@ -114,6 +114,8 @@ test("compaction prompt preserves detailed work state and relevant files", () =>
   expect(prompt).toContain("### Blocked")
   expect(prompt).toContain("## Open Questions")
   expect(prompt).toContain("## Relevant Files")
+  expect(prompt).toContain("## Links & References")
+  expect(prompt).toContain("t3-thread://")
   expect(prompt).toContain("preserve their exact wording in double quotes")
   expect(prompt).toContain("including whether changes are uncommitted, committed, pushed, under review, or merged")
   expect(prompt).toContain("The newest messages remain verbatim beside this checkpoint")
@@ -273,6 +275,7 @@ test("compaction prompt requires the checkpoint headings in order", () => {
     "## Next Move",
     "## Open Questions",
     "## Relevant Files",
+    "## Links & References",
     "## Important Context",
   ])
 })

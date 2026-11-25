@@ -184,14 +184,15 @@ export const layer = Layer.effect(
           if (entry.state.status !== "pending") return yield* new AlreadySettledError({ id: input.id })
           const invalid = validateAnswer(entry.form.fields, input.answer)
           if (invalid) return yield* new InvalidAnswerError({ id: input.id, message: invalid })
-          const next: TerminalState = { status: "answered", answer: input.answer }
+          // Password answers reach only the in-memory asker; events and retained state get a redacted copy.
+          const redacted = redactPasswords(entry.form.fields, input.answer)
           yield* bus.publish(Form.Event.Replied, {
             id: input.id,
             sessionID: entry.form.sessionID,
-            answer: input.answer,
+            answer: redacted,
           })
-          yield* Cache.set(forms, input.id, { ...entry, state: next })
-          yield* Deferred.succeed(entry.deferred, next)
+          yield* Cache.set(forms, input.id, { ...entry, state: { status: "answered", answer: redacted } })
+          yield* Deferred.succeed(entry.deferred, { status: "answered", answer: input.answer })
         }),
       ),
     )
@@ -255,6 +256,19 @@ export function validateAnswer(form: ReadonlyArray<Form.Field>, answer: Answer) 
 }
 
 type InputField = Exclude<Form.Field, Form.ExternalField>
+
+export const REDACTED = "[REDACTED]"
+
+/** Replaces answers to `format: "password"` string fields with a placeholder. */
+export function redactPasswords(fields: ReadonlyArray<Form.Field>, answer: Answer): Answer {
+  const secret = new Set(
+    fields.filter((field) => field.type === "string" && field.format === "password").map((field) => field.key),
+  )
+  if (secret.size === 0) return answer
+  return Object.fromEntries(
+    Object.entries(answer).map(([key, value]) => [key, secret.has(key) ? REDACTED : value] as const),
+  )
+}
 
 function isActive(field: InputField, answer: Answer) {
   if (!field.when) return true

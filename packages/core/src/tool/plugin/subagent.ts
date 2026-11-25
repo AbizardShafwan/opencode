@@ -72,6 +72,40 @@ export const description = [
   "Use background only for independent work that can run while you continue elsewhere.",
 ].join("\n")
 
+/** Keeps in-process subagents distinct from the host's managed delegation tool when both are offered. */
+const DELEGATION_ROUTING = [
+  "Routing: use this in-process subagent when the child should share this session's provider, workspace and tools.",
+  'Use the host delegate_task tool instead for another provider\'s model, explicit child settings, or isolation: "worktree".',
+].join("\n")
+
+/** Composes a subagent tool description with its available agents and the host delegation boundary. */
+export const describeSubagents = (input: {
+  readonly description: string
+  readonly available: ReadonlyArray<Pick<Agent.Info, "id" | "description" | "model" | "variant">>
+  readonly hostDelegation: boolean
+}) => {
+  const sections = [input.description]
+  if (input.available.length > 0)
+    sections.push(
+      "",
+      "Available subagents:",
+      ...input.available.map((agent) =>
+        [
+          `- ${agent.id}: ${agent.description ?? "This subagent should only be called when explicitly requested."}`,
+          agent.model ? `Model: ${agent.model.providerID}/${agent.model.id}.` : "Model: inherited.",
+          (agent.model?.variant ?? agent.variant)
+            ? `Thinking variant: ${agent.model?.variant ?? agent.variant}.`
+            : "",
+        ]
+          .filter(Boolean)
+          .join(" "),
+      ),
+    )
+  // The host's own delegation tool needs a boundary, or the model treats both as interchangeable.
+  if (input.hostDelegation) sections.push("", DELEGATION_ROUTING)
+  return sections.join("\n")
+}
+
 export const Plugin = {
   id: "opencode.tool.subagent",
   effect: Effect.fn("SubagentTool.Plugin")(function* (ctx: Context) {
@@ -400,25 +434,12 @@ export const Plugin = {
               Permission.evaluate(name, agent.id, selected.permissions).effect !== "deny",
           )
           .toSorted((a, b) => a.id.localeCompare(b.id))
-        if (available.length === 0) return
-        for (const tool of tools) {
-          tool.description = [
-            tool.description,
-            "",
-            "Available subagents:",
-            ...available.map((agent) =>
-              [
-                `- ${agent.id}: ${agent.description ?? "This subagent should only be called when explicitly requested."}`,
-                agent.model ? `Model: ${agent.model.providerID}/${agent.model.id}.` : "Model: inherited.",
-                (agent.model?.variant ?? agent.variant)
-                  ? `Thinking variant: ${agent.model?.variant ?? agent.variant}.`
-                  : "",
-              ]
-                .filter(Boolean)
-                .join(" "),
-            ),
-          ].join("\n")
-        }
+        const hostDelegation = Object.keys(event.tools).some(
+          (key) => key === "delegate_task" || key.endsWith("_delegate_task"),
+        )
+        if (available.length === 0 && !hostDelegation) return
+        for (const tool of tools)
+          tool.description = describeSubagents({ description: tool.description, available, hostDelegation })
       })
     yield* ctx.session.hook("context", hook)
     yield* ctx.session.hook("compaction", hook)

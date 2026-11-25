@@ -35,6 +35,10 @@ type Input = {
 export const UnshownQuestionMessage =
   "The question couldn't be shown to the user in this client. Continue without an answer: make reasonable assumptions and state them, or ask the user in your reply if you can't proceed."
 
+// Credential questions are never shown in form mode, so steer the model to a dedicated secret channel.
+export const UnshownCredentialMessage =
+  "Credentials, logins, API tokens, PINs, pairing codes and sudo passwords can't be collected through a question in this client. If a dedicated secret-request tool (such as `request_secret`) is available, use it instead; otherwise explain what is needed. Never ask the user to paste a secret in plain-text chat."
+
 function cancel(client: OpenCodeClient, form: Form.Info, message?: string) {
   return client.session.form.cancel({ sessionID: form.sessionID, formID: form.id, message }).pipe(
     Effect.catchTag(["FormAlreadySettledError", "FormNotFoundError"], () => Effect.void),
@@ -66,9 +70,15 @@ export function requestedSchema(form: AskedForm, capabilities: Capabilities): El
 
 // The question tool returns the message to the model, so the turn continues instead of ending as interrupted.
 export function cancelUnshown(client: OpenCodeClient, form: Form.Info) {
-  return cancel(client, form, form.metadata?.kind === QuestionKind ? UnshownQuestionMessage : undefined).pipe(
+  return cancel(client, form, unshownMessage(form)).pipe(
     Effect.uninterruptible,
   )
+}
+
+function unshownMessage(form: Form.Info) {
+  if (form.metadata?.kind !== QuestionKind) return undefined
+  if (form.fields.some(credentialLike)) return UnshownCredentialMessage
+  return UnshownQuestionMessage
 }
 
 function answer(form: AskedForm, response: CreateElicitationResponse): Form.Answer | undefined {
@@ -109,6 +119,7 @@ export function respond(input: Input, outcome: Form.Answer | "cancel") {
 }
 
 function credentialLike(field: Form.Field) {
+  if (field.type === "string" && field.format === "password") return true
   const labels =
     field.type === "string" || field.type === "multiselect" ? (field.options ?? []).map((option) => option.label) : []
   return [field.key, field.title, field.description, ...labels].some(
