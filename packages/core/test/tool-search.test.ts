@@ -95,6 +95,24 @@ describe("search tools", () => {
     }),
   )
 
+  it.effect("matches grep protectedPaths case-insensitively and slash-normalized on win32", () =>
+    Effect.sync(() => {
+      const entries = [
+        { path: "C:\\Repo\\Secrets\\token.txt", realpath: "C:\\Real\\Secrets\\token.txt" },
+        { path: "\\\\Server\\Share\\key.txt", realpath: "\\\\Server\\Share\\key.txt" },
+      ]
+      const winSet = GrepTool.protectedPathSet(entries, "win32")
+      expect(GrepTool.isProtectedMatch(winSet, "c:\\repo\\secrets\\TOKEN.txt", "win32")).toBe(true)
+      expect(GrepTool.isProtectedMatch(winSet, "c:/real/SECRETS/token.txt", "win32")).toBe(true)
+      expect(GrepTool.isProtectedMatch(winSet, "\\\\server\\SHARE\\key.txt", "win32")).toBe(true)
+      expect(GrepTool.isProtectedMatch(winSet, "C:\\Repo\\public.txt", "win32")).toBe(false)
+
+      const posixSet = GrepTool.protectedPathSet([{ path: "/tmp/Secret.txt", realpath: "/tmp/Secret.txt" }], "linux")
+      expect(GrepTool.isProtectedMatch(posixSet, "/tmp/Secret.txt", "linux")).toBe(true)
+      expect(GrepTool.isProtectedMatch(posixSet, "/tmp/secret.txt", "linux")).toBe(false)
+    }),
+  )
+
   for (const hidden of [undefined, false, true]) {
     for (const limit of hidden ? [10] : [1, 10]) {
       it.live(`glob honors hidden=${hidden} before limit=${limit}`, () =>

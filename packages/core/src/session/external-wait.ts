@@ -208,7 +208,7 @@ const layer = Layer.effect(
           event.type === SessionEvent.Deleted.type || event.type === SessionEvent.Archived.type,
       ),
       Stream.runForEach((event) =>
-        clearSession(event.data.sessionID).pipe(
+        clearSession(event.data.sessionID, { location: event.location }).pipe(
           Effect.catchCause((cause) =>
             Effect.logWarning("failed to clear external waits for session", {
               sessionID: event.data.sessionID,

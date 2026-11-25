@@ -464,5 +464,7 @@ export const node = makeLocationNode({
     Snapshot.node,
     ToolOutput.node,
     Database.node,
+    Mcp.node,
+    SessionExternalWait.node,
   ],
 })

@@ -4,7 +4,9 @@ import { Mcp } from "@opencode/schema/mcp"
 import { McpEvent } from "@opencode/schema/mcp-event"
 import { ephemeral } from "@opencode/schema/event"
 import { Session } from "@opencode/schema/session"
+import { SessionEvent } from "@opencode/schema/session-event"
 import type { Transport } from "@modelcontextprotocol/client"
+import { sameDirectory } from "@opencode/util/path"
 import { createHash } from "node:crypto"
 import { isDeepStrictEqual } from "node:util"
 import {
@@ -33,6 +35,7 @@ import { KeyedMutex } from "../effect/keyed-mutex.js"
 import { Location } from "../location.js"
 import { waitForAbort } from "@opencode/util/process"
 import { SessionExternalWait } from "../session/external-wait.js"
+import { SessionStore } from "../session/store.js"
 import { State } from "../state.js"
 import type { McpClient } from "./client.js"
 
@@ -237,6 +240,7 @@ export const layer = (options?: Options) =>
       const integration = yield* Integration.Service
       const credentials = yield* Credential.Service
       const externalWaits = yield* Effect.serviceOption(SessionExternalWait.Service)
+      const sessions = yield* Effect.serviceOption(SessionStore.Service)
       const root = yield* Effect.scope
       const fork = yield* FiberSet.makeRuntime<never, void, never>()
       // Server scopes close in parallel on shutdown, so one slow server's stop grace does not delay
@@ -615,6 +619,34 @@ export const layer = (options?: Options) =>
       const toAttachedTools = (server: ServerName, tools: ReadonlyArray<McpClient.Tool>, policy?: HostPolicy) =>
         tools.map((tool): Tool => ({ ...tool, server, ...hostFields(policy) }))
 
+      // Inform UI badges and goals when an attachment holding external waits connects or disconnects.
+      const notifyAttachedWaits = Effect.fnUntraced(function* (server: ServerName) {
+        if (Option.isNone(externalWaits)) return
+        const waits = yield* externalWaits.value.listAll()
+        const owned = Array.from(new Set(waits.filter((item) => item.server === server).map((item) => item.sessionID)))
+        if (owned.length === 0) return
+        const ref = Location.Ref.make({ directory: location.directory, workspaceID: location.workspaceID })
+        yield* Effect.forEach(
+          owned,
+          (rawSessionID) =>
+            Effect.gen(function* () {
+              const sessionID = Session.ID.make(rawSessionID)
+              if (Option.isSome(sessions)) {
+                const info = yield* sessions.value.get(sessionID).pipe(Effect.orElseSucceed(() => undefined))
+                if (
+                  info &&
+                  (!sameDirectory(info.location.directory, ref.directory) ||
+                    info.location.workspaceID !== ref.workspaceID)
+                ) {
+                  return
+                }
+              }
+              yield* bus.publish(SessionEvent.ExternalWait.Changed, { sessionID }, { location: ref })
+            }),
+          { discard: true },
+        )
+      })
+
       const detach = Effect.fnUntraced(function* (name: ServerName, entry: AttachedEntry) {
         const stack = attached.get(name) ?? []
         if (!stack.includes(entry)) return
@@ -625,7 +657,12 @@ export const layer = (options?: Options) =>
         if (!next) {
           attached.delete(name)
           yield* Scope.close(entry.scope, Exit.void)
-          return yield* bus.publish(McpEvent.ToolsChanged, { server: name })
+          yield* bus.publish(McpEvent.ToolsChanged, { server: name })
+          return yield* notifyAttachedWaits(name).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("failed to notify external wait change on detach", { server: name, cause }),
+            ),
+          )
         }
         // Unlocked reads must never pick a closing connection, so update the stack before closing it.
         attached.set(name, remaining)
@@ -702,7 +739,9 @@ export const layer = (options?: Options) =>
             ...(result.connection.instructions === undefined ? {} : { instructions: result.connection.instructions }),
             tools: toAttachedTools(name, result.tools, policy),
           }
-          attached.set(name, [...(attached.get(name) ?? []), entry])
+          const existing = attached.get(name) ?? []
+          const wasEmpty = existing.length === 0
+          attached.set(name, [...existing, entry])
           const locked = <E>(effect: Effect.Effect<void, E>) =>
             fork(effect.pipe(attachedLocks.withLock(name), Effect.ignore))
           result.connection.onClose(() => locked(detach(name, entry)))
@@ -756,6 +795,13 @@ export const layer = (options?: Options) =>
           }
           yield* Effect.logInfo("mcp client attached", { server: name, tools: entry.tools.length })
           yield* bus.publish(McpEvent.ToolsChanged, { server: name })
+          if (wasEmpty) {
+            yield* notifyAttachedWaits(name).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logWarning("failed to notify external wait change on attach", { server: name, cause }),
+              ),
+            )
+          }
           return entry
         })
         yield* Effect.acquireRelease(register.pipe(attachedLocks.withLock(name)), (entry) =>

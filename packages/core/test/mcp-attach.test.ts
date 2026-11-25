@@ -516,3 +516,65 @@ it.live(
       expect(settledEvents[2]).toEqual({ sessionID: s2, directory: loc.directory })
     }),
 )
+
+it.live(
+  "emits SessionEvent.ExternalWait.Changed when an attachment holding waits connects (empty->live) or disconnects (live->empty)",
+  () =>
+    Effect.gen(function* () {
+      const mcp = yield* Mcp.Service
+      const waits = yield* SessionExternalWait.Service
+      const bus = yield* Bus.Service
+      const loc = yield* Location.Service
+      const events: Array<{ sessionID: string; directory?: string }> = []
+      yield* bus.subscribe(SchemaSessionEvent.ExternalWait.Changed).pipe(
+        Stream.runForEach((event) =>
+          Effect.sync(() => {
+            events.push({ sessionID: event.data.sessionID, directory: event.location?.directory })
+          }),
+        ),
+        Effect.forkScoped({ startImmediately: true }),
+      )
+
+      const ownedSession = Session.ID.make("ses_attach_edge")
+      const otherServerSession = Session.ID.make("ses_attach_other")
+      yield* waits.register({
+        sessionID: ownedSession,
+        waitID: "pr-watch:9",
+        source: "pull_request_watch",
+        server: "t3-code-host",
+        description: "Watching PR #9",
+      })
+      yield* waits.register({
+        sessionID: otherServerSession,
+        waitID: "pr-watch:10",
+        source: "pull_request_watch",
+        server: "different-server",
+        description: "Watching PR #10",
+      })
+      events.length = 0
+
+      const first = yield* clientServer("first", ["ping"])
+      const second = yield* clientServer("second", ["ping"])
+      const firstScope = yield* Scope.make()
+      const secondScope = yield* Scope.make()
+
+      // empty -> live emits for sessions waiting on this server only.
+      yield* mcp.attach("t3-code-host", first.client, { trustedHost: true }).pipe(Scope.provide(firstScope))
+      yield* waitUntil(() => events.length === 1)
+      expect(events).toEqual([{ sessionID: ownedSession, directory: loc.directory }])
+
+      // live -> live stack push and lower-connection close emit nothing.
+      yield* mcp.attach("t3-code-host", second.client, { trustedHost: true }).pipe(Scope.provide(secondScope))
+      yield* Scope.close(firstScope, Exit.void)
+      yield* Effect.sleep("25 millis")
+      expect(events).toHaveLength(1)
+
+      // live -> empty (last connection closed) emits again so UI/GoalPlugin notice disconnect.
+      yield* Scope.close(secondScope, Exit.void)
+      yield* waitUntil(() => events.length === 2)
+      expect(events).toEqual([
+        { sessionID: ownedSession, directory: loc.directory },
+        { sessionID: ownedSession, directory: loc.directory },
+      ])
+    }),
+)

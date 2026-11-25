@@ -15,6 +15,26 @@ import { SecretFile } from "../../secret-file.js"
 
 export const name = "grep"
 
+export function protectedPathSet(
+  entries: ReadonlyArray<{ readonly path: string; readonly realpath: string }>,
+  platform: NodeJS.Platform = process.platform,
+) {
+  return new Set(
+    entries.flatMap((entry) => [
+      SecretFile.normalizeKeyPath(entry.path, platform),
+      SecretFile.normalizeKeyPath(entry.realpath, platform),
+    ]),
+  )
+}
+
+export function isProtectedMatch(
+  protectedPaths: ReadonlySet<string>,
+  file: string,
+  platform: NodeJS.Platform = process.platform,
+) {
+  return protectedPaths.has(SecretFile.normalizeKeyPath(file, platform))
+}
+
 export const Input = Schema.Struct({
   pattern: FileSystem.GrepInput.fields.pattern
     .check(Schema.isMinLength(1, { message: "Pattern must not be empty" }))
@@ -105,7 +125,7 @@ export const Plugin = {
               const root = target.absolute
               // Resolves symlinks, so searching a link to a host-delivered secret file is refused too.
               yield* secrets.assertReadable(root)
-              const protectedPaths = new Set((yield* secrets.active()).flatMap((entry) => [entry.path, entry.realpath]))
+              const protectedPaths = protectedPathSet(yield* secrets.active())
               const type = yield* Environment.typeFollowing(environment.files, root).pipe(
                 Effect.catchTag("Environment.NotFound", () =>
                   Effect.fail(new ToolFailure({ message: `Search path does not exist: ${input.path ?? "."}` })),
@@ -149,7 +169,7 @@ export const Plugin = {
                 )
               // Ripgrep does not follow symlinks while walking, so exact paths cover directory searches.
               const visible = matches.filter(
-                (match) => !protectedPaths.has(path.resolve(location.directory, match.entry.path)),
+                (match) => !isProtectedMatch(protectedPaths, path.resolve(location.directory, match.entry.path)),
               )
               return { matches: visible.slice(0, limit), truncated: visible.length > limit }
             }).pipe(
