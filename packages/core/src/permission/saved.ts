@@ -146,7 +146,11 @@ const layer = Layer.effect(
 
       if (dryRun) {
         const rows = yield* db.select().from(PermissionTable).where(filter).all().pipe(Effect.orDie)
-        return summarizeCleanup(input.mode, true, planLegacyCleanup(rows, input.mode))
+        return summarizeCleanup(
+          input.mode,
+          true,
+          planLegacyCleanup(rows, input.mode).map((entry) => cleanupItem(entry.row, entry.outcome, entry.targetAction)),
+        )
       }
 
       return yield* db
@@ -156,41 +160,44 @@ const layer = Layer.effect(
             const planned = planLegacyCleanup(rows, input.mode)
             if (planned.length === 0) return summarizeCleanup(input.mode, false, [])
 
-            const toDelete = planned
-              .filter((entry) => entry.outcome !== "migrated")
-              .map((entry) => entry.row.id)
-            for (let offset = 0; offset < toDelete.length; offset += LEGACY_DELETE_BATCH) {
-              yield* tx
-                .delete(PermissionTable)
-                .where(inArray(PermissionTable.id, toDelete.slice(offset, offset + LEGACY_DELETE_BATCH)))
-                .run()
-            }
+            const toDelete = planned.filter((entry) => entry.outcome !== "migrated").map((entry) => entry.row.id)
+            const deleteBatches = Array.from(
+              { length: Math.ceil(toDelete.length / LEGACY_DELETE_BATCH) },
+              (_, index) => toDelete.slice(index * LEGACY_DELETE_BATCH, (index + 1) * LEGACY_DELETE_BATCH),
+            )
+            yield* Effect.forEach(
+              deleteBatches,
+              (ids) => tx.delete(PermissionTable).where(inArray(PermissionTable.id, ids)).run(),
+              { concurrency: 1 },
+            )
 
-            const settled = new Array<CleanupLegacyItem>()
-            for (const entry of planned) {
-              if (entry.outcome !== "migrated" || entry.targetAction === undefined) {
-                settled.push(cleanupItem(entry.row, entry.outcome, entry.targetAction))
-                continue
-              }
-              const targetAction = entry.targetAction
-              // Re-check unique collisions at write time in case SQLite collation rejects an update anyway.
-              const outcome = yield* tx
-                .update(PermissionTable)
-                .set({ action: targetAction })
-                .where(eq(PermissionTable.id, entry.row.id))
-                .run()
-                .pipe(
-                  Effect.as("migrated" as const),
-                  Effect.catchIf(isUniqueViolation, () =>
-                    tx
-                      .delete(PermissionTable)
-                      .where(eq(PermissionTable.id, entry.row.id))
-                      .run()
-                      .pipe(Effect.as("deduplicated" as const)),
-                  ),
-                )
-              settled.push(cleanupItem(entry.row, outcome, targetAction))
-            }
+            const settled = yield* Effect.forEach(
+              planned,
+              (entry) => {
+                if (entry.outcome !== "migrated" || entry.targetAction === undefined) {
+                  return Effect.succeed(cleanupItem(entry.row, entry.outcome, entry.targetAction))
+                }
+                const targetAction = entry.targetAction
+                // Re-check unique collisions at write time in case SQLite collation rejects an update anyway.
+                return tx
+                  .update(PermissionTable)
+                  .set({ action: targetAction })
+                  .where(eq(PermissionTable.id, entry.row.id))
+                  .run()
+                  .pipe(
+                    Effect.as("migrated" as const),
+                    Effect.catchIf(isUniqueViolation, () =>
+                      tx
+                        .delete(PermissionTable)
+                        .where(eq(PermissionTable.id, entry.row.id))
+                        .run()
+                        .pipe(Effect.as("deduplicated" as const)),
+                    ),
+                    Effect.map((outcome) => cleanupItem(entry.row, outcome, targetAction)),
+                  )
+              },
+              { concurrency: 1 },
+            )
 
             return summarizeCleanup(input.mode, false, settled)
           }),
@@ -242,25 +249,19 @@ function planLegacyCleanup(
   rows: ReadonlyArray<typeof PermissionTable.$inferSelect>,
   mode: CleanupLegacyMode,
 ): ReadonlyArray<PlannedCleanup> {
-  const occupied = new Set<string>()
-  const legacy = new Array<{
-    readonly row: typeof PermissionTable.$inferSelect
-    readonly targetAction: string
-  }>()
-
-  for (const row of rows) {
-    const targetAction = canonicalLegacyAction(row.action)
-    if (targetAction === undefined) {
-      occupied.add(dedupeKey(row.project_id, row.action, row.resource))
-      continue
-    }
-    legacy.push({ row, targetAction })
-  }
+  const occupied = new Set(
+    rows
+      .filter((row) => canonicalLegacyAction(row.action) === undefined)
+      .map((row) => dedupeKey(row.project_id, row.action, row.resource)),
+  )
 
   // Sort deterministically so duplicate legacy rows retain the oldest row when migrating.
-  legacy.sort(
-    (a, b) => Number(a.row.time_created) - Number(b.row.time_created) || a.row.id.localeCompare(b.row.id),
-  )
+  const legacy = rows
+    .flatMap((row) => {
+      const targetAction = canonicalLegacyAction(row.action)
+      return targetAction === undefined ? [] : [{ row, targetAction }]
+    })
+    .toSorted((a, b) => Number(a.row.time_created) - Number(b.row.time_created) || a.row.id.localeCompare(b.row.id))
 
   if (mode === "prune") {
     return legacy.map(({ row }) => ({ row, outcome: "deleted" as const }))
@@ -277,27 +278,16 @@ function planLegacyCleanup(
 function summarizeCleanup(
   mode: CleanupLegacyMode,
   dryRun: boolean,
-  items: ReadonlyArray<{
-    readonly row?: typeof PermissionTable.$inferSelect
-    readonly id?: ID
-    readonly projectID?: Project.ID
-    readonly action?: string
-    readonly resource?: string
-    readonly outcome: CleanupLegacyItem["outcome"]
-    readonly targetAction?: string
-  }>,
+  items: ReadonlyArray<CleanupLegacyItem>,
 ): CleanupLegacyResult {
-  const normalized = items.map((entry) =>
-    entry.row ? cleanupItem(entry.row, entry.outcome, entry.targetAction) : (entry as CleanupLegacyItem),
-  )
   return {
     mode,
     dryRun,
-    matched: normalized.length,
-    deleted: normalized.filter((item) => item.outcome === "deleted").length,
-    migrated: normalized.filter((item) => item.outcome === "migrated").length,
-    deduplicated: normalized.filter((item) => item.outcome === "deduplicated").length,
-    items: normalized,
+    matched: items.length,
+    deleted: items.filter((item) => item.outcome === "deleted").length,
+    migrated: items.filter((item) => item.outcome === "migrated").length,
+    deduplicated: items.filter((item) => item.outcome === "deduplicated").length,
+    items,
   }
 }
 
