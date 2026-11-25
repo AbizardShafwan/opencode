@@ -102,12 +102,22 @@ describe("createExternalWaits", () => {
       fixture.emit({ id: "evt", created: 0, type: "session.external_wait.changed", data: { sessionID: "ses-other" } })
       expect(fixture.calls).toHaveLength(1)
 
-      // MCP status transitions refresh active waits and restore hidden waits when MCP re-attaches.
+      // MCP status transitions for another directory are ignored; matching directory refreshes and restores waits.
       fixture.emit({
         id: "evt",
         created: 0,
         type: "mcp.status.changed",
-        data: { name: "github", status: { status: "disabled" } },
+        location: { directory: "/repo-other" },
+        data: { server: "github" },
+      })
+      expect(fixture.calls).toHaveLength(1)
+
+      fixture.emit({
+        id: "evt",
+        created: 0,
+        type: "mcp.status.changed",
+        location: { directory: "/repo-a" },
+        data: { server: "github" },
       })
       expect(fixture.calls).toHaveLength(2)
       fixture.calls[1]?.resolve([])
@@ -118,7 +128,7 @@ describe("createExternalWaits", () => {
         id: "evt",
         created: 0,
         type: "mcp.status.changed",
-        data: { name: "github", status: { status: "connected" } },
+        data: { server: "github" },
       })
       expect(fixture.calls).toHaveLength(3)
       fixture.calls[2]?.resolve([createWait("3", "ses-1")])

@@ -564,7 +564,10 @@ export const dict = {
   "session.externalWait.title": "External waits",
   "session.externalWait.count.one": "{{count}} external wait",
   "session.externalWait.count.other": "{{count}} external waits",
-  "session.externalWait.expiresIn": "Expires in {{duration}}",
+  "session.externalWait.expiresInSeconds": "Expires in {{count}}s",
+  "session.externalWait.expiresInMinutes": "Expires in {{count}}m",
+  "session.externalWait.expiresInHours": "Expires in {{hours}}h {{minutes}}m",
+  "session.externalWait.expiresInDays": "Expires in {{days}}d {{hours}}h",
   "session.externalWait.expired": "Expired",
 
   "session.files.selectToOpen": "Select a file to open",

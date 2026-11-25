@@ -1,4 +1,5 @@
 import type { JobExternal, JobInfo } from "@opencode/client/promise"
+import { sameDirectory } from "@opencode/util/path"
 import { createEffect, on, onCleanup } from "solid-js"
 import { createStore } from "solid-js/store"
 import type { OpenCodeEventStream } from "@/runtime/server/client"
@@ -42,7 +43,8 @@ export function createExternalWaits(input: {
     }),
   )
   onCleanup(
-    input.events.on("mcp.status.changed", () => {
+    input.events.on("mcp.status.changed", (event) => {
+      if (event.location?.directory && !sameDirectory(event.location.directory, input.directory())) return
       refresh()
     }),
   )

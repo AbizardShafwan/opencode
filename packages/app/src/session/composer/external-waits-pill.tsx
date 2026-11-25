@@ -8,16 +8,30 @@ import { useLanguage } from "@/runtime/i18n/language"
 const capsule =
   "pointer-events-auto flex h-7 min-w-0 max-w-full items-center gap-2 rounded-[12px] border-[0.5px] border-v2-border-border-muted bg-v2-background-bg-base ps-2.5 pe-2.5 text-[13px] font-[440] leading-text-compact tracking-[-0.04px] whitespace-nowrap text-v2-text-text-base shadow-[var(--v2-elevation-raised)] outline-none"
 
-function formatDuration(remaining: number) {
-  if (remaining < 60_000) return `${Math.ceil(remaining / 1_000)}s`
+function formatExpiry(language: ReturnType<typeof useLanguage>, expiresAt: number) {
+  const remaining = expiresAt - Date.now()
 
-  if (remaining < 3_600_000) return `${Math.floor(remaining / 60_000)}m`
+  if (remaining <= 0) return language.t("session.externalWait.expired")
 
-  if (remaining < 86_400_000) {
-    return `${Math.floor(remaining / 3_600_000)}h ${Math.floor((remaining % 3_600_000) / 60_000)}m`
+  if (remaining < 60_000) {
+    return language.t("session.externalWait.expiresInSeconds", { count: Math.ceil(remaining / 1_000) })
   }
 
-  return `${Math.floor(remaining / 86_400_000)}d ${Math.floor((remaining % 86_400_000) / 3_600_000)}h`
+  if (remaining < 3_600_000) {
+    return language.t("session.externalWait.expiresInMinutes", { count: Math.floor(remaining / 60_000) })
+  }
+
+  if (remaining < 86_400_000) {
+    return language.t("session.externalWait.expiresInHours", {
+      hours: Math.floor(remaining / 3_600_000),
+      minutes: Math.floor((remaining % 3_600_000) / 60_000),
+    })
+  }
+
+  return language.t("session.externalWait.expiresInDays", {
+    days: Math.floor(remaining / 86_400_000),
+    hours: Math.floor((remaining % 86_400_000) / 3_600_000),
+  })
 }
 
 export function SessionExternalWaitsPill(props: { waits: readonly JobExternal[]; sessionID?: string }) {
@@ -25,14 +39,6 @@ export function SessionExternalWaitsPill(props: { waits: readonly JobExternal[];
   const [state, setState] = createStore({ open: false })
 
   const label = () => language.plural("session.externalWait.count", props.waits.length)
-
-  const expiry = (expiresAt: number) => {
-    const remaining = expiresAt - Date.now()
-
-    if (remaining <= 0) return language.t("session.externalWait.expired")
-
-    return language.t("session.externalWait.expiresIn", { duration: formatDuration(remaining) })
-  }
 
   createEffect(
     on(
@@ -81,7 +87,7 @@ export function SessionExternalWaitsPill(props: { waits: readonly JobExternal[];
                       <span aria-hidden="true">·</span>
                       <span dir="auto">{wait.server}</span>
                       <span aria-hidden="true">·</span>
-                      <span>{expiry(wait.expiresAt)}</span>
+                      <span>{formatExpiry(language, wait.expiresAt)}</span>
                     </div>
                   </div>
                 )}

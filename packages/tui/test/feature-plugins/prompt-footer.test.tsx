@@ -469,14 +469,14 @@ test("prompt footer external waits react to events, reconnect, and ignore stale 
     expect(pending).toHaveLength(1)
 
     // MCP status transitions refresh active waits (hiding on detach and restoring on re-attach).
-    emit("mcp.status.changed", { name: "github", status: { status: "disabled" } })
+    emit("mcp.status.changed", { server: "github" })
     expect(pending).toHaveLength(2)
     pending[1]?.resolve([])
     await Promise.resolve()
     await app.renderOnce()
     expect(app.captureCharFrame()).not.toContain("wait")
 
-    emit("mcp.status.changed", { name: "github", status: { status: "connected" } })
+    emit("mcp.status.changed", { server: "github" })
     expect(pending).toHaveLength(3)
     pending[2]?.resolve([waitItem("2", "session-a")])
     await Promise.resolve()
