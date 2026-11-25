@@ -7,8 +7,11 @@ imports came from the local `~/Documents/codex` checkout (HEAD
 `e596f5054d4e044a5b5338e942ddc47833b4d4d7`, with local modifications) on 2026-10-24.
 
 - `system.txt`: Memyr's engineering policy, shortened locally on 2026-11-09 from
-  the imported `codex-rs/models-manager/prompt.md`. It is no longer an exact copy.
-  Current SHA-256: `c5fa9b9f8f5a30c69d094b95ba15070ab16c400cd159df9ae70fd34b6ffe0436`.
+  the imported `codex-rs/models-manager/prompt.md`, then revised locally on
+  2026-11-25 with a chief-of-staff role line, explicit `MUST`/`NEVER` emphasis,
+  human-readability rules and declarative-workflow (n8n) node rules. It is no
+  longer an exact copy.
+  Current SHA-256: `23e1499cc873ade8cd5eb41a8b369587036d1dd64d8f553f69f09675e3f9752f`.
   Original imported SHA-256: `eb708da445b093cfd961cb6d9a428791c7ec593eb31e0f0143ea268f2a2a2afd`.
 - `visual-verification.txt`: Memyr's always-on render/inspect policy, shortened
   locally on 2026-11-09. Current SHA-256:
@@ -61,6 +64,9 @@ Measured with `wc -w -c` on the two policy assets:
 
 This removes about 40% of words and 35% of asset bytes. These are not tokenizer
 counts or a measurement of total model input, cache hits, cost or task quality.
+
+The table records the 2026-11-09 measurement. `system.txt` was revised again on
+2026-11-25 to 492 words / 3,886 bytes; `visual-verification.txt` is unchanged.
 
 The retained obligations are:
 

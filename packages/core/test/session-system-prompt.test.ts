@@ -30,10 +30,10 @@ const transcript = (id: string, system?: string, tools: string[] = []) =>
   })
 
 describe("Memyr system policy", () => {
-  test("bundles the pinned lean engineering and visual policies", () => {
+  test("bundles the pinned engineering and visual policies", () => {
     // Digests and adaptation history are recorded in runner/prompt/README.md.
     expect(createHash("sha256").update(POLICY).digest("hex")).toBe(
-      "c5fa9b9f8f5a30c69d094b95ba15070ab16c400cd159df9ae70fd34b6ffe0436",
+      "23e1499cc873ade8cd5eb41a8b369587036d1dd64d8f553f69f09675e3f9752f",
     )
     expect(createHash("sha256").update(VISUAL_POLICY).digest("hex")).toBe(
       "8bfbb5d25ed5decf81a7320715125c58943570ab11db8a63ce902fda07170243",
