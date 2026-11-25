@@ -16,6 +16,30 @@ type Attachment = {
   tunnels: BrowserTunnel.Tunnels
 }
 
+const isDrive = (value: string) => {
+  if (value.length !== 2) return false
+  const code = value.charCodeAt(0)
+  return value[1] === ":" && ((code >= 65 && code <= 90) || (code >= 97 && code <= 122))
+}
+
+const trimTrailingSlashes = (value: string) => {
+  for (let i = value.length - 1; i >= 0; i--) {
+    if (value[i] !== "/") return value.slice(0, i + 1)
+  }
+  return ""
+}
+
+const isWindowsPath = (value: string) => value[1] === ":" || value.startsWith("\\\\") || value.startsWith("//")
+
+const normalizeDirectory = (value: string) => {
+  const slashed = isWindowsPath(value) ? value.replaceAll("\\", "/") : value
+  const trimmed = trimTrailingSlashes(slashed)
+  const key = !trimmed && slashed.startsWith("/") ? "/" : isDrive(trimmed) ? `${trimmed}/` : trimmed
+  return /^[a-z]:\//i.test(key) || key.startsWith("//") ? key.toLowerCase() : key
+}
+
+const sameDirectory = (a: string, b: string) => normalizeDirectory(a) === normalizeDirectory(b)
+
 export type Connection = Effect.Success<ReturnType<typeof make>>
 
 /**
@@ -36,7 +60,7 @@ export const pruneStaleGrants = (
       const page = yield* sessions.list({ limit: 100, ...(cursor === undefined ? {} : { cursor }) })
       for (const session of page.data) {
         if (
-          session.location.directory !== location.directory ||
+          !sameDirectory(session.location.directory, location.directory) ||
           session.location.workspaceID !== location.workspaceID
         )
           continue
@@ -119,7 +143,7 @@ export const make = Effect.fn("BrowserConnection.make")(function* (
           const session = yield* ctx.session
             .get({ sessionID: input.sessionID })
             .pipe(Effect.mapError(() => call.error("unavailable", "Session not found.", {})))
-          if (session.location.directory !== ctx.location.directory)
+          if (!sameDirectory(session.location.directory, ctx.location.directory))
             return yield* Effect.fail(call.error("unavailable", "Session belongs to another location.", {}))
           const browser = yield* Effect.acquireRelease(
             Effect.gen(function* () {

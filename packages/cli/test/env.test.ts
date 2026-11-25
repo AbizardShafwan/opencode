@@ -35,3 +35,26 @@ test("session environment omits server credentials", () => {
   expect(environment.OPENCODE_SERVER_PASSWORD).toBeUndefined()
   expect(environment.OPENCODE_SESSION_ENV_TEST).toBe("included")
 })
+
+test("session environment strips SERVER_ONLY keys case-insensitively on win32", () => {
+  const input: NodeJS.ProcessEnv = {
+    opencode_password: "pw",
+    Opencode_Server_Password: "legacy",
+    memyr_password: "mpw",
+    MEMYR_SERVER_PASSWORD: "mspw",
+    Opencode_Trusted_Host_Token: "tok1",
+    memyr_trusted_host_token: "tok2",
+    opencode_trust_mcp_prefix: "t3-code",
+    Memyr_Trust_Mcp_Prefix: "t3-code",
+    OPENCODE_KEEP: "kept",
+  }
+
+  const win = Env.session(input, "win32")
+  expect(win).toEqual({ OPENCODE_KEEP: "kept" })
+
+  const linux = Env.session(input, "linux")
+  expect(linux.opencode_password).toBe("pw")
+  expect(linux.memyr_trusted_host_token).toBe("tok2")
+  expect(linux.MEMYR_SERVER_PASSWORD).toBeUndefined()
+  expect(linux.OPENCODE_KEEP).toBe("kept")
+})

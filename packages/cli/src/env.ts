@@ -46,11 +46,15 @@ const SERVER_ONLY = new Set([
   "MEMYR_TRUST_MCP_PREFIX",
 ])
 
-export function session() {
+function isServerOnly(name: string, platform: NodeJS.Platform) {
+  return SERVER_ONLY.has(platform === "win32" ? name.toUpperCase() : name)
+}
+
+export function session(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform) {
   return Object.fromEntries(
-    Object.entries(process.env).filter(
+    Object.entries(env).filter(
       (entry): entry is [string, string] =>
-        entry[1] !== undefined && !SERVER_ONLY.has(entry[0]),
+        entry[1] !== undefined && !isServerOnly(entry[0], platform),
     ),
   )
 }
