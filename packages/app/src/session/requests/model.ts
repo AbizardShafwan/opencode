@@ -9,6 +9,7 @@ import { projectSettingsKey, useSettings } from "@/settings/model"
 import { useWorkspaceLocation } from "@/workspaces/location"
 import { sessionPermissionRequest, sessionFormRequest, sessionTreeIDs } from "@/session/requests/session-request-tree"
 import { createWebSearchRequest } from "./websearch"
+import { createExternalWaits } from "./external-waits"
 import { createSessionBackground } from "@/session/requests/background"
 import { useData } from "@/runtime/server/current"
 
@@ -136,6 +137,14 @@ export function createSessionRequestModel() {
     shells: () => data.shell.list({ directory: sdk().directory }),
   })
 
+  const externalWaits = createExternalWaits({
+    sessionID: () => params.id,
+    directory: () => location()?.directory ?? sdk().directory,
+    connected: () => serverSDK.connection.status() === "connected",
+    list: async (query) => (await serverSDK.api.job.list(query)).data.data,
+    events: serverSDK.event,
+  })
+
   // Moving to the background and the extensions' background list stay with the primary session's own work.
   const blocking = createMemo(() => (primary() ? running.blocking() : []))
   const tasks = createMemo(() => (primary() ? running.tasks() : []))
@@ -197,6 +206,7 @@ export function createSessionRequestModel() {
       running: { sessionID: owner, blocking: running.blocking, tasks: running.tasks },
       move: moveToBackground,
     },
+    externalWaits,
     decide,
   }
 }

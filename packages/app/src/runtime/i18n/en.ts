@@ -561,6 +561,11 @@ export const dict = {
   "session.running.additionalRunning.other": "+{{count}} running",
   "session.running.stop.subagent": "Interrupt subagent",
   "session.running.stop.shell": "Kill shell command",
+  "session.externalWait.title": "External waits",
+  "session.externalWait.count.one": "{{count}} external wait",
+  "session.externalWait.count.other": "{{count}} external waits",
+  "session.externalWait.expiresIn": "Expires in {{duration}}",
+  "session.externalWait.expired": "Expired",
 
   "session.files.selectToOpen": "Select a file to open",
 

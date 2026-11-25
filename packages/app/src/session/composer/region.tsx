@@ -33,6 +33,7 @@ import { createSessionRevert } from "../revert"
 import { SessionComposerRegion } from "./session-composer-region"
 import { createSessionComposerController, type SessionComposerController } from "./controller"
 import { SessionExtensionPills } from "./extension-pills"
+import { SessionExternalWaitsPill } from "./external-waits-pill"
 import { SessionQueuePanel } from "./queue-panel"
 import { resolveSessionComposerSelection } from "./selection"
 import { createSessionRequestModel } from "../requests/model"
@@ -355,9 +356,17 @@ export function ActiveSessionComposerRegion(props: {
     <SessionComposerRegion
       controller={props.model.region}
       above={
-        <Show when={!missing() && !props.session.data.isChild()}>
+        <Show
+          when={!missing() && (props.model.region.state.externalWaits().length > 0 || !props.session.data.isChild())}
+        >
           <div class="pointer-events-none absolute inset-x-0 bottom-full flex items-end justify-end gap-2 pb-2.5">
-            <SessionExtensionPills session={props.view} screen={props.screen} />
+            <SessionExternalWaitsPill
+              waits={props.model.region.state.externalWaits()}
+              sessionID={props.session.identity.sessionID()}
+            />
+            <Show when={!props.session.data.isChild()}>
+              <SessionExtensionPills session={props.view} screen={props.screen} />
+            </Show>
           </div>
         </Show>
       }
