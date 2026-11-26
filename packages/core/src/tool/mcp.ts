@@ -69,14 +69,15 @@ export const directName = (server: string, tool: string) => {
   return `${prefix}${safe.slice(0, ALIAS_TOOL_SLICE)}_${digest(tool).slice(0, 8)}`
 }
 
-type PolicyTool = Pick<Mcp.Tool, "server" | "name" | "trustedHost" | "permissionNamespace">
+type PolicyTool = Pick<Mcp.Tool, "server" | "name" | "trustedHost" | "permissionNamespace" | "preserveServerPermission">
 
 /**
  * The permission action guarding an MCP tool, used for both catalog visibility and the call-time check.
  * Untrusted servers whose names claim the host namespace are moved to an unprivileged `mcp_` prefix.
  */
 export const permissionAction = (tool: PolicyTool) => {
-  if (isHostTool(tool)) return `${HOST_NAMESPACE}_${sanitize(tool.name)}`
+  if (isHostTool(tool))
+    return tool.preserveServerPermission ? name(tool.server, tool.name) : `${HOST_NAMESPACE}_${sanitize(tool.name)}`
   // Case-insensitive demotion matches Wildcard.match's case-insensitive behavior on win32.
   if (namespace(tool.server).toLowerCase().startsWith(HOST_NAMESPACE)) return `mcp_${name(tool.server, tool.name)}`
   return name(tool.server, tool.name)

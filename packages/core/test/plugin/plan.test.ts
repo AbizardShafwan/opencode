@@ -286,7 +286,10 @@ describe("plan plugin mutations", () => {
     Effect.gen(function* () {
       const { planAgent } = yield* run()
       const effect = (action: string) => Permission.evaluate(action, "*", planAgent.permissions).effect
-      for (const action of PlanPlugin.READ_ONLY_HOST_ACTIONS) expect(effect(action)).toBe("allow")
+      for (const action of PlanPlugin.READ_ONLY_HOST_ACTIONS) {
+        expect(effect(action)).toBe("allow")
+        expect(effect(action.replace("t3-code_", "t3-code-abc123_"))).toBe("allow")
+      }
       for (const tool of [
         "delegate_task",
         "create_threads",
@@ -301,10 +304,13 @@ describe("plan plugin mutations", () => {
         "t3_thread_send_attachments",
         "t3_queue",
         "t3_pending_request",
-      ])
+      ]) {
         expect(effect(`t3-code_${tool}`)).toBe("deny")
+        expect(effect(`t3-code-abc123_${tool}`)).toBe("deny")
+      }
       // Untrusted servers claiming the host name are re-namespaced and gain no host grants.
       expect(effect("mcp_t3-code_pull_request_read")).toBe("deny")
+      expect(effect("mcp_t3-code-abc123_preview_status")).toBe("deny")
       expect(PlanPlugin.READ_ONLY_HOST_ACTIONS.some((action) => action.includes("*"))).toBe(false)
     }),
   )

@@ -67,6 +67,8 @@ export interface ServerInstructions {
 export interface HostPolicy {
   readonly trustedHost?: boolean
   readonly permissionNamespace?: string
+  /** Keep `<server>_<tool>` permission action so host per-thread `deny t3-code-*` / `allow <server>_*` rules match. */
+  readonly preserveServerPermission?: boolean
   readonly codemode?: boolean
   readonly executionTimeoutMs?: number
 }
@@ -78,6 +80,7 @@ export type Tool = McpClient.Tool & {
   /** Set only for tools of an attachment verified as the trusted host. */
   readonly trustedHost?: boolean
   readonly permissionNamespace?: string
+  readonly preserveServerPermission?: boolean
   /** Per-call timeout in milliseconds for a trusted host attachment. */
   readonly executionTimeout?: number
 }
@@ -124,6 +127,7 @@ const unavailable = (server: ServerName, status: Status) => {
 
 type ServerEntry = {
   readonly config: Mcp.ServerConfig
+  readonly policy?: HostPolicy
   status: Status
   readonly startup: Latch.Latch
   scope?: Scope.Closeable
@@ -174,7 +178,7 @@ const cloneConfig = (config: Mcp.ServerConfig) => structuredClone(config) as Typ
 
 export interface Interface extends State.Transformable<Editor> {
   readonly servers: () => Effect.Effect<ServerInfo[]>
-  readonly add: (server: ServerName | string, config: Mcp.ServerConfig) => Effect.Effect<void>
+  readonly add: (server: ServerName | string, config: Mcp.ServerConfig, policy?: HostPolicy) => Effect.Effect<void>
   readonly connect: (server: ServerName | string) => Effect.Effect<void, NotFoundError>
   readonly disconnect: (server: ServerName | string) => Effect.Effect<void, NotFoundError>
   readonly remove: (server: ServerName | string) => Effect.Effect<void, NotFoundError>
@@ -390,6 +394,7 @@ export const layer = (options?: Options) =>
       const toTool = (server: ServerName, entry: ServerEntry, tool: McpClient.Tool): Tool => ({
         ...tool,
         server,
+        ...hostFields(entry.policy),
         ...(entry.config.codemode === undefined ? {} : { codemode: entry.config.codemode }),
       })
 
@@ -548,6 +553,13 @@ export const layer = (options?: Options) =>
             yield* bus.publish(McpEvent.ToolsChanged, { server: name })
             yield* bus.publish(McpEvent.ResourcesChanged, { server: name })
             yield* bus.publish(McpEvent.StatusChanged, { server: name })
+            if (entry.policy?.trustedHost === true) {
+              yield* notifyAttachedWaits(name).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("failed to notify external wait change on server connect", { server: name, cause }),
+                ),
+              )
+            }
             whenLive(name, entry, result.value.connection)(refreshPrompts(name, entry, result.value.connection))
             return
           }
@@ -568,6 +580,7 @@ export const layer = (options?: Options) =>
       const stopServer = Effect.fnUntraced(function* (name: ServerName, entry: ServerEntry) {
         const scope = entry.scope
         if (!scope) return
+        const wasTrustedLive = entry.policy?.trustedHost === true && entry.client !== undefined
         entry.scope = undefined
         entry.client = undefined
         entry.tools = undefined
@@ -576,6 +589,13 @@ export const layer = (options?: Options) =>
         yield* bus.publish(McpEvent.ToolsChanged, { server: name })
         yield* bus.publish(McpEvent.ResourcesChanged, { server: name })
         yield* bus.publish(PromptsChanged, { server: name })
+        if (wasTrustedLive) {
+          yield* notifyAttachedWaits(name).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("failed to notify external wait change on server stop", { server: name, cause }),
+            ),
+          )
+        }
       })
 
       const disposeServer = Effect.fnUntraced(function* (name: ServerName, entry: ServerEntry) {
@@ -584,11 +604,16 @@ export const layer = (options?: Options) =>
         if (entry.registration) yield* entry.registration.dispose
       })
 
-      const replaceServer = Effect.fnUntraced(function* (name: ServerName, serverConfig: Mcp.ServerConfig) {
+      const replaceServer = Effect.fnUntraced(function* (
+        name: ServerName,
+        serverConfig: Mcp.ServerConfig,
+        policy?: HostPolicy,
+      ) {
         const previous = entries.get(name)
         if (previous) yield* disposeServer(name, previous)
         const entry: ServerEntry = {
           config: serverConfig,
+          ...(policy === undefined ? {} : { policy }),
           status: { status: "pending" },
           startup: Latch.makeUnsafe(),
         }
@@ -811,13 +836,24 @@ export const layer = (options?: Options) =>
 
       let applied: Map<ServerName, Mcp.ServerConfig> | undefined
       const overrides = new Map<ServerName, Mcp.ServerConfig | false>()
+      const runtimePolicies = new Map<ServerName, HostPolicy>()
+      const appliedPolicies = new Map<ServerName, HostPolicy | undefined>()
+      const activeRuntimePolicy = (name: ServerName, serverConfig: Mcp.ServerConfig | undefined) => {
+        if (!serverConfig) return undefined
+        const override = overrides.get(name)
+        if (!override || !isDeepStrictEqual(override, serverConfig)) return undefined
+        return runtimePolicies.get(name)
+      }
       const reconcileLock = Semaphore.makeUnsafe(1)
       const reconcile = Effect.fnUntraced(function* () {
         const servers = state.get().servers
         if (!applied && entries.size === 0) {
           for (const [name, server] of servers) {
+            const policy = activeRuntimePolicy(name, server)
+            appliedPolicies.set(name, policy)
             entries.set(name, {
               config: server,
+              ...(policy === undefined ? {} : { policy }),
               status: { status: "pending" },
               startup: Latch.makeUnsafe(),
             })
@@ -848,12 +884,16 @@ export const layer = (options?: Options) =>
         for (const name of names) {
           const previous = applied?.get(name)
           const updated = servers.get(name)
-          if (isDeepStrictEqual(previous, updated)) continue
+          const previousPolicy = appliedPolicies.get(name)
+          const updatedPolicy = activeRuntimePolicy(name, updated)
+          if (isDeepStrictEqual(previous, updated) && isDeepStrictEqual(previousPolicy, updatedPolicy)) continue
           if (!updated) {
+            appliedPolicies.delete(name)
             yield* removeServer(name).pipe(locks.withLock(name))
             continue
           }
-          yield* replaceServer(name, updated).pipe(locks.withLock(name))
+          appliedPolicies.set(name, updatedPolicy)
+          yield* replaceServer(name, updated, updatedPolicy).pipe(locks.withLock(name))
         }
         applied = servers
       })
@@ -916,9 +956,12 @@ export const layer = (options?: Options) =>
             .toSorted(([a], [b]) => a.localeCompare(b))
             .map(([name, entry]): ServerInfo => ({ name, status: entry.status, integrationID: entry.integrationID }))
         }),
-        add: Effect.fn("MCP.add")(function* (server, config) {
+        add: Effect.fn("MCP.add")(function* (server, config, policy) {
           const name = ServerName.make(server)
-          overrides.set(name, config)
+          // Normalize Schema.Class instances (e.g. Mcp.Remote from HttpApi) to match initial()'s cloneConfig().
+          overrides.set(name, cloneConfig(config))
+          runtimePolicies.delete(name)
+          if (policy?.trustedHost === true) runtimePolicies.set(name, policy)
           yield* state.reload()
         }),
         connect: Effect.fn("MCP.connect")(function* (server) {
@@ -942,6 +985,7 @@ export const layer = (options?: Options) =>
           const name = ServerName.make(server)
           yield* requireServer(name)
           overrides.set(name, false)
+          runtimePolicies.delete(name)
           yield* state.reload()
         }),
         attach: Effect.fn("MCP.attach")(function* (client, transport, policy) {
@@ -960,7 +1004,10 @@ export const layer = (options?: Options) =>
           ].toSorted((a, b) => a.server.localeCompare(b.server) || a.name.localeCompare(b.name))
         }),
         isAttached: Effect.fn("MCP.isAttached")(function* (server) {
-          return (attached.get(ServerName.make(server))?.length ?? 0) > 0
+          const name = ServerName.make(server)
+          if ((attached.get(name)?.length ?? 0) > 0) return true
+          const entry = entries.get(name)
+          return entry?.policy?.trustedHost === true && entry.status.status === "connected" && entry.client !== undefined
         }),
         callTool: Effect.fn("MCP.callTool")(function* (input) {
           const server = ServerName.make(input.server)
@@ -997,6 +1044,7 @@ export const layer = (options?: Options) =>
               tool: input.name,
               message: unavailable(target.name, target.entry.status),
             })
+          const timeout = target.entry.policy?.trustedHost === true ? target.entry.policy.executionTimeoutMs : undefined
           const result = yield* recovering(target.name, target.entry, target.entry.client, (connection) =>
             connection.callTool({
               name: input.name,
@@ -1005,6 +1053,7 @@ export const layer = (options?: Options) =>
               onProgress: input.onProgress,
             }),
           ).pipe(
+            Effect.timeout(timeout ?? Duration.infinity),
             Effect.mapError(
               (error) =>
                 new ToolCallError({
@@ -1194,6 +1243,9 @@ const hostFields = (policy?: HostPolicy) => {
   return {
     trustedHost: true,
     ...(policy.permissionNamespace === undefined ? {} : { permissionNamespace: policy.permissionNamespace }),
+    ...(policy.preserveServerPermission === undefined
+      ? {}
+      : { preserveServerPermission: policy.preserveServerPermission }),
     ...(policy.codemode === undefined ? {} : { codemode: policy.codemode }),
     ...(policy.executionTimeoutMs === undefined ? {} : { executionTimeout: policy.executionTimeoutMs }),
   }

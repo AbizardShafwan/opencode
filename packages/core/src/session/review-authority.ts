@@ -30,5 +30,8 @@ export const rules: Permission.Ruleset = [
     "t3-code_list_thread_issues",
     "t3-code_html_preview",
     "t3-code_html_render",
-  ].map((action) => ({ action, resource: "*", effect: "allow" as const })),
+  ].flatMap((action) => [
+    { action, resource: "*", effect: "allow" as const },
+    { action: action.replace("t3-code_", "t3-code-*_"), resource: "*", effect: "allow" as const },
+  ]),
 ]

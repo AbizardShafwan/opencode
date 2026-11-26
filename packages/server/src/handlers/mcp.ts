@@ -12,7 +12,7 @@ import { Socket } from "effect/socket"
 import { Api } from "../api"
 import { CorsConfig, isAllowedRequestOrigin } from "../cors"
 import { locationErrors, requestRef, response } from "../location"
-import { TrustedHostConfig, hostPolicy } from "../trusted-host"
+import { TrustedHostConfig, hostPolicy, runtimeMcpHostPolicy } from "../trusted-host"
 import { holdLocation, type Outbound, runPtySocket } from "./pty-socket"
 
 const notFound = <A, R>(effect: Effect.Effect<A, Mcp.NotFoundError, R>) =>
@@ -37,7 +37,8 @@ export const McpHandler = HttpApiBuilder.group(Api, "server.mcp", (handlers) =>
         "mcp.add",
         Effect.fn(function* (ctx) {
           const service = yield* Mcp.Service
-          yield* service.add(ctx.params.server, ctx.payload.config)
+          const policy = runtimeMcpHostPolicy({ name: ctx.params.server, config: ctx.payload.config }, trustedHost)
+          yield* service.add(ctx.params.server, ctx.payload.config, policy)
           return HttpApiSchema.NoContent.make()
         }),
       )

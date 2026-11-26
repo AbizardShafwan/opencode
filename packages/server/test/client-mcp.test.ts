@@ -1,14 +1,17 @@
 import { expect } from "bun:test"
 import { NodeHttpServer } from "@effect/platform-node"
+import { Bus } from "@opencode/core/bus"
 import { Location } from "@opencode/core/location"
 import { AbsolutePath } from "@opencode/core/schema"
 import { LocationLifecycle } from "@opencode/core/location-lifecycle"
 import { LocationServiceMap } from "@opencode/core/location-service-map"
 import { Mcp } from "@opencode/core/mcp/index"
 import { Session } from "@opencode/core/session"
+import { SessionExternalWait } from "@opencode/core/session/external-wait"
+import { SessionEvent } from "@opencode/schema/session-event"
 import { Tool } from "@opencode/core/tool"
 import { McpTool } from "@opencode/core/tool/mcp"
-import { Context, Effect, Exit, Layer, MutableHashMap, Option, Schedule, Scope } from "effect"
+import { Context, Effect, Exit, Layer, MutableHashMap, Option, Schedule, Scope, Stream } from "effect"
 import { HttpRouter, HttpServer } from "effect/http"
 import { createServer } from "node:http"
 import path from "node:path"
@@ -401,6 +404,110 @@ it.live(
       spoof.socket.close()
       host.socket.close()
       yield* until(async () => (await tools()).length === 0)
+    }),
+  20_000,
+)
+
+it.live(
+  "auto-trusts loopback runtime PUT /api/experimental/mcp/t3-code-* registrations with zero config",
+  () =>
+    Effect.gen(function* () {
+      const mcpServer = yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          Bun.serve({
+            hostname: "127.0.0.1",
+            port: 0,
+            async fetch(request) {
+              if (request.method !== "POST") return new Response(null, { status: 405 })
+              const body = (await request.json()) as { id?: unknown; method?: string }
+              if (body.id === undefined) return new Response(null, { status: 202 })
+              if (body.method === "initialize")
+                return Response.json({
+                  jsonrpc: "2.0",
+                  id: body.id,
+                  result: {
+                    protocolVersion: "2025-03-26",
+                    capabilities: { tools: {} },
+                    serverInfo: { name: "t3-code-http-mock", version: "1.0.0" },
+                  },
+                })
+              if (body.method === "tools/list")
+                return Response.json({
+                  jsonrpc: "2.0",
+                  id: body.id,
+                  result: {
+                    tools: [{ name: "preview_status", description: "Preview status", inputSchema: { type: "object" } }],
+                  },
+                })
+              return Response.json({ jsonrpc: "2.0", id: body.id, result: {} })
+            },
+          }),
+        ),
+        (srv) => Effect.promise(() => srv.stop(true)),
+      )
+
+      const server = yield* serve()
+      const bus = Context.get(server.context, Bus.Service)
+      const waits = Context.get(server.context, SessionExternalWait.Service)
+      const waitSession = Session.ID.make("ses_loopback_wait")
+      const waitEvents: string[] = []
+      yield* bus.subscribe(SessionEvent.ExternalWait.Changed).pipe(
+        Stream.runForEach((event) => Effect.sync(() => void waitEvents.push(event.data.sessionID))),
+        Effect.forkScoped({ startImmediately: true }),
+      )
+      yield* waits.register({
+        sessionID: waitSession,
+        waitID: "pr-watch:77",
+        source: "pull_request_watch",
+        server: "t3-code-thr1",
+        description: "Watching PR #77",
+      })
+      waitEvents.length = 0
+
+      const mcpUrl = new URL("/api/experimental/mcp/t3-code-thr1", server.base)
+      mcpUrl.searchParams.set("location[directory]", server.directory)
+      const addRes = yield* Effect.promise(() =>
+        fetch(mcpUrl, {
+          method: "PUT",
+          headers: { authorization, "content-type": "application/json" },
+          body: JSON.stringify({
+            config: {
+              type: "remote",
+              url: `http://127.0.0.1:${mcpServer.port}/mcp`,
+              oauth: false,
+            },
+          }),
+        }),
+      )
+      expect(addRes.status).toBe(204)
+
+      yield* until(async () => {
+        const list = await Effect.runPromise(server.inLocation(Mcp.Service.use((mcp) => mcp.tools())))
+        return list.some((tool) => tool.server === "t3-code-thr1")
+      })
+      const mcpTools = yield* server.inLocation(Mcp.Service.use((mcp) => mcp.tools()))
+      expect(mcpTools.find((tool) => tool.server === "t3-code-thr1")).toMatchObject({
+        trustedHost: true,
+        permissionNamespace: "t3-code",
+        preserveServerPermission: true,
+        codemode: false,
+      })
+      expect(yield* server.inLocation(Mcp.Service.use((mcp) => mcp.isAttached("t3-code-thr1")))).toBe(true)
+
+      yield* until(() =>
+        Effect.runPromise(server.inLocation(registryIDs)).then((ids) => ids.includes("t3-code-thr1_preview_status")),
+      )
+      const listed = yield* server.inLocation(Tool.Service.use((registry) => registry.list()))
+      expect(listed.find((tool) => tool.id === "t3-code-thr1_preview_status")?.options?.permission).toBe(
+        "t3-code-thr1_preview_status",
+      )
+      expect(waitEvents).toContain(waitSession)
+
+      waitEvents.length = 0
+      const delRes = yield* Effect.promise(() => fetch(mcpUrl, { method: "DELETE", headers: { authorization } }))
+      expect(delRes.status).toBe(204)
+      expect(yield* server.inLocation(Mcp.Service.use((mcp) => mcp.isAttached("t3-code-thr1")))).toBe(false)
+      expect(waitEvents).toContain(waitSession)
     }),
   20_000,
 )

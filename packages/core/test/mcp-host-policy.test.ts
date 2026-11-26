@@ -476,3 +476,57 @@ it.effect("persists external waits into KV from McpTool.layer without SessionExt
     expect(stored.entries.map((entry) => entry.key)).toEqual([`external.wait/${rootID}/pr-watch:acme/repoa#42`])
   }),
 )
+
+it.effect("preserves per-thread server permission actions when preserveServerPermission is set", () =>
+  Effect.gen(function* () {
+    const threadA = Mcp.ServerName.make("t3-code-threadA")
+    const threadB = Mcp.ServerName.make("t3-code-threadB")
+    const runtimeHost = { ...host, preserveServerPermission: true } as const
+    const { tools, asserted, waitCalls } = yield* build({
+      tools: [
+        mcpTool(threadA, "preview_open", runtimeHost),
+        mcpTool(threadA, "request_secret", runtimeHost),
+        mcpTool(threadA, "watch_pull_request", runtimeHost),
+        mcpTool(threadA, "t3_worktree_handoff", runtimeHost),
+        mcpTool(threadB, "preview_open", runtimeHost),
+        mcpTool(Mcp.ServerName.make("t3-code-spoof"), "preview_open", { codemode: false }),
+      ],
+    })
+
+    const listed = yield* tools.list()
+    expect(listed.find((tool) => tool.id === McpTool.directName(threadA, "preview_open"))?.options?.permission).toBe(
+      "t3-code-threadA_preview_open",
+    )
+    expect(listed.find((tool) => tool.id === McpTool.directName(threadB, "preview_open"))?.options?.permission).toBe(
+      "t3-code-threadB_preview_open",
+    )
+    expect(
+      listed.find((tool) => tool.id === "t3-code-spoof_preview_open")?.options?.permission,
+    ).toBe("mcp_t3-code-spoof_preview_open")
+    expect(listed.find((tool) => tool.id === McpTool.directName(threadA, "request_secret"))?.options?.sensitiveInputs).toEqual([
+      "value",
+    ])
+    const snapshot = yield* tools.snapshot()
+    expect(snapshot.isDeferred?.(McpTool.directName(threadA, "t3_worktree_handoff"))).toBe(true)
+
+    // Matches T3 Code v0.1.12 per-thread isolation rules even under full-access (`* -> allow`).
+    const fullAccessThreadA: Permission.Ruleset = [
+      { action: "*", resource: "*", effect: "allow" },
+      { action: "t3-code-*", resource: "*", effect: "deny" },
+      { action: "t3-code-threadA_*", resource: "*", effect: "allow" },
+    ]
+    expect(Permission.evaluate("t3-code-threadA_preview_open", "*", fullAccessThreadA).effect).toBe("allow")
+    expect(Permission.evaluate("t3-code-threadB_preview_open", "*", fullAccessThreadA).effect).toBe("deny")
+
+    const secret = yield* run(tools, McpTool.directName(threadA, "request_secret"), { label: "Key", value: "tok_123" })
+    expect(secret._tag).toBe("Success")
+    expect(asserted[0]?.action).toBe("t3-code-threadA_request_secret")
+    expect(asserted[0]?.metadata).toEqual({ input: { label: "Key", value: "[REDACTED]" } })
+
+    const watch = yield* run(tools, McpTool.directName(threadA, "watch_pull_request"), {
+      url: "https://github.com/Acme/Repo/pull/7",
+    })
+    expect(watch._tag).toBe("Success")
+    expect(waitCalls).toEqual([{ action: "register", waitID: "pr-watch:acme/repo#7" }])
+  }),
+)

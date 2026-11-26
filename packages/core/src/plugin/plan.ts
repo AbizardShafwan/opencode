@@ -146,7 +146,11 @@ function permissions(directory: string): Permission.Ruleset {
     { action: "shell", resource: "*", effect: "ask" },
     { action: "edit", resource: "*", effect: "deny" },
     { action: "edit", resource: path.join(directory, "*"), effect: "allow" },
-    ...READ_ONLY_HOST_ACTIONS.map((action) => ({ action, resource: "*", effect: "allow" as const })),
+    ...READ_ONLY_HOST_ACTIONS.flatMap((action) => [
+      { action, resource: "*", effect: "allow" as const },
+      // Per-thread loopback host registrations preserve `t3-code-<hash>_<tool>` for thread isolation.
+      { action: action.replace("t3-code_", "t3-code-*_"), resource: "*", effect: "allow" as const },
+    ]),
   ]
 }
 

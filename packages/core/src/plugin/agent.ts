@@ -100,7 +100,10 @@ export const Plugin = define({
           { action: "read", resource: "*.env.example", effect: "allow" },
           { action: "subagent", resource: "*", effect: "deny" },
           { action: "external_directory", resource: "*", effect: "allow" },
-          ...EXPLORE_HOST_ACTIONS.map((action) => ({ action, resource: "*", effect: "allow" as const })),
+          ...EXPLORE_HOST_ACTIONS.flatMap((action) => [
+            { action, resource: "*", effect: "allow" as const },
+            { action: action.replace("t3-code_", "t3-code-*_"), resource: "*", effect: "allow" as const },
+          ]),
         )
       })
 
