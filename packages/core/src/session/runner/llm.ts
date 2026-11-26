@@ -292,6 +292,7 @@ const layer = Layer.effect(
               options: prepared.options,
               retry: prepared.retry,
               executeTool: prepared.executeTool,
+              sensitiveInputsFor: prepared.sensitiveInputsFor,
               isDeferredTool: prepared.isDeferredTool,
             })),
           )

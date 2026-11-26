@@ -3249,7 +3249,7 @@ describe("McpClient.resolveTimeout", () => {
 })
 
 const runtimeWaitMcpLayer = () => {
-  const unused = () => Effect.die("unused integration service")
+  const unused = () => Effect.die(new Error("unused integration service"))
   return AppNodeBuilder.build(
     LayerNode.group([Mcp.node, McpInstructions.node, Bus.node, Location.node, SessionExternalWait.node, KV.node]),
     [

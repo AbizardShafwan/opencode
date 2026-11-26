@@ -7315,3 +7315,190 @@ describe("session runner external waits layer capture", () => {
       }),
   )
 })
+
+describe("session runner sensitive input redaction", () => {
+  const hostServer = Mcp.ServerName.make("t3-code-host")
+
+  testEffect(Layer.empty).effect(
+    "redacts sensitive request_secret inputs from durable events and messages across SessionRunnerLLM",
+    () =>
+      Effect.gen(function* () {
+        const localLLM = TestLLM.layer({ fallback: [] })
+        const directory = AbsolutePath.make("/project")
+        const calledArgs: Array<Record<string, unknown>> = []
+        const assertedInputs: unknown[] = []
+        const mcpLayer = Layer.mock(Mcp.Service, {
+          isAttached: (name) => Effect.succeed(name === hostServer),
+          tools: () =>
+            Effect.succeed([
+              {
+                server: hostServer,
+                name: "request_secret",
+                trustedHost: true,
+                permissionNamespace: "t3-code",
+                preserveServerPermission: true,
+                codemode: false,
+                inputSchema: {
+                  type: "object",
+                  properties: { label: { type: "string" }, value: { type: "string" } },
+                  required: ["label", "value"],
+                },
+              },
+            ]),
+          callTool: (input) =>
+            Effect.sync(() => {
+              calledArgs.push(input.args ?? {})
+              return {
+                server: Mcp.ServerName.make(input.server),
+                tool: input.name,
+                isError: false,
+                content: [{ type: "text", text: "secret-stored" }],
+              }
+            }),
+        })
+        const services = yield* Layer.build(
+          AppNodeBuilder.build(
+            LayerNode.group([
+              SessionRunnerLLM.node,
+              McpTool.node,
+              Tool.node,
+              Database.node,
+              Bus.node,
+              SessionProjector.node,
+              SessionInbox.node,
+              SessionStore.node,
+              PluginHooks.node,
+              Agent.node,
+              Model.node,
+            ]),
+            [
+              Snapshot.node.replace(Snapshot.noopLayer),
+              Bus.node.replace(Bus.configured({ persist: true })),
+              LayerNodePlatform.llmClient.replace(TestLLM.clientLayer.pipe(Layer.provide(localLLM))),
+              SessionRunnerModel.node.replace(
+                Layer.mock(SessionRunnerModel.Service)({
+                  resolve: () =>
+                    Effect.succeed(
+                      SessionRunnerModel.resolved(model, {
+                        capabilities: { tools: true, input: ["text"], output: ["text"] },
+                        cost: [],
+                        limit: defaultModelLimit,
+                      }),
+                    ),
+                }),
+              ),
+              InstructionBuiltIns.node.replace(
+                Layer.mock(InstructionBuiltIns.Service, { load: () => Effect.succeed(Instructions.empty) }),
+              ),
+              InstructionDiscovery.node.replace(
+                Layer.mock(InstructionDiscovery.Service, {
+                  project: true,
+                  global: true,
+                  load: () => Effect.succeed(Instructions.empty),
+                }),
+              ),
+              SkillInstructions.node.replace(
+                Layer.mock(SkillInstructions.Service, { load: () => Effect.succeed(Instructions.empty) }),
+              ),
+              ReferenceInstructions.node.replace(
+                Layer.mock(ReferenceInstructions.Service, { load: () => Effect.succeed(Instructions.empty) }),
+              ),
+              McpInstructions.node.replace(
+                Layer.mock(McpInstructions.Service, { load: () => Effect.succeed(Instructions.empty) }),
+              ),
+              Location.node.replace(Location.boundNode({ directory })),
+              Permission.node.replace(
+                Layer.mock(Permission.Service, {
+                  assert: (input) =>
+                    Effect.sync(() => {
+                      assertedInputs.push(input.metadata?.input)
+                    }),
+                }),
+              ),
+              Config.node.replace(Config.testLayer()),
+              PluginSupervisor.node.replace(Layer.empty),
+              Plugin.node.replace(Layer.mock(Plugin.Service, { awaitActivation: Effect.void })),
+              Mcp.node.replace(mcpLayer),
+              ToolOutput.node.replace(Layer.mock(ToolOutput.Service, { truncate: Effect.succeed })),
+            ],
+          ).pipe(Layer.provideMerge(localLLM)),
+        ).pipe(Effect.orDie)
+
+        const { db } = Context.get(services, Database.Service)
+        const llm = Context.get(services, TestLLM.Service)
+        const bus = Context.get(services, Bus.Service)
+        const agents = Context.get(services, Agent.Service)
+        const inbox = Context.get(services, SessionInbox.Service)
+        const store = Context.get(services, SessionStore.Service)
+        const runner = Context.get(services, SessionRunner.Service)
+        yield* Context.get(services, McpTool.Service).flush
+
+        yield* agents.transform((editor) => {
+          editor.update(Agent.ID.make("build"), (agent) => {
+            agent.mode = "primary"
+          })
+        })
+        yield* db
+          .insert(ProjectTable)
+          .values({ id: Project.ID.global, worktree: directory, sandboxes: [] })
+          .onConflictDoNothing()
+          .run()
+          .pipe(Effect.orDie)
+        const sessionID = Session.ID.make("ses_runner_secret_redaction")
+        yield* db
+          .insert(SessionTable)
+          .values({
+            id: sessionID,
+            project_id: Project.ID.global,
+            slug: sessionID,
+            directory,
+            title: "secret-test",
+            version: "test",
+          })
+          .onConflictDoNothing()
+          .run()
+          .pipe(Effect.orDie)
+
+        const toolName = McpTool.directName(hostServer, "request_secret")
+        const secret = "super-secret-value-123"
+        yield* inbox
+          .admit({
+            id: SessionMessage.ID.create(),
+            sessionID,
+            item: SessionInbox.Item.make({ type: "user", payload: { text: "Store secret" }, delivery: "steer" }),
+          })
+          .pipe(Effect.orDie)
+        yield* bus.publish(SessionEvent.Execution.Started, { sessionID })
+        yield* llm.push(
+          TestLLM.tool("call-secret", toolName, { label: "API token", value: secret }),
+          TestLLM.text("Stored", "text-stored"),
+        )
+
+        const drained = yield* runner.drain({ sessionID, force: false }).pipe(Effect.orDie)
+        expect(drained._tag).toBe("Complete")
+
+        // The host MCP server receives the raw secret at execution time, while permission metadata redacts it.
+        expect(calledArgs).toEqual([{ label: "API token", value: secret }])
+        expect(assertedInputs).toEqual([{ label: "API token", value: "[REDACTED]" }])
+
+        // Durable events and stored session messages never retain the secret value.
+        const storedEvents = yield* db.select().from(EventTable).all().pipe(Effect.orDie)
+        expect(JSON.stringify(storedEvents)).not.toContain(secret)
+        expect(JSON.stringify(storedEvents)).toContain("[REDACTED]")
+
+        const messages = yield* store.context(sessionID).pipe(Effect.orDie)
+        expect(JSON.stringify(messages)).not.toContain(secret)
+        const assistant = messages.find((msg) => msg.type === "assistant")
+        const toolPart = assistant?.content.find((part) => part.type === "tool")
+        expect(toolPart).toMatchObject({
+          type: "tool",
+          name: toolName,
+          state: {
+            status: "completed",
+            input: { label: "API token", value: "[REDACTED]" },
+            content: [{ type: "text", text: "secret-stored" }],
+          },
+        })
+      }),
+  )
+})
