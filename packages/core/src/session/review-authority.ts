@@ -28,6 +28,8 @@ export const rules: Permission.Ruleset = [
     "t3-code_read_issue",
     "t3-code_list_thread_pull_requests",
     "t3-code_list_thread_issues",
+    "t3-code_t3_project_list",
+    "t3-code_t3_project_read",
     "t3-code_html_preview",
     "t3-code_html_render",
   ].flatMap((action) => [

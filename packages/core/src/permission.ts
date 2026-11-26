@@ -87,6 +87,50 @@ export function merge(...rulesets: Permission.Ruleset[]): Permission.Ruleset {
   return rulesets.flat()
 }
 
+const HOST_UNDERSCORE_PROBE = "t3-code___host_ceiling_probe__"
+const HOST_HYPHEN_PROBE = "t3-code-__host_ceiling_probe___tool"
+
+function isHostRuleAction(action: string) {
+  return action === "t3-code*" || action === "t3-code" || action.startsWith("t3-code_") || action.startsWith("t3-code-")
+}
+
+function hostCeilingRules(agentPermissions: Permission.Ruleset): Permission.Ruleset | undefined {
+  const deniesUnderscore = evaluate(HOST_UNDERSCORE_PROBE, "*", agentPermissions).effect === "deny"
+  const deniesHyphen = evaluate(HOST_HYPHEN_PROBE, "*", agentPermissions).effect === "deny"
+  const hasExplicitHostDeny = agentPermissions.some((rule) => isHostRuleAction(rule.action) && rule.effect === "deny")
+  if (!deniesUnderscore && !deniesHyphen && !hasExplicitHostDeny) return undefined
+
+  return [
+    { action: "*", resource: "*", effect: "allow" },
+    ...agentPermissions.flatMap((rule): Permission.Ruleset => {
+      if (isHostRuleAction(rule.action)) return [rule]
+      const matchesUnderscore = Wildcard.match(HOST_UNDERSCORE_PROBE, rule.action)
+      const matchesHyphen = Wildcard.match(HOST_HYPHEN_PROBE, rule.action)
+      if (!matchesUnderscore && !matchesHyphen) return []
+      // Collapse inherited `*` ask into allow inside the host-only ceiling so non-allow session
+      // rules stay authoritative while non-host tools remain unaffected.
+      const effect: Permission.Effect = rule.effect === "ask" ? "allow" : rule.effect
+      return [
+        ...(matchesUnderscore ? [{ action: "t3-code_*", resource: rule.resource, effect }] : []),
+        ...(matchesHyphen ? [{ action: "t3-code-*", resource: rule.resource, effect }] : []),
+      ]
+    }),
+  ]
+}
+
+/**
+ * Extracts an independent host-namespace authority ceiling when an agent denies arbitrary
+ * `t3-code*` actions, so per-thread `session.permissions` grants cannot expand read-only agents.
+ */
+export function withHostCeiling(
+  agentPermissions: Permission.Ruleset,
+  authority?: ReadonlyArray<Permission.Ruleset>,
+): ReadonlyArray<Permission.Ruleset> {
+  const ceiling = hostCeilingRules(agentPermissions)
+  if (!ceiling) return authority ?? []
+  return [...(authority ?? []), ceiling]
+}
+
 export interface Interface {
   /** Snapshot configured authority; saved user approvals are evaluated separately at use time. */
   readonly authority: (
@@ -153,9 +197,10 @@ const layer = Layer.effect(
       const session = yield* sessions.get(sessionID)
       if (!session) return yield* new SessionErrors.NotFoundError({ sessionID })
       const agent = yield* agents.resolve(agentID ?? session.agent)
+      const permissions = agent?.permissions ?? missingAgentPermissions
       return [
-        ...(session.authority ?? []),
-        merge(agent?.permissions ?? missingAgentPermissions, session.permissions ?? []),
+        ...withHostCeiling(permissions, session.authority),
+        merge(permissions, session.permissions ?? []),
       ]
     })
 

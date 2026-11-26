@@ -17,6 +17,38 @@ import { SessionStore } from "../../session/store.js"
 
 export const name = "subagent"
 
+const HOST_DELEGATE_TASK = "t3-code_delegate_task"
+const HOST_DELEGATE_PREFIX = "t3-code-"
+const HOST_DELEGATE_SUFFIX = "_delegate_task"
+
+/** Matches verified T3 Code host delegation actions (direct or per-thread). */
+export function isHostDelegateAction(action: string) {
+  if (action === HOST_DELEGATE_TASK) return true
+  return (
+    action.startsWith(HOST_DELEGATE_PREFIX) &&
+    action.endsWith(HOST_DELEGATE_SUFFIX) &&
+    action.length > HOST_DELEGATE_PREFIX.length + HOST_DELEGATE_SUFFIX.length
+  )
+}
+
+/**
+ * Checks whether any exposed session tool is a verified host `delegate_task` tool, resolving
+ * 63-char aliased MCP names (`m_<16hex>_delegate_task`) and rejecting `mcp_`-demoted spoofs.
+ */
+export function hasHostDelegation(
+  eventTools: Readonly<Record<string, unknown>>,
+  registeredTools?: ReadonlyMap<string, { readonly options?: { readonly permission?: string } }>,
+) {
+  return Object.keys(eventTools).some((key) => {
+    const registered = registeredTools?.get(key)
+    if (registered) {
+      const action = registered.options?.permission ?? key
+      return action === "delegate_task" || isHostDelegateAction(action)
+    }
+    return key === "delegate_task" || isHostDelegateAction(key)
+  })
+}
+
 const backgroundResult = (sessionID: SessionSchema.ID) => ({
   sessionID,
   status: "running" as const,
@@ -434,9 +466,8 @@ export const Plugin = {
               Permission.evaluate(name, agent.id, selected.permissions).effect !== "deny",
           )
           .toSorted((a, b) => a.id.localeCompare(b.id))
-        const hostDelegation = Object.keys(event.tools).some(
-          (key) => key === "delegate_task" || key.endsWith("_delegate_task"),
-        )
+        const registered = new Map((yield* ctx.tool.list()).map((tool) => [tool.id, tool]))
+        const hostDelegation = hasHostDelegation(event.tools, registered)
         if (available.length === 0 && !hostDelegation) return
         for (const tool of tools)
           tool.description = describeSubagents({ description: tool.description, available, hostDelegation })

@@ -13,116 +13,130 @@ export type DiffSource = {
   readonly metadata?: Readonly<Record<string, unknown>>
 }
 
-/** The reserved namespace the verified T3 Code host advertises its tools under. */
+/** The reserved namespace prefixes the verified T3 Code host advertises its tools under. */
 const HOST_TOOL_PREFIX = "t3-code_"
+const PER_THREAD_HOST_PREFIX = "t3-code-"
+
+const HOST_TOOL_KINDS = new Map<string, ToolKind>([
+  ["shell", "execute"],
+  ["ci_rerun", "execute"],
+  // Browser work drives pages and runs scripts, so ACP treats it like running code.
+  ["preview_act", "execute"],
+  ["preview_close", "execute"],
+  ["preview_dialog", "execute"],
+  ["preview_evaluate", "execute"],
+  ["preview_navigate", "execute"],
+  ["preview_open", "execute"],
+  ["preview_recording_start", "execute"],
+  ["preview_recording_stop", "execute"],
+  ["preview_resize", "execute"],
+  ["preview_set_appearance", "execute"],
+  ["device_open", "execute"],
+  ["device_close", "execute"],
+  // Agent-thread control changes another thread's work rather than reading it.
+  ["send_message", "execute"],
+  ["followup_task", "execute"],
+  ["interrupt_agent", "execute"],
+  ["close_agent", "execute"],
+  ["task_cancel", "execute"],
+  ["t3_thread_launch", "execute"],
+  ["t3_thread_send", "execute"],
+  ["t3_thread_queue", "execute"],
+  ["t3_thread_interrupt", "execute"],
+  ["t3_thread_organize", "execute"],
+  ["t3_thread_rename", "execute"],
+  ["t3_thread_update", "execute"],
+  ["t3_thread_transfer", "execute"],
+  ["t3_worktree_create", "execute"],
+  ["t3_worktree_remove", "execute"],
+  ["t3_worktree_handoff", "execute"],
+  ["t3_worktree_sync", "execute"],
+  ["t3_environment_link", "execute"],
+  ["t3_environment_unlink", "execute"],
+  ["pull_request_merge", "execute"],
+  ["create_issue", "edit"],
+  ["comment_on_issue", "edit"],
+  ["pull_request_create", "edit"],
+  ["pull_request_update", "edit"],
+  ["pull_request_review", "edit"],
+  ["pull_request_respond", "edit"],
+  ["list_issues", "search"],
+  ["pull_request_list", "search"],
+  ["list_thread_issues", "search"],
+  ["list_thread_pull_requests", "search"],
+  ["list_scheduled_tasks", "search"],
+  ["list_agents", "search"],
+  ["t3_project_list", "search"],
+  ["t3_preview_list", "search"],
+  ["t3_thread_list", "search"],
+  ["t3_thread_search", "search"],
+  ["device_list", "search"],
+  ["t3_worktree_list", "search"],
+  ["t3_worktree_status", "search"],
+  ["t3_environment_links", "search"],
+  ["orchestrator_capabilities", "search"],
+  ["pull_request_read", "read"],
+  ["read_issue", "read"],
+  ["read_pull_request_guide", "read"],
+  ["ci_logs", "read"],
+  ["t3_project_read", "read"],
+  ["t3_theme_read", "read"],
+  ["t3_thread_read", "read"],
+  ["t3_environment_read", "read"],
+  ["device_screenshot", "read"],
+  ["html_preview", "read"],
+  ["preview_snapshot", "read"],
+  ["preview_status", "read"],
+  ["preview_wait_for", "read"],
+  ["task_status", "read"],
+  ["delegate_task", "think"],
+  ["request_secret", "other"],
+  ["html_render", "other"],
+  ["t3_background_wait", "other"],
+  ["t3_thread_wait", "other"],
+  ["t3_submit_output", "other"],
+  ["send_to_user", "other"],
+])
+
+// Check longest known host tool suffixes first so `<tool>` names containing `_` win over shorter matches.
+const HOST_TOOL_SUFFIXES = Array.from(HOST_TOOL_KINDS.entries()).toSorted(
+  ([left], [right]) => right.length - left.length,
+)
+
+const LOCAL_TOOL_KINDS = new Map<string, ToolKind>([
+  ["execute", "execute"],
+  ["webfetch", "fetch"],
+  ["edit", "edit"],
+  ["patch", "edit"],
+  ["write", "edit"],
+  ["grep", "search"],
+  ["glob", "search"],
+  ["context", "search"],
+  ["context7_resolve_library_id", "search"],
+  ["context7_get_library_docs", "search"],
+  ["read", "read"],
+  ["subagent", "think"],
+  ["spawn_agent", "think"],
+  ["wait_agent", "other"],
+])
 
 /**
- * T3 Code host tools keep their advertised namespace, while bare names appear when a host tool is
- * called directly. Mapping both lets ACP clients show the right icon for either spelling.
+ * T3 Code host tools advertise under either `t3-code_<tool>` or per-thread `t3-code-<id>_<tool>`
+ * (where `<id>` itself may contain underscores), while bare names appear when called directly.
+ * Untrusted demoted `mcp_t3-code-*` names must never be resolved as host tools.
  */
-function hostToolName(toolName: string) {
-  const name = canonicalName(toolName)
-  return name.startsWith(HOST_TOOL_PREFIX) ? name.slice(HOST_TOOL_PREFIX.length) : name
-}
-
 export function toToolKind(toolName: string): ToolKind {
-  switch (hostToolName(toolName)) {
-    case "execute":
-    case "shell":
-    case "ci_rerun":
-    // Browser work drives pages and runs scripts, so ACP treats it like running code.
-    case "preview_act":
-    case "preview_close":
-    case "preview_dialog":
-    case "preview_evaluate":
-    case "preview_navigate":
-    case "preview_open":
-    case "preview_recording_start":
-    case "preview_recording_stop":
-    case "preview_resize":
-    case "preview_set_appearance":
-    case "preview_wait_for":
-    case "device_open":
-    case "device_close":
-    // Agent-thread control changes another thread's work rather than reading it.
-    case "send_message":
-    case "followup_task":
-    case "interrupt_agent":
-    case "close_agent":
-    case "task_cancel":
-    case "t3_thread_launch":
-    case "t3_thread_send":
-    case "t3_thread_queue":
-    case "t3_thread_interrupt":
-    case "t3_thread_organize":
-    case "t3_thread_rename":
-    case "t3_thread_update":
-    case "t3_thread_transfer":
-    case "t3_worktree_create":
-    case "t3_worktree_remove":
-    case "t3_worktree_handoff":
-    case "t3_worktree_sync":
-    case "t3_environment_link":
-    case "t3_environment_unlink":
-    case "pull_request_merge":
-      return "execute"
-    case "webfetch":
-      return "fetch"
-    case "edit":
-    case "patch":
-    case "write":
-    case "create_issue":
-    case "comment_on_issue":
-    case "pull_request_create":
-    case "pull_request_update":
-    case "pull_request_review":
-    case "pull_request_respond":
-      return "edit"
-    case "grep":
-    case "glob":
-    case "context":
-    case "context7_resolve_library_id":
-    case "context7_get_library_docs":
-    case "list_issues":
-    case "pull_request_list":
-    case "list_thread_issues":
-    case "list_thread_pull_requests":
-    case "list_scheduled_tasks":
-    case "list_agents":
-    case "t3_preview_list":
-    case "t3_thread_list":
-    case "t3_thread_search":
-    case "device_list":
-    case "t3_worktree_list":
-    case "t3_worktree_status":
-    case "t3_environment_links":
-    case "orchestrator_capabilities":
-      return "search"
-    case "read":
-    case "pull_request_read":
-    case "read_issue":
-    case "read_pull_request_guide":
-    case "ci_logs":
-    case "t3_thread_read":
-    case "t3_environment_read":
-    case "device_screenshot":
-    case "html_preview":
-    case "preview_snapshot":
-    case "preview_status":
-    case "task_status":
-      return "read"
-    case "subagent":
-    case "spawn_agent":
-    case "delegate_task":
-      return "think"
-    case "wait_agent":
-    case "request_secret":
-    case "html_render":
-    case "t3_background_wait":
-      return "other"
-    default:
-      return "other"
+  const name = canonicalName(toolName)
+  if (name.startsWith("mcp_")) return "other"
+  if (name.startsWith(HOST_TOOL_PREFIX)) return HOST_TOOL_KINDS.get(name.slice(HOST_TOOL_PREFIX.length)) ?? "other"
+  if (name.startsWith(PER_THREAD_HOST_PREFIX)) {
+    const remainder = name.slice(PER_THREAD_HOST_PREFIX.length)
+    const matched = HOST_TOOL_SUFFIXES.find(
+      ([tool]) => remainder.endsWith(`_${tool}`) && remainder.length > tool.length + 1,
+    )
+    return matched?.[1] ?? "other"
   }
+  return HOST_TOOL_KINDS.get(name) ?? LOCAL_TOOL_KINDS.get(name) ?? "other"
 }
 
 export function toLocations(toolName: string, input: ToolInput, cwd: string): ToolCallLocation[] {

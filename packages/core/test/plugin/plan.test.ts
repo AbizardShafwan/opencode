@@ -289,7 +289,16 @@ describe("plan plugin mutations", () => {
       for (const action of PlanPlugin.READ_ONLY_HOST_ACTIONS) {
         expect(effect(action)).toBe("allow")
         expect(effect(action.replace("t3-code_", "t3-code-abc123_"))).toBe("allow")
+        expect(effect(action.replace("t3-code_", "t3-code-thread_subagent_0123456789abcdef_"))).toBe("allow")
       }
+      expect(PlanPlugin.READ_ONLY_HOST_ACTIONS).toContain("t3-code_t3_project_list")
+      expect(PlanPlugin.READ_ONLY_HOST_ACTIONS).toContain("t3-code_t3_project_read")
+      expect(PlanPlugin.READ_ONLY_HOST_ACTIONS).toContain("t3-code_t3_theme_read")
+      expect(PlanPlugin.READ_ONLY_HOST_ACTIONS).toContain("t3-code_t3_background_wait")
+      expect(PlanPlugin.READ_ONLY_HOST_ACTIONS).toContain("t3-code_t3_thread_wait")
+      expect(PlanPlugin.READ_ONLY_HOST_ACTIONS).toContain("t3-code_t3_submit_output")
+      expect(PlanPlugin.READ_ONLY_HOST_ACTIONS).toContain("t3-code_send_to_user")
+      expect(PlanPlugin.READ_ONLY_HOST_ACTIONS).toContain("t3-code_preview_wait_for")
       for (const tool of [
         "delegate_task",
         "create_threads",
@@ -297,6 +306,7 @@ describe("plan plugin mutations", () => {
         "pull_request_merge",
         "create_issue",
         "preview_act",
+        "preview_snapshot",
         "device_open",
         "request_secret",
         "t3_environment_preferences_update",

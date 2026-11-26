@@ -177,14 +177,15 @@ const layer = Layer.effect(
         sessionPermissions,
         agentDeniesBrowser && !explicitBrowser ? [{ action: "browser", resource: "*", effect: "deny" }] : [],
       )
+      const authority = Permission.withHostCeiling(agent.info.permissions, session.authority)
       const loaded = yield* Effect.all(
         {
-          tools: registry.snapshot(permissions, session.authority),
+          tools: registry.snapshot(permissions, authority),
           builtins: builtins.load(),
           discovery: discovery.load(),
           skills: skillInstructions.load(permissions),
           references: referenceInstructions.load(),
-          mcp: mcpInstructions.load(permissions, session.authority),
+          mcp: mcpInstructions.load(permissions, authority),
           entries: entries.load(sessionID),
         },
         { concurrency: "unbounded" },

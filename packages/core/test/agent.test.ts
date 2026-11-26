@@ -227,14 +227,26 @@ describe("Agent", () => {
         "t3-code_pull_request_read",
         "t3-code_t3_thread_search",
         "t3-code_device_screenshot",
+        "t3-code_t3_project_list",
+        "t3-code_t3_project_read",
+        "t3-code_t3_theme_read",
+        "t3-code_t3_preview_list",
+        "t3-code_preview_status",
+        "t3-code_preview_wait_for",
+        "t3-code_t3_background_wait",
+        "t3-code_t3_thread_wait",
         "t3-code-abc123_device_list",
         "t3-code-abc123_device_screenshot",
+        "t3-code-thread_subagent_0123456789abcdef_preview_wait_for",
         "t3-code-abc123_html_render",
       ])
         expect(Permission.evaluate(action, "*", explore?.permissions ?? []).effect).toBe("allow")
       for (const action of [
         "t3-code_delegate_task",
         "t3-code_preview_act",
+        "t3-code_preview_snapshot",
+        "t3-code_send_to_user",
+        "t3-code_t3_submit_output",
         "t3-code-abc123_preview_act",
         "t3-code-abc123_device_open",
         "mcp_t3-code_pull_request_read",
@@ -246,7 +258,10 @@ describe("Agent", () => {
         "t3-code_pull_request_read",
         "t3-code_ci_logs",
         "t3-code_read_pull_request_guide",
+        "t3-code_t3_project_list",
+        "t3-code_t3_project_read",
         "t3-code-abc123_pull_request_read",
+        "t3-code-thread_subagent_0123456789abcdef_t3_project_read",
         "t3-code-abc123_html_preview",
       ])
         expect(Permission.evaluate(action, "*", review?.permissions ?? []).effect).toBe("allow")
@@ -254,6 +269,9 @@ describe("Agent", () => {
         "t3-code_pull_request_merge",
         "t3-code_delegate_task",
         "t3-code_t3_thread_read",
+        "t3-code_preview_snapshot",
+        "t3-code_send_to_user",
+        "t3-code_t3_submit_output",
         "t3-code-abc123_pull_request_merge",
         "mcp_t3-code-abc123_pull_request_read",
       ])

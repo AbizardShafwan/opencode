@@ -1020,4 +1020,149 @@ describe("shell scanner permission impact", () => {
       ).toMatchObject({ effect: "allow" })
     }),
   )
+
+  it.effect("preserves restricted agent host ceilings and T3 plan edit overrides under session.permissions", () =>
+    Effect.gen(function* () {
+      yield* setup([
+        { action: "*", resource: "*", effect: "deny" },
+        { action: "read", resource: "*", effect: "allow" },
+        { action: "edit", resource: "*", effect: "deny" },
+        { action: "edit", resource: "/project/*", effect: "allow" },
+        { action: "t3-code_pull_request_read", resource: "*", effect: "allow" },
+        { action: "t3-code-*_pull_request_read", resource: "*", effect: "allow" },
+      ])
+
+      const database = yield* Database.Service
+      const sessionPermissions: Permission.Ruleset = [
+        { action: "*", resource: "*", effect: "allow" },
+        { action: "edit", resource: "*", effect: "deny" },
+        { action: "edit", resource: "/outside/plan.md", effect: "allow" },
+        { action: "t3-code-*", resource: "*", effect: "deny" },
+        { action: "t3-code-thread_a_*", resource: "*", effect: "allow" },
+      ]
+      yield* database.db
+        .update(SessionTable)
+        .set({ permission: sessionPermissions })
+        .where(eq(SessionTable.id, Session.ID.make("ses_test")))
+        .run()
+        .pipe(Effect.orDie)
+
+      const service = yield* Permission.Service
+      // T3's plan edit path outside workspace stays writable without hitting inheritedAsk.
+      expect(
+        yield* service.ask(assertion({ id: Permission.ID.create("per_plan_edit"), action: "edit", resources: ["/outside/plan.md"] })),
+      ).toMatchObject({ effect: "allow" })
+      expect(
+        yield* service.ask(assertion({ id: Permission.ID.create("per_src_edit"), action: "edit", resources: ["/project/src/a.ts"] })),
+      ).toMatchObject({ effect: "deny" })
+
+      // Thread A read-only host action allowed; mutating host action on Thread A blocked by ceiling.
+      expect(
+        yield* service.ask(
+          assertion({
+            id: Permission.ID.create("per_ta_ro"),
+            action: "t3-code-thread_a_pull_request_read",
+            resources: ["*"],
+          }),
+        ),
+      ).toMatchObject({ effect: "allow" })
+      expect(
+        yield* service.ask(
+          assertion({
+            id: Permission.ID.create("per_ta_mut"),
+            action: "t3-code-thread_a_pull_request_merge",
+            resources: ["*"],
+          }),
+        ),
+      ).toMatchObject({ effect: "deny" })
+
+      // Thread B remains isolated (denied) even for read-only actions.
+      expect(
+        yield* service.ask(
+          assertion({
+            id: Permission.ID.create("per_tb_ro"),
+            action: "t3-code-thread_b_pull_request_read",
+            resources: ["*"],
+          }),
+        ),
+      ).toMatchObject({ effect: "deny" })
+    }),
+  )
+
+  it.effect("blocks all per-thread host tools for deny-all agents even when session.permissions allows thread A", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "*", resource: "*", effect: "deny" }])
+      const database = yield* Database.Service
+      yield* database.db
+        .update(SessionTable)
+        .set({
+          permission: [
+            { action: "t3-code-*", resource: "*", effect: "deny" },
+            { action: "t3-code-thread_a_*", resource: "*", effect: "allow" },
+          ],
+        })
+        .where(eq(SessionTable.id, Session.ID.make("ses_test")))
+        .run()
+        .pipe(Effect.orDie)
+
+      const service = yield* Permission.Service
+      expect(
+        yield* service.ask(
+          assertion({
+            id: Permission.ID.create("per_cmp_ro"),
+            action: "t3-code-thread_a_pull_request_read",
+            resources: ["*"],
+          }),
+        ),
+      ).toMatchObject({ effect: "deny" })
+      expect(
+        yield* service.ask(
+          assertion({
+            id: Permission.ID.create("per_cmp_base"),
+            action: "t3-code_pull_request_read",
+            resources: ["*"],
+          }),
+        ),
+      ).toMatchObject({ effect: "deny" })
+    }),
+  )
+
+  it.effect("keeps build full-access per-thread host grants working while isolating other threads", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "question", resource: "*", effect: "allow" }])
+      const database = yield* Database.Service
+      yield* database.db
+        .update(SessionTable)
+        .set({
+          permission: [
+            { action: "*", resource: "*", effect: "allow" },
+            { action: "t3-code-*", resource: "*", effect: "deny" },
+            { action: "t3-code-thread_a_*", resource: "*", effect: "allow" },
+          ],
+        })
+        .where(eq(SessionTable.id, Session.ID.make("ses_test")))
+        .run()
+        .pipe(Effect.orDie)
+
+      const service = yield* Permission.Service
+      expect(
+        yield* service.ask(
+          assertion({
+            id: Permission.ID.create("per_bld_mut"),
+            action: "t3-code-thread_a_pull_request_merge",
+            resources: ["*"],
+          }),
+        ),
+      ).toMatchObject({ effect: "allow" })
+      expect(
+        yield* service.ask(
+          assertion({
+            id: Permission.ID.create("per_bld_other"),
+            action: "t3-code-thread_b_pull_request_read",
+            resources: ["*"],
+          }),
+        ),
+      ).toMatchObject({ effect: "deny" })
+    }),
+  )
 })

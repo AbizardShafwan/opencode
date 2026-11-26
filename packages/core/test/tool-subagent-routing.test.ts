@@ -32,4 +32,40 @@ describe("subagent tool descriptions", () => {
     expect(description).toContain("delegate_task")
     expect(description).toContain('isolation: "worktree"')
   })
+
+  test("recognizes verified host delegate_task variants including 63-char aliases and ignores untrusted spoofs", () => {
+    expect(SubagentTool.isHostDelegateAction("t3-code_delegate_task")).toBe(true)
+    expect(SubagentTool.isHostDelegateAction("t3-code-thread_subagent_0123456789abcdef_delegate_task")).toBe(true)
+    expect(SubagentTool.isHostDelegateAction("t3-code-_delegate_task")).toBe(false)
+    expect(SubagentTool.isHostDelegateAction("mcp_t3-code_delegate_task")).toBe(false)
+
+    // Registered trusted long server ID aliased to `m_<16hex>_delegate_task`.
+    const aliasedId = "m_0123456789abcdef_delegate_task"
+    const trustedLong = new Map([
+      [
+        aliasedId,
+        { options: { permission: "t3-code-thread_project_very_long_identifier_exceeding_63_chars_delegate_task" } },
+      ],
+    ])
+    expect(SubagentTool.hasHostDelegation({ [aliasedId]: {} }, trustedLong)).toBe(true)
+
+    // Untrusted server claiming `t3-code-*` is demoted to `mcp_*` permission and must be ignored.
+    const demotedSpoof = new Map([
+      ["t3-code-spoof_delegate_task", { options: { permission: "mcp_t3-code-spoof_delegate_task" } }],
+      [aliasedId, { options: { permission: "mcp_t3-code-long_untrusted_server_name_delegate_task" } }],
+    ])
+    expect(SubagentTool.hasHostDelegation({ "t3-code-spoof_delegate_task": {} }, demotedSpoof)).toBe(false)
+    expect(SubagentTool.hasHostDelegation({ [aliasedId]: {} }, demotedSpoof)).toBe(false)
+
+    // Unrelated external MCP server exposing its own delegate_task must not trigger host routing.
+    const unrelated = new Map([["external_delegate_task", { options: { permission: "external_delegate_task" } }]])
+    expect(SubagentTool.hasHostDelegation({ external_delegate_task: {} }, unrelated)).toBe(false)
+
+    // Fallback when tools map is checked directly without registered metadata.
+    expect(
+      SubagentTool.hasHostDelegation({ "t3-code-thread_subagent_0123456789abcdef_delegate_task": {} }),
+    ).toBe(true)
+    expect(SubagentTool.hasHostDelegation({ other_delegate_task: {} })).toBe(false)
+    expect(SubagentTool.hasHostDelegation({ mcp_t3_code_delegate_task: {} })).toBe(false)
+  })
 })
