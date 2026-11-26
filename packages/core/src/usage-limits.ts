@@ -46,29 +46,40 @@ export const layer = Layer.effect(
           accountUsage.read({ providerID }).pipe(
             Effect.map((usage) => {
               if (!usage?.windows?.length) return [] as UsageLimits.Budget[]
-              // A provider window reports a remaining percentage, never money. Report native percentage
-              // usage directly instead of scaling onto a synthetic USD budget, keeping windows without resetsAt.
-              return usage.windows.map((window): UsageLimits.Budget => {
+              // A provider window reports a remaining percentage, never money. Emit native `unit: "percent"` and
+              // `percent`, alongside the 0-100 `limit`/`spent` scale and a finite `resetsAt`, so unmodified
+              // T3 Code v0.1.12's strict budget schema decodes connected provider windows cleanly.
+              return usage.windows.flatMap((window): UsageLimits.Budget[] => {
+                if (
+                  window.resetsAt === undefined ||
+                  !Number.isFinite(window.resetsAt) ||
+                  Math.abs(window.resetsAt) > 864e13
+                )
+                  return []
                 const used = Math.round(clampPercent(100 - window.remainingPercent) * 100) / 100
-                return {
-                  id: `${providerID}_${window.id}`,
-                  unit: "percent",
-                  percent: used,
-                  scope: "each",
-                  per: "set",
-                  coverage: "models",
-                  models: [
-                    {
-                      providerID,
-                      modelID: Model.ID.make(window.id),
-                      name: `${label} · ${window.label}`,
-                    },
-                  ],
-                  vendors: [label],
-                  picked: false,
-                  shared: false,
-                  ...(window.resetsAt === undefined ? {} : { resetsAt: window.resetsAt }),
-                }
+                return [
+                  {
+                    id: `${providerID}_${window.id}`,
+                    unit: "percent",
+                    limit: Money.USD.make(100),
+                    spent: Money.USD.make(used),
+                    percent: used,
+                    scope: "each",
+                    per: "set",
+                    coverage: "models",
+                    models: [
+                      {
+                        providerID,
+                        modelID: Model.ID.make(window.id),
+                        name: `${label} · ${window.label}`,
+                      },
+                    ],
+                    vendors: [label],
+                    picked: false,
+                    shared: false,
+                    resetsAt: window.resetsAt,
+                  },
+                ]
               })
             }),
             Effect.timeout(Duration.seconds(2)),
