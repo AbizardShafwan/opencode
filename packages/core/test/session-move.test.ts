@@ -672,4 +672,109 @@ describe("Session.move", () => {
         ),
       ),
   )
+
+  itWithExternalWait.live(
+    "isolates runtime host ServerEntry trust across SessionMove until re-registered on the destination",
+    () =>
+      Effect.scoped(
+        tmpdirScoped().pipe(
+          Effect.flatMap((tmp) =>
+            Effect.gen(function* () {
+              const session = yield* Session.Service
+              const execution = yield* SessionExecution.Service
+              const waits = yield* SessionExternalWait.Service
+              const locations = yield* LocationServiceMap.Service
+              const source = AbsolutePath.make(path.join(tmp.path, "source-runtime"))
+              const destination = AbsolutePath.make(path.join(tmp.path, "destination-runtime"))
+              yield* Effect.promise(() => mkdir(source))
+              yield* Effect.promise(() => mkdir(destination))
+
+              const runtimeServer = yield* Effect.acquireRelease(
+                Effect.sync(() =>
+                  Bun.serve({
+                    hostname: "127.0.0.1",
+                    port: 0,
+                    async fetch(request) {
+                      if (request.method !== "POST") return new Response(null, { status: 405 })
+                      const body = (await request.json()) as { id?: unknown; method?: string }
+                      if (body.id === undefined) return new Response(null, { status: 202 })
+                      if (body.method === "initialize")
+                        return Response.json({
+                          jsonrpc: "2.0",
+                          id: body.id,
+                          result: {
+                            protocolVersion: "2025-03-26",
+                            capabilities: { tools: {} },
+                            serverInfo: { name: "t3-code-runtime", version: "1.0.0" },
+                          },
+                        })
+                      if (body.method === "tools/list")
+                        return Response.json({
+                          jsonrpc: "2.0",
+                          id: body.id,
+                          result: { tools: [{ name: "preview_status", inputSchema: { type: "object" } }] },
+                        })
+                      return Response.json({ jsonrpc: "2.0", id: body.id, result: {} })
+                    },
+                  }),
+                ),
+                (srv) => Effect.promise(() => srv.stop(true)),
+              )
+
+              const serverName = "t3-code-runtime"
+              const policy: Mcp.HostPolicy = {
+                trustedHost: true,
+                permissionNamespace: "t3-code",
+                preserveServerPermission: true,
+                codemode: false,
+              }
+              const config = { type: "remote", url: `http://127.0.0.1:${runtimeServer.port}/mcp`, oauth: false } as const
+
+              const sourceRef = Location.Ref.make({ directory: source })
+              const destRef = Location.Ref.make({ directory: destination })
+              const created = yield* session.create({ location: sourceRef })
+
+              const mcpSource = yield* Mcp.Service.pipe(Effect.provide(locations.get(sourceRef)))
+              yield* mcpSource.add(serverName, config, policy)
+              expect(yield* mcpSource.isAttached(serverName)).toBe(true)
+
+              yield* waits.register({
+                sessionID: created.id,
+                waitID: "pr-watch:acme/repo#99",
+                source: "pull_request_watch",
+                server: serverName,
+                description: "Watching PR #99",
+              })
+              expect(
+                yield* waits.list(created.id, { isServerLive: (name) => mcpSource.isAttached(name) }),
+              ).toHaveLength(1)
+
+              yield* session.move({ sessionID: created.id, directory: destination })
+              yield* execution.awaitIdle(created.id)
+              expect((yield* session.get(created.id)).location.directory).toBe(destination)
+
+              // Destination does not inherit source runtime servers or trust; stale live waits stay hidden.
+              const mcpDest = yield* Mcp.Service.pipe(Effect.provide(locations.get(destRef)))
+              expect(yield* mcpDest.servers()).toEqual([])
+              expect(yield* mcpDest.isAttached(serverName)).toBe(false)
+              expect(
+                yield* waits.list(created.id, { isServerLive: (name) => mcpDest.isAttached(name) }),
+              ).toEqual([])
+              expect((yield* waits.list(created.id)).map((entry) => entry.waitID)).toEqual(["pr-watch:acme/repo#99"])
+
+              // Host removes source registration and re-registers on destination, restoring live waits cleanly.
+              yield* mcpSource.remove(serverName)
+              expect(yield* mcpSource.isAttached(serverName)).toBe(false)
+              yield* mcpDest.add(serverName, config, policy)
+              expect(yield* mcpDest.isAttached(serverName)).toBe(true)
+              expect(
+                (yield* waits.list(created.id, { isServerLive: (name) => mcpDest.isAttached(name) })).map(
+                  (entry) => entry.waitID,
+                ),
+              ).toEqual(["pr-watch:acme/repo#99"])
+            }),
+          ),
+        ),
+      ),
+  )
 })

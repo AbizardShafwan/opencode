@@ -32,7 +32,9 @@ describe("runtimeMcpHostPolicy", () => {
     for (const url of [
       "http://127.0.0.1:3773/mcp",
       "http://localhost:3773/mcp",
+      "http://LOCALHOST:3773/mcp",
       "http://[::1]:3773/mcp",
+      "http://[0:0:0:0:0:0:0:1]:3773/mcp",
       "https://127.0.0.2:8443/mcp",
     ]) {
       expect(
@@ -52,6 +54,12 @@ describe("runtimeMcpHostPolicy", () => {
       runtimeMcpHostPolicy({ name: "t3-code-abc", config: { type: "remote", url: "https://evil.example/mcp" } }, undefined),
     ).toBeUndefined()
     expect(
+      runtimeMcpHostPolicy({ name: "t3-code-abc", config: { type: "remote", url: "http://localhost.evil.com:3773/mcp" } }, undefined),
+    ).toBeUndefined()
+    expect(
+      runtimeMcpHostPolicy({ name: "t3-code-abc", config: { type: "remote", url: "http://127.0.0.1.nip.io:3773/mcp" } }, undefined),
+    ).toBeUndefined()
+    expect(
       runtimeMcpHostPolicy({ name: "t3-code-abc", config: { type: "remote", url: "http://192.168.1.5:3773/mcp" } }, undefined),
     ).toBeUndefined()
     expect(
@@ -59,6 +67,12 @@ describe("runtimeMcpHostPolicy", () => {
     ).toBeUndefined()
     expect(
       runtimeMcpHostPolicy({ name: "t3-code-abc", config: { type: "local", command: ["echo"] } }, undefined),
+    ).toBeUndefined()
+    expect(
+      runtimeMcpHostPolicy({ name: "T3-CODE-abc", config: { type: "remote", url: "http://127.0.0.1:3773/mcp" } }, undefined),
+    ).toBeUndefined()
+    expect(
+      runtimeMcpHostPolicy({ name: "t3-code_abc", config: { type: "remote", url: "http://127.0.0.1:3773/mcp" } }, undefined),
     ).toBeUndefined()
     expect(
       runtimeMcpHostPolicy({ name: "t3-codex", config: { type: "remote", url: "http://127.0.0.1:3773/mcp" } }, undefined),

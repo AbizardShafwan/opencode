@@ -38,7 +38,7 @@ export const EXTERNAL_WAIT_SETTLED_METHOD = "notifications/opencode/external_wai
 const DEFAULT_STARTUP_TIMEOUT = 30_000
 const DEFAULT_CATALOG_TIMEOUT = 30_000
 const DEFAULT_EXECUTION_TIMEOUT = 12 * 60 * 60 * 1_000 // 12 hours
-const ATTACHED_EXECUTION_TIMEOUT = 10 * 60 * 1_000 // 10 minutes
+export const ATTACHED_EXECUTION_TIMEOUT = 10 * 60 * 1_000 // 10 minutes
 const TERMINATE_TIMEOUT = 1_000
 // SEP-2243 HeaderMismatch; the SDK does not export the constant.
 const HEADER_MISMATCH = -32020
@@ -177,6 +177,26 @@ export interface Attached {
   readonly trustedHost?: boolean
 }
 
+/** Verified host policy options forwarded from `Mcp.layer` for runtime host servers. */
+export interface HostOptions {
+  /** True only when the server verified the host identity (token, legacy prefix, or loopback runtime). */
+  readonly trustedHost?: boolean
+  /** Execution timeout override from verified trusted-host options. */
+  readonly executionTimeoutMs?: number
+}
+
+export function resolveTimeout(
+  config: typeof ConfigMCP.Server.Type | Attached,
+  host?: HostOptions,
+): (typeof ConfigMCP.Server.Type)["timeout"] {
+  if (config.type === "attached") return config.timeout ?? { execution: ATTACHED_EXECUTION_TIMEOUT }
+  if (host?.trustedHost !== true) return config.timeout
+  return {
+    ...config.timeout,
+    execution: host.executionTimeoutMs ?? config.timeout?.execution ?? ATTACHED_EXECUTION_TIMEOUT,
+  }
+}
+
 /**
  * Connects an MCP server; closing the calling scope tears down the transport and any spawned process.
  * A stdio server is spawned through the location's `Environment`, so it runs wherever the location's
@@ -190,14 +210,14 @@ export const connect = Effect.fnUntraced(function* (
   authProvider?: OAuthClientProvider,
   elicitation?: ElicitationHandler,
   clientInfo: Implementation = { name: "opencode", version: "unknown" },
+  host?: HostOptions,
 ) {
   // The SDK takes list-changed handlers at construction, but consumers register after connect. On a
   // modern connection the SDK opens the subscriptions/listen stream behind these itself.
-  const timeout: (typeof ConfigMCP.Server.Type)["timeout"] =
-    config.type === "attached" ? (config.timeout ?? { execution: ATTACHED_EXECUTION_TIMEOUT }) : config.timeout
+  const trustedHost = config.type === "attached" ? config.trustedHost === true : host?.trustedHost === true
+  const timeout = resolveTimeout(config, host)
   // Attached clients run ordinary SDK servers over the initialize handshake.
   const protocol = config.type === "attached" ? "legacy" : config.protocol
-  const trustedAttached = config.type === "attached" && config.trustedHost === true
   const changed = { tools: () => {}, prompts: () => {}, resources: () => {} }
   const settled: { callback?: (params: unknown) => void } = {}
   const listChanged = (key: keyof typeof changed) => ({
@@ -262,7 +282,7 @@ export const connect = Effect.fnUntraced(function* (
         runPromise(elicitation.complete({ server, elicitationID: notification.params.elicitationId })),
       )
     }
-    if (trustedAttached) {
+    if (trustedHost) {
       client.setNotificationHandler(
         EXTERNAL_WAIT_SETTLED_METHOD,
         { params: Schema.toStandardSchemaV1(Schema.Unknown) },
@@ -271,12 +291,19 @@ export const connect = Effect.fnUntraced(function* (
         },
       )
     }
-    if (!trustedAttached && config.type === "attached") {
+    if (!trustedHost) {
       client.setNotificationHandler(
         EXTERNAL_WAIT_SETTLED_METHOD,
         { params: Schema.toStandardSchemaV1(Schema.Unknown) },
         () => {
-          runFork(Effect.logWarning("ignoring external_wait_settled notification from untrusted attachment", { server }))
+          runFork(
+            Effect.logWarning(
+              config.type === "attached"
+                ? "ignoring external_wait_settled notification from untrusted attachment"
+                : "ignoring external_wait_settled notification from untrusted MCP server",
+              { server },
+            ),
+          )
         },
       )
     }
@@ -504,7 +531,8 @@ export const connect = Effect.fnUntraced(function* (
               {
                 signal,
                 timeout: execution,
-                // Requesting progress keeps long calls alive under the SDK's timeout; execution is the hard wall.
+                // Progress notifications reset the SDK inactivity timer for attached and trusted-host calls.
+                ...(config.type === "attached" || trustedHost ? { resetTimeoutOnProgress: true } : {}),
                 onprogress: (progress) => {
                   input.onProgress?.({
                     progress: progress.progress,
@@ -554,7 +582,7 @@ export const connect = Effect.fnUntraced(function* (
         changed.resources = callback
       },
       onExternalWaitSettled: (callback) => {
-        if (!trustedAttached) return
+        if (!trustedHost) return
         settled.callback = callback
       },
     }

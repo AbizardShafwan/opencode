@@ -578,3 +578,58 @@ it.live(
       ])
     }),
 )
+
+it.live(
+  "forwards onProgress and resets execution timeout on progress notifications for attached clients",
+  () =>
+    Effect.gen(function* () {
+      const mcp = yield* Mcp.Service
+      const server = new McpServer({ name: "t3-code-progress", version: "1.0.0" })
+      server.registerTool("slow_without_progress", { description: "hangs" }, async () => {
+        await Bun.sleep(200)
+        return { content: [{ type: "text", text: "late" }] }
+      })
+      server.registerTool("long_with_progress", { description: "ticks" }, async (ctx) => {
+        const token = ctx.mcpReq._meta?.progressToken
+        for (const step of [1, 2, 3]) {
+          await Bun.sleep(45)
+          if (token !== undefined) {
+            await ctx.mcpReq.notify({
+              method: "notifications/progress",
+              params: { progressToken: token, progress: step, total: 3, message: `step-${step}` },
+            })
+          }
+        }
+        await Bun.sleep(45)
+        return { content: [{ type: "text", text: "finished" }] }
+      })
+
+      const [client, transport] = InMemoryTransport.createLinkedPair()
+      yield* Effect.acquireRelease(
+        Effect.promise(() => server.connect(transport)),
+        () => Effect.promise(() => server.close()),
+      )
+      yield* mcp.attach("t3-code-progress", client, {
+        trustedHost: true,
+        permissionNamespace: "t3-code",
+        codemode: false,
+        executionTimeoutMs: 80,
+      })
+
+      const err = yield* mcp.callTool({ server: "t3-code-progress", name: "slow_without_progress" }).pipe(Effect.flip)
+      expect(err.message).toContain("Request timed out")
+
+      const updates: Array<{ progress: number; total?: number; message?: string }> = []
+      const ok = yield* mcp.callTool({
+        server: "t3-code-progress",
+        name: "long_with_progress",
+        onProgress: (progress) => void updates.push(progress),
+      })
+      expect(ok.content).toEqual([{ type: "text", text: "finished" }])
+      expect(updates).toEqual([
+        { progress: 1, total: 3, message: "step-1" },
+        { progress: 2, total: 3, message: "step-2" },
+        { progress: 3, total: 3, message: "step-3" },
+      ])
+    }),
+)

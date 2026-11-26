@@ -170,6 +170,16 @@ const layer = Layer.effect(
   }),
 )
 
+/**
+ * Moves a Session to a destination worktree/location.
+ *
+ * Host runtime MCP servers (`t3-code-<hash>`) remain Location-scoped inside `Mcp.Service`:
+ * `SessionMove.move` intentionally does not copy `ServerEntry` or `runtimePolicies` across
+ * Locations so source trust never leaks onto the destination. The host deletes the source
+ * registration and re-registers via `PUT /api/experimental/mcp/:server` on the target Location,
+ * where `runtimeMcpHostPolicy` freshly evaluates loopback trust and `notifyAttachedWaits`
+ * restores liveness for `SessionExternalWait` leases preserved in global KV.
+ */
 export const node = makeGlobalNode({
   service: Service,
   layer,

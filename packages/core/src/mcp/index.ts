@@ -12,7 +12,6 @@ import { isDeepStrictEqual } from "node:util"
 import {
   Cause,
   Context,
-  Duration,
   Effect,
   Exit,
   FiberSet,
@@ -394,8 +393,8 @@ export const layer = (options?: Options) =>
       const toTool = (server: ServerName, entry: ServerEntry, tool: McpClient.Tool): Tool => ({
         ...tool,
         server,
-        ...hostFields(entry.policy),
         ...(entry.config.codemode === undefined ? {} : { codemode: entry.config.codemode }),
+        ...hostFields(entry.policy),
       })
 
       const refreshTools = (name: ServerName, entry: ServerEntry, connection: McpClient.Connection) =>
@@ -489,6 +488,37 @@ export const layer = (options?: Options) =>
           ),
         )
 
+      const handleExternalWaitSettled = (server: ServerName, params: unknown) =>
+        Effect.gen(function* () {
+          const decoded = decodeExternalWaitSettled(params)
+          if (Option.isNone(decoded)) {
+            return yield* Effect.logWarning("ignoring invalid external_wait_settled notification payload", {
+              server,
+              params,
+            })
+          }
+          if (Option.isNone(externalWaits)) return
+          const ref = Location.Ref.make({ directory: location.directory, workspaceID: location.workspaceID })
+          if ("all" in decoded.value) {
+            return yield* externalWaits.value.clearSession(decoded.value.sessionID, { location: ref })
+          }
+          if ("waitPrefix" in decoded.value) {
+            return yield* externalWaits.value.clearByPrefix(decoded.value.sessionID, decoded.value.waitPrefix, {
+              location: ref,
+            })
+          }
+          return yield* externalWaits.value.clear(decoded.value.sessionID, decoded.value.waitID, {
+            location: ref,
+          })
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("failed to handle external_wait_settled notification", {
+              server,
+              cause,
+            }),
+          ),
+        )
+
       const watch = (name: ServerName, entry: ServerEntry, connection: McpClient.Connection) => {
         const live = whenLive(name, entry, connection)
         connection.onClose((reason) =>
@@ -512,6 +542,18 @@ export const layer = (options?: Options) =>
         )
         connection.onPromptsChanged(() => live(refreshPrompts(name, entry, connection)))
         connection.onResourcesChanged(() => live(bus.publish(McpEvent.ResourcesChanged, { server: name })))
+        // Only verified trusted-host connections may clear durable external-wait leases via MCP notifications.
+        if (entry.policy?.trustedHost === true) {
+          connection.onExternalWaitSettled((params) =>
+            fork(
+              Effect.suspend(() =>
+                entries.get(name) === entry && entry.client === connection && entry.policy?.trustedHost === true
+                  ? handleExternalWaitSettled(name, params)
+                  : Effect.void,
+              ),
+            ),
+          )
+        }
       }
 
       const startServer = (name: ServerName, entry: ServerEntry) =>
@@ -533,6 +575,14 @@ export const layer = (options?: Options) =>
             authProvider,
             elicitation,
             options?.clientInfo,
+            entry.policy?.trustedHost === true
+              ? {
+                  trustedHost: true,
+                  ...(entry.policy.executionTimeoutMs === undefined
+                    ? {}
+                    : { executionTimeoutMs: entry.policy.executionTimeoutMs }),
+                }
+              : undefined,
           ).pipe(
             Effect.flatMap((connection) => connection.tools().pipe(Effect.map((tools) => ({ connection, tools })))),
             // A stdio server is spawned on this location's execution plane, not the host's.
@@ -600,6 +650,7 @@ export const layer = (options?: Options) =>
 
       const disposeServer = Effect.fnUntraced(function* (name: ServerName, entry: ServerEntry) {
         yield* stopServer(name, entry)
+        entry.startup.openUnsafe()
         if (entry.integrationID) owned.delete(entry.integrationID)
         if (entry.registration) yield* entry.registration.dispose
       })
@@ -785,35 +836,10 @@ export const layer = (options?: Options) =>
           if (policy?.trustedHost === true) {
             result.connection.onExternalWaitSettled((params) =>
               fork(
-                Effect.gen(function* () {
-                  if (!attached.get(name)?.includes(entry) || entry.policy?.trustedHost !== true) return
-                  const decoded = decodeExternalWaitSettled(params)
-                  if (Option.isNone(decoded)) {
-                    return yield* Effect.logWarning("ignoring invalid external_wait_settled notification payload", {
-                      server: name,
-                      params,
-                    })
-                  }
-                  if (Option.isNone(externalWaits)) return
-                  const ref = Location.Ref.make({ directory: location.directory, workspaceID: location.workspaceID })
-                  if ("all" in decoded.value) {
-                    return yield* externalWaits.value.clearSession(decoded.value.sessionID, { location: ref })
-                  }
-                  if ("waitPrefix" in decoded.value) {
-                    return yield* externalWaits.value.clearByPrefix(decoded.value.sessionID, decoded.value.waitPrefix, {
-                      location: ref,
-                    })
-                  }
-                  return yield* externalWaits.value.clear(decoded.value.sessionID, decoded.value.waitID, {
-                    location: ref,
-                  })
-                }).pipe(
-                  Effect.catchCause((cause) =>
-                    Effect.logWarning("failed to handle external_wait_settled notification", {
-                      server: name,
-                      cause,
-                    }),
-                  ),
+                Effect.suspend(() =>
+                  attached.get(name)?.includes(entry) && entry.policy?.trustedHost === true
+                    ? handleExternalWaitSettled(name, params)
+                    : Effect.void,
                 ),
               ),
             )
@@ -871,10 +897,10 @@ export const layer = (options?: Options) =>
             }
             fork(
               Effect.gen(function* () {
-                // connect() or disconnect() may have settled the server while this startup waited to run.
-                if (entry.status.status !== "pending") return yield* entry.startup.open
+                // connect(), disconnect(), or remove() may have settled or removed the entry while startup waited.
+                if (entries.get(name) !== entry || entry.status.status !== "pending") return yield* entry.startup.open
                 yield* startServer(name, entry)
-              }).pipe(locks.withLock(name)),
+              }).pipe(locks.withLock(name), Effect.ensuring(entry.startup.open)),
             )
           }
           return
@@ -963,6 +989,8 @@ export const layer = (options?: Options) =>
           runtimePolicies.delete(name)
           if (policy?.trustedHost === true) runtimePolicies.set(name, policy)
           yield* state.reload()
+          const entry = entries.get(name)
+          if (entry) yield* entry.startup.await
         }),
         connect: Effect.fn("MCP.connect")(function* (server) {
           const name = ServerName.make(server)
@@ -978,6 +1006,7 @@ export const layer = (options?: Options) =>
             const target = yield* requireServer(name)
             yield* stopServer(name, target.entry)
             target.entry.status = { status: "disabled" }
+            target.entry.startup.openUnsafe()
             yield* bus.publish(McpEvent.StatusChanged, { server: name })
           }).pipe(locks.withLock(name))
         }),
@@ -1015,7 +1044,6 @@ export const layer = (options?: Options) =>
           // owns its name outright when no configured server has it.
           const client = attached.get(server)?.at(-1)
           if (client && (client.tools.some((tool) => tool.name === input.name) || !entries.has(server))) {
-            const timeout = client.policy?.trustedHost === true ? client.policy.executionTimeoutMs : undefined
             const result = yield* client.client
               .callTool({
                 name: input.name,
@@ -1024,7 +1052,6 @@ export const layer = (options?: Options) =>
                 onProgress: input.onProgress,
               })
               .pipe(
-                Effect.timeout(timeout ?? Duration.infinity),
                 Effect.mapError(
                   (error) =>
                     new ToolCallError({
@@ -1044,7 +1071,6 @@ export const layer = (options?: Options) =>
               tool: input.name,
               message: unavailable(target.name, target.entry.status),
             })
-          const timeout = target.entry.policy?.trustedHost === true ? target.entry.policy.executionTimeoutMs : undefined
           const result = yield* recovering(target.name, target.entry, target.entry.client, (connection) =>
             connection.callTool({
               name: input.name,
@@ -1053,7 +1079,6 @@ export const layer = (options?: Options) =>
               onProgress: input.onProgress,
             }),
           ).pipe(
-            Effect.timeout(timeout ?? Duration.infinity),
             Effect.mapError(
               (error) =>
                 new ToolCallError({
