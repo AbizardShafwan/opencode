@@ -197,10 +197,9 @@ const layer = Layer.effect(
       const session = yield* sessions.get(sessionID)
       if (!session) return yield* new SessionErrors.NotFoundError({ sessionID })
       const agent = yield* agents.resolve(agentID ?? session.agent)
-      const permissions = agent?.permissions ?? missingAgentPermissions
       return [
-        ...withHostCeiling(permissions, session.authority),
-        merge(permissions, session.permissions ?? []),
+        ...(agent ? withHostCeiling(agent.permissions, session.authority) : (session.authority ?? [])),
+        merge(agent?.permissions ?? missingAgentPermissions, session.permissions ?? []),
       ]
     })
 

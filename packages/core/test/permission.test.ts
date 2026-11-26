@@ -299,6 +299,23 @@ describe("Permission", () => {
       const service = yield* Permission.Service
       expect(yield* service.ask(assertion())).toEqual({ id: Permission.ID.create("per_test"), effect: "deny" })
       expect(yield* service.list()).toEqual([])
+
+      // Explicit session permissions still govern host actions when no agent registry is loaded.
+      yield* db
+        .update(SessionTable)
+        .set({ permission: [{ action: "*", resource: "*", effect: "ask" }] })
+        .where(eq(SessionTable.id, Session.ID.make("ses_test")))
+        .run()
+        .pipe(Effect.orDie)
+      expect(
+        yield* service.ask(
+          assertion({
+            id: Permission.ID.create("per_missing_agent_host"),
+            action: "t3-code_pull_request_read",
+            resources: ["*"],
+          }),
+        ),
+      ).toMatchObject({ effect: "ask" })
     }),
   )
 
